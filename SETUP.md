@@ -148,42 +148,57 @@ machine - none of this works in a sandbox without normal internet access):
    `DEFAULT_UNSAFE_CLASS_INDICES` in `TFLiteNsfwClassifier.kt` if you only
    want explicit content (hentai+porn) blocked.
 
-## 5. (Exploratory) SigLIP2 model - separating "sexy" from real nudity
+## 5. SigLIP2 model - separating "sexy" from real nudity (live, gate 7 default)
 
-GantMan's model and the ONNX ViT model currently in `assets/nsfw.onnx` both
+GantMan's model and the older ONNX ViT model (`assets/nsfw.onnx`) both
 either lack a "suggestive but not explicit" class or fold it into NSFW.
 `prithivMLmods/siglip2-mini-explicit-content` has 5 classes (Anime
 Picture, Enticing & Sensual, Hentai, Pornography, Safe for Work) that
 separate "sensual" from actual porn/hentai - closer to "only block real
-nudity." This is being evaluated in three gated stages; **do not skip
-ahead to full integration before stage 2 is confirmed on real hardware**:
+nudity." This went through 3 stages, all now complete:
 
 1. **Export + quantize** (`tools/export_siglip_onnx.py`, run on your own
    machine - needs Hugging Face access this project's sandbox doesn't
    have: `pip install torch transformers onnx onnxruntime`, then just run
-   the script, no flags/images needed): loads the model, confirms its
-   *actual* input size/mean/std from its own processor config rather than
-   assuming 512x512, exports to ONNX (opset 17), and applies dynamic
-   (weight-only) QUInt8 quantization - no calibration images or sanity-
-   check images required, since dynamic quantization computes activation
-   ranges at runtime. Produces `siglip2_mini_explicit.onnx` (fp32) and
-   `siglip2_mini_explicit_int8.onnx` (quantized) in the current directory.
-2. **NNAPI engagement spike** (`app/src/androidTest/kotlin/com/contentguard/app/NnapiEngagementSpikeTest.kt`,
-   throwaway, run via `./gradlew connectedAndroidTest` on your actual
-   device): SigLIP2 is a vision transformer, and NNAPI's op coverage was
-   designed around CNNs - this measures, on real hardware, whether the
-   NNAPI execution provider actually engages or silently falls back to
-   CPU, and what the per-inference latency is either way. Place
-   `siglip2_mini_explicit_int8.onnx` from step 1 at
-   `app/src/main/assets/siglip_quantized_spike.onnx` first (deliberately
-   not named `nsfw.onnx` - it must not be picked up by
-   `NsfwClassifierFactory` yet).
-3. **Full integration** - only after step 2's results are in: a new
-   `OnnxNsfwClassifier`-style class for this model, per-class configurable
-   thresholds (block Pornography/Hentai, separately configurable handling
-   for Enticing & Sensual), matching preprocessing pulled from the
-   model's real processor config, and the same execution-provider/latency
-   logging pattern already used for gate 7.
+   the script). Confirmed input size 224x224, mean/std (0.5, 0.5, 0.5) -
+   both read off the model's own processor config, not assumed. Uses
+   `dynamo=False` in the `torch.onnx.export()` call - the default
+   TorchDynamo-based exporter produces a graph that trips a real bug in
+   onnxruntime's quantizer (`ONNXQuantizer.__init__` unconditionally calls
+   `replace_gemm_with_matmul()`, which leaves a stale shape annotation on
+   the classifier head's Gemm node); the legacy tracer avoids it. Produces
+   `siglip2_mini_explicit.onnx` (fp32, 328MB) and
+   `siglip2_mini_explicit_int8.onnx` (dynamic QUInt8, 83MB) - both
+   committed under `models/` for reference.
+2. **NNAPI engagement spike** - confirmed on a real Find X9 Pro:
+   `executionProvider=NNAPI`, avg 148ms/inference. Two ways to re-check
+   this on any device: the throwaway instrumented test
+   (`app/src/androidTest/kotlin/com/contentguard/app/NnapiEngagementSpikeTest.kt`,
+   via `./gradlew connectedAndroidTest`), or the "Run NNAPI Spike
+   (SigLIP2)" debug button at the bottom of the Settings screen in a
+   normal installed debug APK (`SiglipNnapiSpike.kt`) - the latter is
+   easier since it needs no test harness, just an installed APK and
+   logcat (`adb logcat -s SiglipNnapiSpike`).
+3. **Full integration**: `SiglipNsfwClassifier.kt` implements the same
+   `NsfwClassifier` interface as every other gate-7 backend. Preprocessing
+   reuses `ViTPreprocessor` (identical mean/std convention, different
+   confirmed size). `NsfwClassifierFactory` now prefers
+   `assets/siglip2_nsfw.onnx` over the legacy `nsfw.onnx`/`nsfw.tflite`,
+   which still work as fallbacks if this model fails to load.
+
+   Per-class thresholds decide what actually blocks -
+   `SiglipNsfwClassifier.DEFAULT_CLASS_POLICIES` only includes Pornography
+   and Hentai (both at 0.7); Enticing & Sensual, Safe for Work, and Anime
+   Picture are logged on every inference (`adb logcat -s
+   SiglipNsfwClassifier`, tag `class=... prob=...`) but never block by
+   default. `scoreNsfw()` returns `max(classProb / classThreshold)` across
+   the configured classes - a ratio >= 1.0 means some class's own
+   threshold was met, which always trips the app's existing global
+   `nsfwThreshold` slider (it tops out at 1.0) regardless of where you've
+   set it; below 1.0 it scales with how close the closest configured class
+   got. To change which classes block, or at what confidence, edit
+   `DEFAULT_CLASS_POLICIES` directly (no Settings UI for this yet - the
+   existing global slider is still the only threshold exposed there).
 
 ## ColorOS / OPPO Find X9 Pro notes
 

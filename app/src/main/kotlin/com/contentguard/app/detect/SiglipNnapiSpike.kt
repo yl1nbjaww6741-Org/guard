@@ -12,22 +12,25 @@ import android.util.Log
 import java.nio.FloatBuffer
 
 /**
- * THROWAWAY SPIKE - not part of the real cascade, not wired into
- * NsfwClassifierFactory/ContentGuardService. Exists purely to answer,
- * on real hardware via an installed debug APK (triggered from the
- * "Run NNAPI Spike" button in SettingsActivity), whether ONNX Runtime's
- * NNAPI execution provider actually engages for the quantized SigLIP2
- * model or silently falls back to CPU, and at what per-inference
+ * ORIGINALLY A THROWAWAY SPIKE, kept around as a standalone diagnostic:
+ * answers, on real hardware via an installed debug APK (triggered from
+ * the "Run NNAPI Spike" button in SettingsActivity), whether ONNX
+ * Runtime's NNAPI execution provider actually engages for the quantized
+ * SigLIP2 model or silently falls back to CPU, and at what per-inference
  * latency. SigLIP2 is a vision transformer; NNAPI's op coverage was
- * designed around CNNs, so this is worth measuring rather than assuming
- * either way - same rationale and same verified ONNX Runtime API calls
- * as app/src/androidTest/.../NnapiEngagementSpikeTest.kt, just runnable
- * from an installed APK instead of `./gradlew connectedAndroidTest`.
+ * designed around CNNs, so this was worth measuring rather than assuming
+ * either way - confirmed NNAPI engaging at ~148ms avg on a Find X9 Pro,
+ * which is what cleared SiglipNsfwClassifier for real integration. Same
+ * verified ONNX Runtime API calls as
+ * app/src/androidTest/.../NnapiEngagementSpikeTest.kt, just runnable
+ * from an installed APK instead of `./gradlew connectedAndroidTest` -
+ * handy for re-checking after a model/device change without needing a
+ * test harness.
  *
- * Setup: app/src/main/assets/siglip_quantized_spike.onnx must exist
- * (deliberately not named nsfw.onnx - NsfwClassifierFactory does not
- * look for this file, so this cannot accidentally become the live
- * classifier).
+ * Now reads the same asset SiglipNsfwClassifier uses
+ * (NsfwClassifierFactory.SIGLIP_MODEL_ASSET) since that model is live -
+ * this button just re-runs the same NNAPI-preferring session logic in
+ * isolation, it doesn't touch the real cascade's classifier instance.
  *
  * Pixel content in the synthetic test bitmaps is irrelevant here - this
  * measures execution-provider engagement and latency only, not
@@ -37,7 +40,7 @@ import java.nio.FloatBuffer
 object SiglipNnapiSpike {
 
     private const val TAG = "SiglipNnapiSpike"
-    private const val MODEL_ASSET = "siglip_quantized_spike.onnx"
+    private const val MODEL_ASSET = NsfwClassifierFactory.SIGLIP_MODEL_ASSET
     private const val SAMPLE_COUNT = 5
 
     data class Result(val executionProvider: String, val latenciesMs: List<Long>) {

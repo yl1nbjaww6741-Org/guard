@@ -1,9 +1,18 @@
-NsfwClassifierFactory looks for nsfw.onnx first, then falls back to
-nsfw.tflite, then to StubNsfwClassifier (always scores 0, never blocks) if
-neither is present. As of this commit, nsfw.onnx is in place
-(AdamCodd/vit-base-nsfw-detector, model_fp16.onnx variant - see
-OnnxNsfwClassifier.kt for the NNAPI/CPU session setup and ViTPreprocessor.kt
-for the 384x384/mean-0.5/std-0.5 preprocessing it expects).
+NsfwClassifierFactory looks for siglip2_nsfw.onnx first, then nsfw.onnx,
+then nsfw.tflite, then falls back to StubNsfwClassifier (always scores 0,
+never blocks) if none are present.
+
+As of this commit, siglip2_nsfw.onnx is the live gate-7 model
+(prithivMLmods/siglip2-mini-explicit-content, dynamic-QUInt8-quantized -
+see SiglipNsfwClassifier.kt for the NNAPI/CPU session setup, per-class
+threshold policy, and ViTPreprocessor.kt for the 224x224/mean-0.5/std-0.5
+preprocessing it expects). This is the one that actually separates "sexy"
+from real nudity - see SETUP.md section 5 for the full story and how to
+retune which classes block.
+
+nsfw.onnx (AdamCodd/vit-base-nsfw-detector, model_fp16.onnx variant - see
+OnnxNsfwClassifier.kt) is kept as a fallback if siglip2_nsfw.onnx fails to
+load; it's a plain 2-class sfw/nsfw model with no "sexy" distinction.
 
 --- Legacy TFLite path (nsfw.tflite) ---
 

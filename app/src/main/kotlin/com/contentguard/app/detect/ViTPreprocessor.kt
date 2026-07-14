@@ -15,9 +15,14 @@ import java.nio.FloatBuffer
  *    inspecting the onnx/model_fp16.onnx graph directly - elem_type FLOAT,
  *    dims [batch, channels, height, width])
  *
+ * Also reused as-is by SiglipNsfwClassifier: prithivMLmods/siglip2-mini-explicit-content
+ * happens to use the identical [0.5, 0.5, 0.5] mean/std convention, just a
+ * different (also confirmed, not assumed) square size - toNchwBuffer's
+ * inputSize parameter already supports that without changes here.
+ *
  * If you swap in a different model later, update INPUT_SIZE/MEAN/STD (and
- * OnnxNsfwClassifier's input/output tensor names) to match its own config -
- * nothing here is ViT-specific beyond these constants.
+ * the relevant classifier's input/output tensor names) to match its own
+ * config - nothing here is ViT-specific beyond these constants.
  */
 object ViTPreprocessor {
 
