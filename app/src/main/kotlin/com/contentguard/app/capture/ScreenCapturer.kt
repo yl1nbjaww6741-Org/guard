@@ -8,7 +8,6 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import androidx.annotation.RequiresApi
-import kotlinx.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.concurrent.Executor
 import kotlin.math.max
@@ -59,7 +58,7 @@ class ScreenCapturer(
                 callbackExecutor,
                 object : TakeScreenshotCallback {
                     override fun onSuccess(result: ScreenshotResult) {
-                        if (cont.isActive) cont.resume(result)
+                        if (cont.isActive) cont.resume(result, onCancellation = null)
                     }
 
                     override fun onFailure(errorCode: Int) {
@@ -67,7 +66,7 @@ class ScreenCapturer(
                         // also whenever ColorOS itself rate-limits or
                         // denies the call - see accessibility_service_config.xml.
                         Log.d(TAG, "takeScreenshot failed: errorCode=$errorCode")
-                        if (cont.isActive) cont.resume(null)
+                        if (cont.isActive) cont.resume(null, onCancellation = null)
                     }
                 },
             )
