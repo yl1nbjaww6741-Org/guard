@@ -16,11 +16,12 @@ android {
         versionName = "0.1.0"
     }
 
-    // assets/nsfw.tflite is intentionally not shipped. NsfwClassifierFactory
-    // falls back to StubNsfwClassifier when the file is absent. Avoid
-    // aapt compressing the model if/when it's dropped in later.
+    // assets/nsfw.onnx (or the legacy nsfw.tflite) is intentionally not
+    // shipped. NsfwClassifierFactory falls back to StubNsfwClassifier when
+    // neither file is present. Avoid aapt compressing the model if/when
+    // it's dropped in later - a compressed model can't be mmap'd.
     androidResources {
-        noCompress += "tflite"
+        noCompress += listOf("tflite", "onnx")
     }
 
     buildTypes {
@@ -78,11 +79,18 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // TensorFlow Lite. `tensorflow-lite` is the interpreter runtime;
-    // `tensorflow-lite-support` gives us TensorImage/TensorBuffer helpers
-    // for the fixed-size quantized input the NSFW model expects.
+    // TensorFlow Lite - legacy gate-7 backend, kept for existing
+    // assets/nsfw.tflite conversions. `tensorflow-lite` is the interpreter
+    // runtime; `tensorflow-lite-support` gives us TensorImage/TensorBuffer
+    // helpers for the fixed-size quantized input the NSFW model expects.
     implementation("org.tensorflow:tensorflow-lite:2.16.1")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+
+    // ONNX Runtime Mobile - primary gate-7 backend (assets/nsfw.onnx). This
+    // build includes the NNAPI EP (NPU/GPU acceleration on-device) with
+    // automatic CPU fallback for unsupported ops or older devices; see
+    // OnnxNsfwClassifier for the session setup.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.27.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

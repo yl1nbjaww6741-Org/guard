@@ -1,4 +1,11 @@
-Drop your quantized NSFW classifier here as: nsfw.tflite
+NsfwClassifierFactory looks for nsfw.onnx first, then falls back to
+nsfw.tflite, then to StubNsfwClassifier (always scores 0, never blocks) if
+neither is present. As of this commit, nsfw.onnx is in place
+(AdamCodd/vit-base-nsfw-detector, model_fp16.onnx variant - see
+OnnxNsfwClassifier.kt for the NNAPI/CPU session setup and ViTPreprocessor.kt
+for the 384x384/mean-0.5/std-0.5 preprocessing it expects).
+
+--- Legacy TFLite path (nsfw.tflite) ---
 
 Expected contract (see detect/TFLiteNsfwClassifier.kt):
   - Single image input, any HxW in the 128-160px range, NHWC layout.
