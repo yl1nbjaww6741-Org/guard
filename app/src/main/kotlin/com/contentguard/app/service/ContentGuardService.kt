@@ -71,9 +71,22 @@ class ContentGuardService : AccessibilityService() {
 
         if (isRealAppSwitch) {
             lastForegroundPackage = packageName
-            if (overlay.isVisible()) {
+            if (overlay.isVisible() && !prefs.isLockedOut(packageName)) {
                 serviceScope.launch(Dispatchers.Main) { overlay.hide() }
             }
+        }
+
+        if (prefs.isLockedOut(packageName)) {
+            // Re-show on every switch back into a locked-out app rather than
+            // only once - the cascade never runs for it while locked out, so
+            // there's no other event that would re-trigger the overlay.
+            if (isRealAppSwitch) {
+                val line = "[$packageName] exit@GATE0_LOCKED_OUT"
+                Log.i(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+                serviceScope.launch(Dispatchers.Main) { overlay.show(packageName) }
+            }
+            return
         }
 
         if (!scopePolicy.shouldMonitor(packageName)) {
@@ -153,6 +166,11 @@ class ContentGuardService : AccessibilityService() {
             Log.i(TAG, blockLine)
             DebugLogBuffer.add(TAG, blockLine)
             prefs.recordBlock()
+            if (prefs.recordExplicitStrike(pkg)) {
+                val lockLine = "[$pkg] LOCKOUT_TRIGGERED durationMin=${prefs.lockoutDurationMinutes}"
+                Log.i(TAG, lockLine)
+                DebugLogBuffer.add(TAG, lockLine)
+            }
             withContext(Dispatchers.Main) { overlay.show(pkg) }
         } finally {
             bitmap.recycle()

@@ -103,6 +103,58 @@ class PrefsRepository(context: Context) {
             .apply()
     }
 
+    var lockoutDurationMinutes: Int
+        get() = prefs.getInt(KEY_LOCKOUT_DURATION_MIN, DEFAULT_LOCKOUT_MINUTES)
+        set(value) {
+            prefs.edit().putInt(KEY_LOCKOUT_DURATION_MIN, value.coerceIn(1, 60)).apply()
+        }
+
+    /**
+     * Records an explicit-content detection for [packageName] and, once 3
+     * such strikes land within a rolling 15-minute window, locks that
+     * single app out for [lockoutDurationMinutes]. Returns true exactly
+     * when this call was the one that triggered the lockout, so the
+     * caller can log it distinctly from an ordinary strike.
+     */
+    fun recordExplicitStrike(packageName: String): Boolean {
+        val now = System.currentTimeMillis()
+        val key = strikeKey(packageName)
+        val recentStrikes = (prefs.getStringSet(key, null) ?: emptySet())
+            .mapNotNull { it.toLongOrNull() }
+            .filter { now - it < STRIKE_WINDOW_MS }
+            .toMutableList()
+        recentStrikes.add(now)
+
+        if (recentStrikes.size >= STRIKES_TO_LOCKOUT) {
+            prefs.edit()
+                .remove(key)
+                .putLong(lockoutKey(packageName), now + lockoutDurationMinutes * 60_000L)
+                .apply()
+            return true
+        }
+        prefs.edit().putStringSet(key, recentStrikes.map { it.toString() }.toSet()).apply()
+        return false
+    }
+
+    fun isLockedOut(packageName: String): Boolean = getLockoutUntil(packageName) > System.currentTimeMillis()
+
+    fun getLockoutUntil(packageName: String): Long = prefs.getLong(lockoutKey(packageName), 0L)
+
+    /** Package name -> lockout-expiry millis, for currently locked-out apps only. Debug/Settings display use. */
+    fun getActiveLockouts(): Map<String, Long> {
+        val now = System.currentTimeMillis()
+        return prefs.all
+            .mapNotNull { (key, value) ->
+                if (!key.startsWith(KEY_LOCKOUT_PREFIX) || value !is Long) return@mapNotNull null
+                if (value <= now) return@mapNotNull null
+                key.removePrefix(KEY_LOCKOUT_PREFIX) to value
+            }
+            .toMap()
+    }
+
+    private fun strikeKey(packageName: String) = "$KEY_STRIKES_PREFIX$packageName"
+    private fun lockoutKey(packageName: String) = "$KEY_LOCKOUT_PREFIX$packageName"
+
     companion object {
         private const val PREFS_NAME = "content_guard_prefs"
         private const val KEY_MODE = "scope_mode"
@@ -115,6 +167,12 @@ class PrefsRepository(context: Context) {
         private const val KEY_TOTAL_INFERENCE_MS = "stats_total_inference_ms"
         private const val KEY_BLOCK_COUNT = "stats_block_count"
         private const val KEY_STATS_SINCE = "stats_since_millis"
+        private const val KEY_LOCKOUT_DURATION_MIN = "lockout_duration_min"
+        private const val KEY_STRIKES_PREFIX = "strike_times_"
+        private const val KEY_LOCKOUT_PREFIX = "lockout_until_"
         const val DEFAULT_THRESHOLD = 0.80f
+        const val DEFAULT_LOCKOUT_MINUTES = 1
+        private const val STRIKES_TO_LOCKOUT = 3
+        private const val STRIKE_WINDOW_MS = 15 * 60 * 1000L
     }
 }

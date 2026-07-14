@@ -114,6 +114,17 @@ it off requires deactivating device admin first, same as any other app
 using this mechanism (this is also how most third-party parental-control
 / app-blocker apps achieve the same behavior).
 
+### 3-strikes lockout
+
+The Settings screen has a "3-strikes lockout" card: 3 `GATE8_BLOCK` hits
+for the *same app* within a rolling 15-minute window locks just that app
+(not the whole device) for an adjustable duration (default 1 minute,
+slider up to 30). While locked out, the cascade skips straight past gate
+1 for that package - no screenshot or inference runs - and switching back
+into the app re-shows the fake-crash block immediately rather than
+waiting for a fresh detection. Strikes and lockout state are tracked
+per-package in `PrefsRepository` (`recordExplicitStrike`/`isLockedOut`).
+
 ### Watching the cascade
 
 ```bash

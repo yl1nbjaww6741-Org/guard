@@ -104,6 +104,8 @@ private fun SettingsScreen(prefs: PrefsRepository) {
     var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
     var deviceAdminActive by remember { mutableStateOf(isDeviceAdminActive(context)) }
     var usageStats by remember { mutableStateOf(prefs.getUsageStats()) }
+    var lockoutDurationMinutes by remember { mutableStateOf(prefs.lockoutDurationMinutes) }
+    var activeLockouts by remember { mutableStateOf(prefs.getActiveLockouts()) }
     var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
 
     // Re-check accessibility-enabled/device-admin state and refresh usage
@@ -117,6 +119,7 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                 serviceEnabled = isAccessibilityServiceEnabled(context)
                 deviceAdminActive = isDeviceAdminActive(context)
                 usageStats = prefs.getUsageStats()
+                activeLockouts = prefs.getActiveLockouts()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -189,6 +192,16 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                     onThresholdChangeFinished = { prefs.nsfwThreshold = threshold },
                     dismissOnBlock = dismissOnBlock,
                     onDismissOnBlockChange = { dismissOnBlock = it; prefs.dismissOnBlock = it },
+                )
+            }
+
+            item {
+                LockoutSection(
+                    durationMinutes = lockoutDurationMinutes,
+                    onDurationChange = { lockoutDurationMinutes = it },
+                    onDurationChangeFinished = { prefs.lockoutDurationMinutes = lockoutDurationMinutes },
+                    activeLockouts = activeLockouts,
+                    onRefresh = { activeLockouts = prefs.getActiveLockouts() },
                 )
             }
 
@@ -362,6 +375,54 @@ private fun DeviceAdminSection(
                 Button(onClick = onOpenSecuritySettings) { Text("Manage in Security Settings") }
             } else {
                 Button(onClick = onEnable) { Text("Enable Protection") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LockoutSection(
+    durationMinutes: Int,
+    onDurationChange: (Int) -> Unit,
+    onDurationChangeFinished: () -> Unit,
+    activeLockouts: Map<String, Long>,
+    onRefresh: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("3-strikes lockout", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "3 explicit-content blocks for the same app within 15 minutes locks just " +
+                    "that app for the duration below - switching back into it re-shows the block.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text("Lockout duration: $durationMinutes min")
+            Slider(
+                value = durationMinutes.toFloat(),
+                onValueChange = { onDurationChange(it.toInt()) },
+                onValueChangeFinished = onDurationChangeFinished,
+                valueRange = 1f..30f,
+                steps = 28,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text("Currently locked out", style = MaterialTheme.typography.bodySmall)
+                Button(onClick = onRefresh) { Text("Refresh") }
+            }
+            if (activeLockouts.isEmpty()) {
+                Text("None", style = MaterialTheme.typography.bodySmall)
+            } else {
+                val now = System.currentTimeMillis()
+                activeLockouts.forEach { (pkg, until) ->
+                    val remainingSec = ((until - now) / 1000).coerceAtLeast(0)
+                    Text("$pkg - ${remainingSec}s left", style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }
