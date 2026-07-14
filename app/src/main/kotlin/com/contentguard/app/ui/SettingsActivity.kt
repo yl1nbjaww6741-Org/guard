@@ -44,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -54,11 +55,13 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.contentguard.app.detect.SiglipNnapiSpike
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.scope.ScopeMode
 import com.contentguard.app.service.ContentGuardService
 import com.contentguard.app.ui.theme.ContentGuardTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class SettingsActivity : ComponentActivity() {
@@ -162,6 +165,50 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                     onToggle = { setMonitored(app.packageName, it) },
                 )
                 HorizontalDivider()
+            }
+
+            item { NnapiSpikeSection() }
+        }
+    }
+}
+
+@Composable
+private fun NnapiSpikeSection() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var running by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Debug: SigLIP2 NNAPI spike", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("Throwaway check, not part of the real cascade. Requires assets/siglip_quantized_spike.onnx.")
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                enabled = !running,
+                onClick = {
+                    running = true
+                    result = null
+                    scope.launch(Dispatchers.Default) {
+                        val outcome = try {
+                            val r = SiglipNnapiSpike.run(context)
+                            "executionProvider=${r.executionProvider}  avgMs=${"%.1f".format(r.avgMs)}  latenciesMs=${r.latenciesMs}"
+                        } catch (e: Exception) {
+                            "FAILED: ${e.message}"
+                        }
+                        withContext(Dispatchers.Main) {
+                            result = outcome
+                            running = false
+                        }
+                    }
+                },
+            ) {
+                Text(if (running) "Running..." else "Run NNAPI Spike (SigLIP2)")
+            }
+            result?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
