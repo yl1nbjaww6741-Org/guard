@@ -120,19 +120,23 @@ machine - none of this works in a sandbox without normal internet access):
 1. Download the MobileNetV2 variant from
    [GantMan/nsfw_model](https://github.com/GantMan/nsfw_model) (MIT
    licensed) releases page - either a `.h5` file or a SavedModel directory.
-2. Gather a folder of ~100-500 representative sample images (a realistic
-   mix of SFW and NSFW content, ideally resembling actual screenshot
-   crops) for quantization calibration.
-3. `pip install tensorflow pillow numpy`, then:
+2. `pip install tensorflow pillow numpy`, then convert - no quantization
+   to start with, so no representative-images folder needed yet:
    ```bash
    python tools/convert_nsfw_model.py \
      --model /path/to/downloaded/model \
-     --representative-images /path/to/sample_images \
      --output app/src/main/assets/nsfw.tflite
    ```
-4. Rebuild (`git push` to trigger CI, or `./gradlew assembleDebug` locally)
+   This gets you a plain float32 model - bigger and slower per inference
+   than a quantized one, but proves the whole pipeline (class taxonomy,
+   thresholding, cascade wiring) actually works before optimizing it.
+   Once that's confirmed, re-run with `--quantize dynamic` (still no
+   representative images, smaller/faster) or `--quantize int8` (needs a
+   ~100-500 image representative-images folder, smallest/fastest) - see
+   `tools/convert_nsfw_model.py --help` for all three modes.
+3. Rebuild (`git push` to trigger CI, or `./gradlew assembleDebug` locally)
    and reinstall.
-5. **Calibrate before trusting it**: this model is a 5-class softmax
+4. **Calibrate before trusting it**: this model is a 5-class softmax
    (drawings/hentai/neutral/porn/sexy), not a single NSFW score.
    `TFLiteNsfwClassifier`'s `unsafeClassIndices` (default: hentai+porn+sexy)
    decides what counts as "unsafe," and `nsfwThreshold` in the app's
