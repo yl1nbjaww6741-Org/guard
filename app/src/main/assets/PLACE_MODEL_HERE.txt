@@ -1,0 +1,17 @@
+Drop your quantized NSFW classifier here as: nsfw.tflite
+
+Expected contract (see detect/TFLiteNsfwClassifier.kt):
+  - Single image input, any HxW in the 128-160px range, NHWC layout.
+  - Either float32 (normalized 0..1) or fully-integer-quantized
+    (uint8/int8 with the standard TFLite scale/zero-point metadata) input.
+  - Single-value output tensor: one NSFW probability in [0,1] (float32
+    output, or quantized uint8/int8 dequantized via scale/zero-point).
+
+TFLiteNsfwClassifier reads input size and dtypes off the model itself, so
+as long as the shapes/types above hold, no code changes are needed beyond
+dropping the file here. NsfwClassifierFactory falls back to
+StubNsfwClassifier (always scores 0, never blocks) whenever this file is
+absent - which is the state this repo ships in.
+
+This file itself (PLACE_MODEL_HERE.txt) is harmless to leave in the APK;
+delete it once nsfw.tflite is in place if you'd like.

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  accessibilityEventTypes is deliberately narrow: window state changes (app
+  switch / new screen), content changes (feed scroll settling, image loads),
+  and scroll events. We do NOT listen for typeViewClicked/typeViewFocused/etc
+  - every extra event type is extra wakeups on a battery-first design.
+
+  canRetrieveWindowContent + flagRetrieveInteractiveWindows let
+  NodeInspector walk the tree to look for image-bearing nodes before we ever
+  touch pixels (gate 3 in the cascade).
+
+  android:canTakeScreenshot is what actually grants CAPABILITY_CAN_TAKE_SCREENSHOT
+  for AccessibilityService.takeScreenshot() (API 30+). VERIFY ON-DEVICE: this
+  is exactly the kind of flag ColorOS/OEM skins sometimes strip or gate behind
+  an extra toggle in their own accessibility/permission UI. If takeScreenshot()
+  callbacks fire ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR or similar on the Find X9
+  Pro, check Settings > Accessibility > ContentGuard for a ColorOS-specific
+  "screenshot" toggle before assuming the API itself is broken.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:notificationTimeout="100"
+    android:description="@string/accessibility_service_description" />

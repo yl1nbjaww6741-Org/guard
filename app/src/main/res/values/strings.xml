@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ContentGuard</string>
+    <string name="accessibility_service_description">Scans on-screen content for adult imagery and blocks it. Runs entirely on-device; nothing leaves your phone.</string>
+    <string name="overlay_blocked_label">Content blocked</string>
+</resources>
