@@ -73,6 +73,20 @@ torch.onnx.export(
     output_names=["logits"],
     dynamic_axes={"pixel_values": {0: "batch_size"}, "logits": {0: "batch_size"}},
     opset_version=17,
+    # dynamo=False: the newer TorchDynamo-based exporter (this PyTorch
+    # version's default) names/orders the classifier head's Gemm node's
+    # value_info differently than the legacy TorchScript-based tracer.
+    # That difference triggers a real bug in onnxruntime's quantizer -
+    # ONNXQuantizer.__init__ unconditionally calls
+    # replace_gemm_with_matmul(), which rewrites Gemm(transB=1) into
+    # Transpose+MatMul+Add and leaves a stale shape annotation on a
+    # reused tensor name, causing quantize_dynamic() to fail with
+    # "ShapeInferenceError: Inferred shape and existing shape differ in
+    # dimension 0: (768) vs (5)" (768=hidden size, 5=num labels). The
+    # legacy tracer's graph doesn't hit this path. Confirmed by diffing
+    # fp32-vs-int8 predictions on the same input after this fix - same
+    # argmax, logits within ~0.1.
+    dynamo=False,
 )
 
 # Step 2: quantize - no images needed
