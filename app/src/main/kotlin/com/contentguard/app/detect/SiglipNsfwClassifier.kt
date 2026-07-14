@@ -8,6 +8,7 @@ import ai.onnxruntime.TensorInfo
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import com.contentguard.app.util.DebugLogBuffer
 import kotlin.math.exp
 
 /** Confirmed id2label order from prithivMLmods/siglip2-mini-explicit-content's own config (not assumed). */
@@ -98,7 +99,11 @@ class SiglipNsfwClassifier(
     override fun scoreNsfw(bitmap: Bitmap): Float {
         val probs = runInference(bitmap)
 
-        SiglipClass.entries.forEach { Log.d(TAG, "class=${it.label} prob=${probs[it.index]}") }
+        SiglipClass.entries.forEach {
+            val line = "class=${it.label} prob=${probs[it.index]}"
+            Log.d(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+        }
 
         var maxRatio = 0f
         for ((siglipClass, threshold) in classPolicies) {
@@ -106,6 +111,7 @@ class SiglipNsfwClassifier(
             val ratio = probs[siglipClass.index] / threshold
             if (ratio > maxRatio) maxRatio = ratio
         }
+        DebugLogBuffer.add(TAG, "maxRatio=$maxRatio")
         return maxRatio
     }
 

@@ -12,6 +12,7 @@ import com.contentguard.app.detect.SkinTonePrefilter
 import com.contentguard.app.overlay.BlurOverlayController
 import com.contentguard.app.scope.AppScopePolicy
 import com.contentguard.app.scope.PrefsRepository
+import com.contentguard.app.util.DebugLogBuffer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,9 +52,11 @@ class ContentGuardService : AccessibilityService() {
         debouncer = EventDebouncer()
         screenCapturer = ScreenCapturer(this, ContextCompat.getMainExecutor(this))
         nsfwClassifier = NsfwClassifierFactory.create(applicationContext)
-        overlay = BlurOverlayController(this) {
-            if (prefs.dismissOnBlock) performGlobalAction(GLOBAL_ACTION_BACK)
-        }
+        overlay = BlurOverlayController(
+            service = this,
+            onBackKeyPressed = { if (prefs.dismissOnBlock) performGlobalAction(GLOBAL_ACTION_BACK) },
+            onOkTapped = { performGlobalAction(GLOBAL_ACTION_BACK) },
+        )
 
         serviceScope.launch { consumeFrames() }
         Log.i(TAG, "connected: mode=${prefs.mode} threshold=${prefs.nsfwThreshold}")
@@ -124,7 +127,9 @@ class ContentGuardService : AccessibilityService() {
 
         val bitmap = screenCapturer.captureDownscaled()
         if (bitmap == null) {
-            Log.d(TAG, "[$pkg] exit@GATE5_CAPTURE_THROTTLED_OR_FAILED")
+            val line = "[$pkg] exit@GATE5_CAPTURE_THROTTLED_OR_FAILED"
+            Log.d(TAG, line)
+            DebugLogBuffer.add(TAG, line)
             return
         }
         prefs.recordScreenshot()
@@ -144,19 +149,31 @@ class ContentGuardService : AccessibilityService() {
                 return
             }
 
-            Log.i(TAG, "[$pkg] exit@GATE8_BLOCK score=$score")
+            val blockLine = "[$pkg] exit@GATE8_BLOCK score=$score"
+            Log.i(TAG, blockLine)
+            DebugLogBuffer.add(TAG, blockLine)
             prefs.recordBlock()
-            withContext(Dispatchers.Main) { overlay.show() }
+            withContext(Dispatchers.Main) { overlay.show(pkg) }
         } finally {
             bitmap.recycle()
         }
     }
 
-    private suspend fun exitSafe(pkg: String, gate: String) {
-        Log.d(TAG, "[$pkg] exit@$gate")
-        if (overlay.isVisible()) {
-            withContext(Dispatchers.Main) { overlay.hide() }
-        }
+    /**
+     * Logs a safe gate exit. Deliberately does NOT hide the overlay here:
+     * once shown, a block should only go away via a genuine app switch
+     * (handled in onAccessibilityEvent) or the user dismissing the fake
+     * crash dialog themselves (BlurOverlayController's onOkTapped/
+     * onBackKeyPressed) - not because the cascade re-evaluated whatever
+     * the blocked app changed to in the background (autoplay advancing,
+     * an ad rotating, infinite scroll loading fresh content) as "safe".
+     * That was a real bug: the block could silently vanish with no user
+     * action at all.
+     */
+    private fun exitSafe(pkg: String, gate: String) {
+        val line = "[$pkg] exit@$gate"
+        Log.d(TAG, line)
+        DebugLogBuffer.add(TAG, line)
     }
 
     override fun onInterrupt() {
