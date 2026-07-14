@@ -77,10 +77,15 @@ class ContentGuardService : AccessibilityService() {
         }
 
         if (prefs.isLockedOut(packageName)) {
-            // Re-show on every switch back into a locked-out app rather than
-            // only once - the cascade never runs for it while locked out, so
-            // there's no other event that would re-trigger the overlay.
-            if (isRealAppSwitch) {
+            // Gate on overlay visibility, not isRealAppSwitch: the 3rd
+            // strike usually fires while the user is already inside the
+            // offending app (no app-switch event ever occurs), so keying
+            // off isRealAppSwitch alone left the lockout invisible unless
+            // the user happened to leave and come back. Any event in a
+            // locked-out package re-shows the block whenever it isn't
+            // already up - including right after the user dismisses it
+            // and stays put, which is exactly when it must persist.
+            if (!overlay.isVisible()) {
                 val line = "[$packageName] exit@GATE0_LOCKED_OUT"
                 Log.i(TAG, line)
                 DebugLogBuffer.add(TAG, line)
