@@ -27,6 +27,25 @@ android {
         noCompress += listOf("tflite", "onnx")
     }
 
+    signingConfigs {
+        // Overrides AGP's built-in "debug" config, which otherwise
+        // auto-generates a new ~/.android/debug.keystore per machine - on
+        // GitHub Actions that means a brand-new key on every run, so
+        // Android refuses to install a new build over the last one
+        // ("something went wrong") and forces an uninstall (wiping
+        // SharedPreferences - whitelist, threshold, etc). Committing a
+        // fixed keystore here means every CI run and every local build
+        // signs with the same key, so updates always install in place.
+        // Not a secret: debug-only, well-known store/key password, no
+        // real trust value - same convention as AGP's own default.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true

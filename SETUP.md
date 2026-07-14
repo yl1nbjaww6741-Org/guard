@@ -68,6 +68,19 @@ so `assembleDebug` succeeds with `StubNsfwClassifier` active (gate 7 always
 scores 0, nothing ever gets blocked, capture/inspection cascade otherwise
 runs normally so you can see it working in logs).
 
+### Signing (why updates install in place)
+
+`app/debug.keystore` is a committed, fixed debug signing key (see
+`build.gradle.kts`'s `signingConfigs`), overriding AGP's default behavior
+of auto-generating a new debug keystore per machine. Without this, every
+GitHub Actions run would sign the APK with a different key, and Android
+refuses to install a build over a previous install signed with a
+different key ("something went wrong" / `INSTALL_FAILED_UPDATE_INCOMPATIBLE`)
+- forcing an uninstall first, which wipes all `SharedPreferences` (scope
+mode, whitelist, threshold, lockout duration, usage stats). With every
+build signed identically, `adb install -r` (or tapping a downloaded APK
+again) always updates in place and every setting survives.
+
 ## 3. Install + enable, via adb
 
 ```bash

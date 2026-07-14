@@ -14,3 +14,6 @@ app/release/
 *.aab
 *.jks
 *.keystore
+# Except the shared debug keystore, committed on purpose so every
+# CI/dev machine signs debug builds identically - see build.gradle.kts.
+!app/debug.keystore
