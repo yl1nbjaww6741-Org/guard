@@ -71,22 +71,25 @@ class OnnxNsfwClassifier(
     }
 
     private fun createSession(modelBytes: ByteArray, verbose: Boolean): Pair<OrtSession, ExecutionProvider> {
-        val nnapiOptions = OrtSession.SessionOptions()
-        try {
-            if (verbose) nnapiOptions.setSessionLogVerbosityLevel(0)
-            nnapiOptions.addNnapi()
-            val session = env.createSession(modelBytes, nnapiOptions)
-            return session to ExecutionProvider.NNAPI
-        } catch (e: OrtException) {
-            Log.w(TAG, "NNAPI EP init failed, falling back to CPU EP", e)
-            nnapiOptions.close()
+        // SessionOptions is only needed to construct the session - ORT copies
+        // whatever it needs internally, so closing it right after (success or
+        // failure) is safe and avoids leaking the native options object.
+        OrtSession.SessionOptions().use { nnapiOptions ->
+            try {
+                if (verbose) nnapiOptions.setSessionLogVerbosityLevel(0)
+                nnapiOptions.addNnapi()
+                return env.createSession(modelBytes, nnapiOptions) to ExecutionProvider.NNAPI
+            } catch (e: OrtException) {
+                Log.w(TAG, "NNAPI EP init failed, falling back to CPU EP", e)
+            }
         }
 
-        val cpuOptions = OrtSession.SessionOptions().apply {
+        OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(2)
             if (verbose) setSessionLogVerbosityLevel(0)
+        }.use { cpuOptions ->
+            return env.createSession(modelBytes, cpuOptions) to ExecutionProvider.CPU
         }
-        return env.createSession(modelBytes, cpuOptions) to ExecutionProvider.CPU
     }
 
     /** Gate 7 entry point for the existing accessibility-event cascade (ContentGuardService). */
