@@ -148,6 +148,40 @@ machine - none of this works in a sandbox without normal internet access):
    `DEFAULT_UNSAFE_CLASS_INDICES` in `TFLiteNsfwClassifier.kt` if you only
    want explicit content (hentai+porn) blocked.
 
+## 5. (Exploratory) SigLIP2 model - separating "sexy" from real nudity
+
+GantMan's model and the ONNX ViT model currently in `assets/nsfw.onnx` both
+either lack a "suggestive but not explicit" class or fold it into NSFW.
+`prithivMLmods/siglip2-mini-explicit-content` has 5 classes (Anime
+Picture, Enticing & Sensual, Hentai, Pornography, Safe for Work) that
+separate "sensual" from actual porn/hentai - closer to "only block real
+nudity." This is being evaluated in three gated stages; **do not skip
+ahead to full integration before stage 2 is confirmed on real hardware**:
+
+1. **Export + quantize** (`tools/export_siglip_onnx.py`, run on your own
+   machine - needs Hugging Face access this project's sandbox doesn't
+   have): loads the model, confirms its *actual* input size/mean/std from
+   its own processor config rather than assuming, exports to ONNX (opset
+   17), applies dynamic (weight-only) INT8 quantization, and sanity-checks
+   PyTorch vs. quantized-ONNX predictions on a few of your own sample
+   images.
+2. **NNAPI engagement spike** (`app/src/androidTest/kotlin/com/contentguard/app/NnapiEngagementSpikeTest.kt`,
+   throwaway, run via `./gradlew connectedAndroidTest` on your actual
+   device): SigLIP2 is a vision transformer, and NNAPI's op coverage was
+   designed around CNNs - this measures, on real hardware, whether the
+   NNAPI execution provider actually engages or silently falls back to
+   CPU, and what the per-inference latency is either way. Place the
+   quantized model from step 1 at
+   `app/src/main/assets/siglip_quantized_spike.onnx` first (deliberately
+   not named `nsfw.onnx` - it must not be picked up by
+   `NsfwClassifierFactory` yet).
+3. **Full integration** - only after step 2's results are in: a new
+   `OnnxNsfwClassifier`-style class for this model, per-class configurable
+   thresholds (block Pornography/Hentai, separately configurable handling
+   for Enticing & Sensual), matching preprocessing pulled from the
+   model's real processor config, and the same execution-provider/latency
+   logging pattern already used for gate 7.
+
 ## ColorOS / OPPO Find X9 Pro notes
 
 See [`docs/COLOROS.md`](docs/COLOROS.md) for battery-optimization exemption,
