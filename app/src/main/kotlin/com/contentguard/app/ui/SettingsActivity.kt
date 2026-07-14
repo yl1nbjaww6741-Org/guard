@@ -90,15 +90,19 @@ private fun SettingsScreen(prefs: PrefsRepository) {
     var whitelist by remember { mutableStateOf(prefs.getWhitelist()) }
     var monitored by remember { mutableStateOf(prefs.getMonitoredSet()) }
     var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var usageStats by remember { mutableStateOf(prefs.getUsageStats()) }
     var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
 
-    // Re-check accessibility-enabled state whenever we come back to the
-    // foreground - e.g. after the user toggles it in system Settings.
+    // Re-check accessibility-enabled state and refresh usage stats
+    // whenever we come back to the foreground - e.g. after the user
+    // toggles accessibility in system Settings, or after time has passed
+    // since the cascade last recorded activity.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 serviceEnabled = isAccessibilityServiceEnabled(context)
+                usageStats = prefs.getUsageStats()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -165,6 +169,23 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                     onToggle = { setMonitored(app.packageName, it) },
                 )
                 HorizontalDivider()
+            }
+
+            item {
+                UsageStatsSection(
+                    stats = usageStats,
+                    onReset = {
+                        prefs.resetUsageStats()
+                        usageStats = prefs.getUsageStats()
+                    },
+                    onOpenBatterySettings = {
+                        context.startActivity(
+                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.fromParts("package", context.packageName, null)
+                            },
+                        )
+                    },
+                )
             }
 
             item { NnapiSpikeSection() }
@@ -263,6 +284,41 @@ private fun ScopeModeRow(label: String, selected: Boolean, onClick: () -> Unit) 
     ) {
         RadioButton(selected = selected, onClick = onClick)
         Text(label)
+    }
+}
+
+@Composable
+private fun UsageStatsSection(
+    stats: PrefsRepository.UsageStats,
+    onReset: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Activity since last reset", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Not a real battery-percentage number - Android doesn't expose that to " +
+                    "third-party apps. This counts the two operations that actually cost " +
+                    "battery, as a proxy for load.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text("Screenshots captured: ${stats.screenshotCount}")
+            Text("Classifier inferences: ${stats.inferenceCount}")
+            Text("Avg inference latency: ${"%.0f".format(stats.avgInferenceMs)} ms")
+            Text("Total inference time: ${"%.1f".format(stats.totalInferenceMs / 1000.0)} s")
+            Text("Blocks triggered: ${stats.blockCount}")
+            if (stats.sinceMillis > 0) {
+                val elapsedMinutes = (System.currentTimeMillis() - stats.sinceMillis) / 60_000
+                Text("Tracking for: $elapsedMinutes min")
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onReset) { Text("Reset") }
+                Button(onClick = onOpenBatterySettings) { Text("System Battery Info") }
+            }
+        }
     }
 }
 

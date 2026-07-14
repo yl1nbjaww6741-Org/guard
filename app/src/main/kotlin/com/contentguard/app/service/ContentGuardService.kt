@@ -127,6 +127,7 @@ class ContentGuardService : AccessibilityService() {
             Log.d(TAG, "[$pkg] exit@GATE5_CAPTURE_THROTTLED_OR_FAILED")
             return
         }
+        prefs.recordScreenshot()
 
         try {
             if (!SkinTonePrefilter.looksSkinLike(bitmap)) {
@@ -134,13 +135,17 @@ class ContentGuardService : AccessibilityService() {
                 return
             }
 
+            val inferenceStartNanos = System.nanoTime()
             val score = nsfwClassifier.scoreNsfw(bitmap)
+            prefs.recordInference((System.nanoTime() - inferenceStartNanos) / 1_000_000)
+
             if (score < prefs.nsfwThreshold) {
                 exitSafe(pkg, "GATE7_BELOW_THRESHOLD score=$score")
                 return
             }
 
             Log.i(TAG, "[$pkg] exit@GATE8_BLOCK score=$score")
+            prefs.recordBlock()
             withContext(Dispatchers.Main) { overlay.show() }
         } finally {
             bitmap.recycle()
