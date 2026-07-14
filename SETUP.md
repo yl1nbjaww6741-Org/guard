@@ -160,18 +160,21 @@ ahead to full integration before stage 2 is confirmed on real hardware**:
 
 1. **Export + quantize** (`tools/export_siglip_onnx.py`, run on your own
    machine - needs Hugging Face access this project's sandbox doesn't
-   have): loads the model, confirms its *actual* input size/mean/std from
-   its own processor config rather than assuming, exports to ONNX (opset
-   17), applies dynamic (weight-only) INT8 quantization, and sanity-checks
-   PyTorch vs. quantized-ONNX predictions on a few of your own sample
-   images.
+   have: `pip install torch transformers onnx onnxruntime`, then just run
+   the script, no flags/images needed): loads the model, confirms its
+   *actual* input size/mean/std from its own processor config rather than
+   assuming 512x512, exports to ONNX (opset 17), and applies dynamic
+   (weight-only) QUInt8 quantization - no calibration images or sanity-
+   check images required, since dynamic quantization computes activation
+   ranges at runtime. Produces `siglip2_mini_explicit.onnx` (fp32) and
+   `siglip2_mini_explicit_int8.onnx` (quantized) in the current directory.
 2. **NNAPI engagement spike** (`app/src/androidTest/kotlin/com/contentguard/app/NnapiEngagementSpikeTest.kt`,
    throwaway, run via `./gradlew connectedAndroidTest` on your actual
    device): SigLIP2 is a vision transformer, and NNAPI's op coverage was
    designed around CNNs - this measures, on real hardware, whether the
    NNAPI execution provider actually engages or silently falls back to
-   CPU, and what the per-inference latency is either way. Place the
-   quantized model from step 1 at
+   CPU, and what the per-inference latency is either way. Place
+   `siglip2_mini_explicit_int8.onnx` from step 1 at
    `app/src/main/assets/siglip_quantized_spike.onnx` first (deliberately
    not named `nsfw.onnx` - it must not be picked up by
    `NsfwClassifierFactory` yet).
