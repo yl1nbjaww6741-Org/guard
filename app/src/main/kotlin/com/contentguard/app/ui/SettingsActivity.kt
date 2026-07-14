@@ -2,6 +2,7 @@
 
 package com.contentguard.app.ui
 
+import android.app.admin.DevicePolicyManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
@@ -13,7 +14,9 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.text.TextUtils
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -61,6 +64,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.contentguard.app.R
+import com.contentguard.app.admin.ContentGuardDeviceAdminReceiver
 import com.contentguard.app.detect.SiglipNnapiSpike
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.scope.ScopeMode
@@ -97,23 +102,31 @@ private fun SettingsScreen(prefs: PrefsRepository) {
     var whitelist by remember { mutableStateOf(prefs.getWhitelist()) }
     var monitored by remember { mutableStateOf(prefs.getMonitoredSet()) }
     var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var deviceAdminActive by remember { mutableStateOf(isDeviceAdminActive(context)) }
     var usageStats by remember { mutableStateOf(prefs.getUsageStats()) }
     var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
 
-    // Re-check accessibility-enabled state and refresh usage stats
-    // whenever we come back to the foreground - e.g. after the user
-    // toggles accessibility in system Settings, or after time has passed
-    // since the cascade last recorded activity.
+    // Re-check accessibility-enabled/device-admin state and refresh usage
+    // stats whenever we come back to the foreground - e.g. after the user
+    // toggles accessibility or device admin in system Settings, or after
+    // time has passed since the cascade last recorded activity.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 serviceEnabled = isAccessibilityServiceEnabled(context)
+                deviceAdminActive = isDeviceAdminActive(context)
                 usageStats = prefs.getUsageStats()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val deviceAdminLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+    ) {
+        deviceAdminActive = isDeviceAdminActive(context)
     }
 
     LaunchedEffect(Unit) {
@@ -146,6 +159,24 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                     enabled = serviceEnabled,
                     onOpenSettings = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
                     onIgnoreBatteryOptimizations = { requestIgnoreBatteryOptimizations(context) },
+                )
+            }
+
+            item {
+                DeviceAdminSection(
+                    active = deviceAdminActive,
+                    onEnable = {
+                        val admin = ComponentName(context, ContentGuardDeviceAdminReceiver::class.java)
+                        val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)
+                            putExtra(
+                                DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                                context.getString(R.string.device_admin_description),
+                            )
+                        }
+                        deviceAdminLauncher.launch(intent)
+                    },
+                    onOpenSecuritySettings = { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) },
                 )
             }
 
@@ -307,6 +338,36 @@ private fun AccessibilityStatusCard(
 }
 
 @Composable
+private fun DeviceAdminSection(
+    active: Boolean,
+    onEnable: () -> Unit,
+    onOpenSecuritySettings: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = if (active) "Force-stop / uninstall protection is ON" else "Force-stop / uninstall protection is OFF",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                if (active) {
+                    "ContentGuard can't be force-stopped or uninstalled from Settings or Battery without first turning this off in Settings > Security > Device admin apps."
+                } else {
+                    "Uses Android's Device Admin API (not Device Owner - no factory reset needed). Grants no access to your data; it only makes ContentGuard resistant to Force Stop and uninstall."
+                },
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            if (active) {
+                Button(onClick = onOpenSecuritySettings) { Text("Manage in Security Settings") }
+            } else {
+                Button(onClick = onEnable) { Text("Enable Protection") }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ScopeModeSection(mode: ScopeMode, onModeChange: (ScopeMode) -> Unit) {
     Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -433,6 +494,12 @@ private fun isAccessibilityServiceEnabled(context: Context): Boolean {
         if (component == expected) return true
     }
     return false
+}
+
+private fun isDeviceAdminActive(context: Context): Boolean {
+    val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    val admin = ComponentName(context, ContentGuardDeviceAdminReceiver::class.java)
+    return dpm.isAdminActive(admin)
 }
 
 private fun requestIgnoreBatteryOptimizations(context: Context) {

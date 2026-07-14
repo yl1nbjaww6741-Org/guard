@@ -96,6 +96,24 @@ Caveats:
 - For the release build (no `.debug` suffix), use
   `com.contentguard.app/com.contentguard.app.service.ContentGuardService`.
 
+### Force-stop / uninstall protection (Device Admin)
+
+The Settings screen has an "Enable Protection" button under "Force-stop /
+uninstall protection is OFF" that walks you through Android's own Device
+Admin activation dialog - no adb step needed. This is regular Device Admin
+(`DeviceAdminReceiver`), not Device Owner: no factory reset or MDM
+enrollment required, and it's fully revocable at any time from Settings >
+Security > Device admin apps.
+
+Simply being an active administrator is what makes Android grey out
+"Force stop" and "Uninstall" for this app system-wide (in Settings > Apps
+and in the battery/app-info screens) - that protection comes from admin
+status itself, not from any specific policy requested in
+`device_admin_receiver.xml` (which deliberately requests none). Turning
+it off requires deactivating device admin first, same as any other app
+using this mechanism (this is also how most third-party parental-control
+/ app-blocker apps achieve the same behavior).
+
 ### Watching the cascade
 
 ```bash

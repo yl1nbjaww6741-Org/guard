@@ -4,4 +4,6 @@
     <string name="accessibility_service_description">Scans on-screen content for adult imagery and blocks it. Runs entirely on-device; nothing leaves your phone.</string>
     <string name="fake_crash_message">Unfortunately, the process %1$s has stopped.</string>
     <string name="fake_crash_ok">OK</string>
+    <string name="device_admin_description">Prevents ContentGuard from being force-stopped or uninstalled without first turning this off here in Settings.</string>
+    <string name="device_admin_disable_warning">Turning this off will let ContentGuard be force-stopped or uninstalled without coming back here first. Are you sure?</string>
 </resources>

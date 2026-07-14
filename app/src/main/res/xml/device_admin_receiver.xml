@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     No policies requested below on purpose: the force-stop/uninstall
+     protection comes from simply being an active device administrator,
+     not from any specific policy flag - see ContentGuardDeviceAdminReceiver.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+    </uses-policies>
+</device-admin>
