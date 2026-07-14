@@ -15,3 +15,10 @@ absent - which is the state this repo ships in.
 
 This file itself (PLACE_MODEL_HERE.txt) is harmless to leave in the APK;
 delete it once nsfw.tflite is in place if you'd like.
+
+Recommended source model: GantMan/nsfw_model (MIT licensed), MobileNetV2
+variant - https://github.com/GantMan/nsfw_model. It's a 5-class softmax
+(drawings/hentai/neutral/porn/sexy), not a single sigmoid, but
+TFLiteNsfwClassifier already handles that (see its unsafeClassIndices
+param - defaults to summing hentai+porn+sexy). See tools/convert_nsfw_model.py
+for the exact conversion/quantization script and preprocessing details.

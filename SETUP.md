@@ -114,6 +114,36 @@ Put your quantized classifier at `app/src/main/assets/nsfw.tflite`. See
 contract `TFLiteNsfwClassifier` expects. Nothing else needs to change -
 `NsfwClassifierFactory` picks it up automatically on next build/install.
 
+Recommended source model and exact conversion steps (all run on your own
+machine - none of this works in a sandbox without normal internet access):
+
+1. Download the MobileNetV2 variant from
+   [GantMan/nsfw_model](https://github.com/GantMan/nsfw_model) (MIT
+   licensed) releases page - either a `.h5` file or a SavedModel directory.
+2. Gather a folder of ~100-500 representative sample images (a realistic
+   mix of SFW and NSFW content, ideally resembling actual screenshot
+   crops) for quantization calibration.
+3. `pip install tensorflow pillow numpy`, then:
+   ```bash
+   python tools/convert_nsfw_model.py \
+     --model /path/to/downloaded/model \
+     --representative-images /path/to/sample_images \
+     --output app/src/main/assets/nsfw.tflite
+   ```
+4. Rebuild (`git push` to trigger CI, or `./gradlew assembleDebug` locally)
+   and reinstall.
+5. **Calibrate before trusting it**: this model is a 5-class softmax
+   (drawings/hentai/neutral/porn/sexy), not a single NSFW score.
+   `TFLiteNsfwClassifier`'s `unsafeClassIndices` (default: hentai+porn+sexy)
+   decides what counts as "unsafe," and `nsfwThreshold` in the app's
+   settings decides how confident it needs to be. Test with your own
+   sample images spanning clearly-SFW, swimwear/underwear, explicit, and
+   hentai content before relying on the defaults - the "sexy" class
+   (index 4) in particular is a judgment call: it's included by default,
+   so swimwear/lingerie gets blocked too; drop it from
+   `DEFAULT_UNSAFE_CLASS_INDICES` in `TFLiteNsfwClassifier.kt` if you only
+   want explicit content (hentai+porn) blocked.
+
 ## ColorOS / OPPO Find X9 Pro notes
 
 See [`docs/COLOROS.md`](docs/COLOROS.md) for battery-optimization exemption,
