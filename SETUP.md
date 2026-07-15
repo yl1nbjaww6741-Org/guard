@@ -189,6 +189,26 @@ foreground, independent of events. The frame channel is CONFLATED and
 just exit at `GATE5_CAPTURE_THROTTLED_OR_FAILED` when a real event already
 triggered a capture recently.
 
+### Gates 6/7 now analyze the image region, not the whole screen
+
+Real-world testing found explicit Reddit feed thumbnails weren't blocking
+until the user opened the photo full-screen. Cause: gate 6's skin-tone
+check (and gate 7's classifier) ran on the *whole* downscaled screenshot -
+a feed thumbnail is a small fraction of a screen that's mostly text/white
+background/other posts, so its skin-tone ratio got diluted well under
+gate 6's 10% threshold. Only once the photo filled most of the screen
+(after tapping in) did the ratio rise enough to pass. `processFrame` now
+crops to the union of `NodeInspector`'s detected image bounds
+(`cropToImageRegion`) before running gates 6/7, so a thumbnail is judged
+on its own content rather than diluted by the rest of the page. Falls
+back to the full frame if there's nothing to crop to. Known remaining
+limitation: a feed with several separate thumbnails visible at once still
+unions across all of them, which dilutes less than the whole screen but
+isn't a perfect per-thumbnail crop - flag it if misses persist in that
+specific scenario (dense list/compact feed views), since a true
+per-region check would need running gates 6/7 once per detected image
+rather than once per frame.
+
 ### Block dismissal now goes back *and* home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss

@@ -1,6 +1,8 @@
 package com.contentguard.app.service
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Bitmap
+import android.graphics.Rect
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import androidx.core.content.ContextCompat
@@ -218,14 +220,15 @@ class ContentGuardService : AccessibilityService() {
         }
         prefs.recordScreenshot()
 
+        val analysisBitmap = cropToImageRegion(bitmap, scan.imageBounds)
         try {
-            if (!SkinTonePrefilter.looksSkinLike(bitmap)) {
+            if (!SkinTonePrefilter.looksSkinLike(analysisBitmap)) {
                 exitSafe(pkg, "GATE6_NO_SKIN_TONE")
                 return
             }
 
             val inferenceStartNanos = System.nanoTime()
-            val score = nsfwClassifier.scoreNsfw(bitmap)
+            val score = nsfwClassifier.scoreNsfw(analysisBitmap)
             prefs.recordInference((System.nanoTime() - inferenceStartNanos) / 1_000_000)
 
             if (score < prefs.nsfwThreshold) {
@@ -244,7 +247,42 @@ class ContentGuardService : AccessibilityService() {
             }
             withContext(Dispatchers.Main) { overlay.show(pkg) }
         } finally {
+            if (analysisBitmap !== bitmap) analysisBitmap.recycle()
             bitmap.recycle()
+        }
+    }
+
+    /**
+     * Gate 6/7 both used to analyze the whole downscaled screenshot, which
+     * dilutes a small feed thumbnail's skin-tone ratio against a mostly
+     * text/background frame (a Reddit feed card is a small fraction of the
+     * screen) - real explicit thumbnails were falling under gate 6's
+     * threshold and only passing once the user opened the photo full-screen,
+     * where it fills most of the frame. Crops to the union of detected image
+     * regions instead, so a thumbnail is judged on its own content. Falls
+     * back to the full frame if there's nothing to crop to or the bounds
+     * turn out degenerate.
+     */
+    private fun cropToImageRegion(bitmap: Bitmap, imageBounds: List<Rect>): Bitmap {
+        if (imageBounds.isEmpty()) return bitmap
+
+        val union = Rect(imageBounds[0])
+        for (i in 1 until imageBounds.size) union.union(imageBounds[i])
+
+        val displayMetrics = resources.displayMetrics
+        val scaleX = bitmap.width.toFloat() / displayMetrics.widthPixels
+        val scaleY = bitmap.height.toFloat() / displayMetrics.heightPixels
+
+        val left = (union.left * scaleX).toInt().coerceIn(0, bitmap.width - 1)
+        val top = (union.top * scaleY).toInt().coerceIn(0, bitmap.height - 1)
+        val right = (union.right * scaleX).toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = (union.bottom * scaleY).toInt().coerceIn(top + 1, bitmap.height)
+
+        return try {
+            Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        } catch (e: Exception) {
+            Log.w(TAG, "cropToImageRegion failed, using full frame", e)
+            bitmap
         }
     }
 
