@@ -30,18 +30,19 @@ enum class SiglipClass(val index: Int, val label: String) {
  *
  * Unlike a single sfw/nsfw score, this model's 5-class softmax (Anime
  * Picture, Enticing & Sensual, Hentai, Pornography, Safe for Work)
- * separates "sexy" (Enticing & Sensual) from actual explicit content -
- * [classPolicies] is a per-class probability threshold map deciding
- * which classes actually gate blocking. Only Pornography and Hentai
- * (real nudity/explicit content) gate blocking, at 0.45 each - lowered
- * from 0.6 for higher sensitivity to real explicit content. Enticing &
- * Sensual ("sexy" but not explicit) deliberately has no policy entry, so
- * it's logged on every inference (for visibility) but never blocks -
- * back to the original "only block real nudity" design after a period
- * of also blocking it. Safe for Work and Anime Picture are likewise
- * logged but never gate blocking. To block Enticing & Sensual again
- * later, just add its line back to DEFAULT_CLASS_POLICIES below (or pass
- * a different map to the constructor) - nothing else needs to change.
+ * doesn't have a separate "Nudity" class - [classPolicies] is a
+ * per-class probability threshold map deciding which classes actually
+ * gate blocking. All three of Pornography, Hentai, and Enticing &
+ * Sensual gate blocking, at 0.45 each. Enticing & Sensual was briefly
+ * removed on the theory that it only meant "sexy but not explicit," but
+ * real-world testing contradicted that: confirmed full-nudity content
+ * scored ~98-99% Enticing & Sensual and under 3% Pornography in the same
+ * frames, meaning this model's own taxonomy evidently classifies plain
+ * nudity under Enticing & Sensual and reserves Pornography for more
+ * explicit sexual acts specifically - so Enticing & Sensual is back, and
+ * is in fact the operative "real nudity" signal, not a separate "also
+ * block sexy content" add-on. Safe for Work and Anime Picture are
+ * logged on every inference (for visibility) but never gate blocking.
  *
  * scoreNsfw() returns max(classProb / classThreshold) across
  * [classPolicies] - a ratio >= 1.0 means some class's own threshold was
@@ -151,15 +152,14 @@ class SiglipNsfwClassifier(
     companion object {
         private const val TAG = "SiglipNsfwClassifier"
 
-        // Add an ENTICING_AND_SENSUAL line below to also block "sexy" (not
-        // explicit) content again. 0.45 (lowered from 0.6) for higher
-        // sensitivity to real nudity/pornography, per explicit request
-        // after testing showed the pipeline working correctly but wanting
-        // more sensitivity specifically to real explicit content, not
-        // Enticing & Sensual.
+        // Enticing & Sensual is the operative "real nudity" signal in this
+        // model's taxonomy, not a separate "sexy" add-on - see the class
+        // doc comment above. All three at 0.45 (lowered from 0.6/0.7) for
+        // higher sensitivity.
         val DEFAULT_CLASS_POLICIES: Map<SiglipClass, Float> = mapOf(
             SiglipClass.PORNOGRAPHY to 0.45f,
             SiglipClass.HENTAI to 0.45f,
+            SiglipClass.ENTICING_AND_SENSUAL to 0.45f,
         )
     }
 }

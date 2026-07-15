@@ -360,23 +360,23 @@ nudity." This went through 3 stages, all now complete:
    which still work as fallbacks if this model fails to load.
 
    Per-class thresholds decide what actually blocks -
-   `SiglipNsfwClassifier.DEFAULT_CLASS_POLICIES` currently blocks only
-   **Pornography and Hentai** (real nudity/explicit content, 0.45 each -
-   lowered from 0.6 for higher sensitivity to real explicit content, per
-   explicit request). Enticing & Sensual ("sexy" but not explicit)
-   deliberately has no policy entry - back to the original "only block
-   real nudity" design after a period (0.6-0.7) of also blocking it. Safe
-   for Work and Anime Picture are likewise logged on every inference
-   (`adb logcat -s SiglipNsfwClassifier`, tag `class=... prob=...`) but
-   never block. `scoreNsfw()` returns `max(classProb / classThreshold)`
-   across the configured classes - a ratio >= 1.0 means some class's own
-   threshold was met, which always trips the app's existing global
-   `nsfwThreshold` slider (it tops out at 1.0) regardless of where you've
-   set it; below 1.0 it scales with how close the closest configured class
-   got. To block Enticing & Sensual again later, just add its line back to
-   `DEFAULT_CLASS_POLICIES` - nothing else needs to change (no Settings UI
-   for this yet - the existing global slider is still the only threshold
-   exposed there).
+   `SiglipNsfwClassifier.DEFAULT_CLASS_POLICIES` blocks **Pornography,
+   Hentai, and Enticing & Sensual**, all at 0.45. Enticing & Sensual was
+   briefly removed on the theory that it only meant "sexy but not
+   explicit," but real-world testing contradicted that: confirmed
+   full-nudity content scored ~98-99% Enticing & Sensual and under 3%
+   Pornography in the same frames - this model's own taxonomy evidently
+   classifies plain nudity under Enticing & Sensual and reserves
+   Pornography for more explicit sexual acts specifically, so it's back
+   and is in fact the operative "real nudity" signal, not a separate
+   "also block sexy content" add-on. Safe for Work and Anime Picture are
+   logged on every inference (`adb logcat -s SiglipNsfwClassifier`, tag
+   `class=... prob=...`) but never block. `scoreNsfw()` returns
+   `max(classProb / classThreshold)` across the configured classes - a
+   ratio >= 1.0 means some class's own threshold was met, which always
+   trips the app's existing global `nsfwThreshold` slider (it tops out at
+   1.0) regardless of where you've set it; below 1.0 it scales with how
+   close the closest configured class got.
 
 ## ColorOS / OPPO Find X9 Pro notes
 
