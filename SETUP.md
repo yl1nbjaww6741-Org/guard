@@ -189,25 +189,35 @@ foreground, independent of events. The frame channel is CONFLATED and
 just exit at `GATE5_CAPTURE_THROTTLED_OR_FAILED` when a real event already
 triggered a capture recently.
 
-### Gates 6/7 now analyze the image region, not the whole screen
+### Gates 6/7 now analyze the image region, at native resolution
 
 Real-world testing found explicit Reddit feed thumbnails weren't blocking
-until the user opened the photo full-screen. Cause: gate 6's skin-tone
-check (and gate 7's classifier) ran on the *whole* downscaled screenshot -
-a feed thumbnail is a small fraction of a screen that's mostly text/white
-background/other posts, so its skin-tone ratio got diluted well under
-gate 6's 10% threshold. Only once the photo filled most of the screen
-(after tapping in) did the ratio rise enough to pass. `processFrame` now
-crops to the union of `NodeInspector`'s detected image bounds
-(`cropToImageRegion`) before running gates 6/7, so a thumbnail is judged
-on its own content rather than diluted by the rest of the page. Falls
-back to the full frame if there's nothing to crop to. Known remaining
-limitation: a feed with several separate thumbnails visible at once still
-unions across all of them, which dilutes less than the whole screen but
-isn't a perfect per-thumbnail crop - flag it if misses persist in that
-specific scenario (dense list/compact feed views), since a true
-per-region check would need running gates 6/7 once per detected image
-rather than once per frame.
+until the user opened the photo full-screen (or zoomed in). Two compounding
+causes, found in two passes:
+
+1. Gate 6's skin-tone check (and gate 7's classifier) ran on the *whole*
+   screenshot - a feed thumbnail is a small fraction of a screen that's
+   mostly text/white background/other posts, so its skin-tone ratio got
+   diluted well under gate 6's 10% threshold.
+2. Even after cropping to the detected image region, thumbnails still
+   weren't reliably blocking - because that first crop happened *after*
+   `ScreenCapturer` had already downscaled the whole frame to 640px. A
+   small region cropped out of an already-downscaled frame is
+   low-resolution twice over, which is exactly why zooming in (capturing
+   the same content at genuinely higher native resolution) worked while
+   standing still on the feed didn't.
+
+Fixed by cropping at capture time instead: `ScreenCapturer.captureDownscaled()`
+now takes an optional `cropRegion` (real screen pixel coordinates, same
+space as `AccessibilityNodeInfo` bounds) applied to the *native-resolution*
+screenshot before any downscaling, so a small region stays near its real
+resolution instead of being squeezed through a low-res intermediate step.
+`processFrame` passes the union of `NodeInspector`'s detected image bounds
+as that crop region. Falls back to the full frame if there's nothing to
+crop to. Known remaining limitation: a feed with several separate
+thumbnails visible at once still unions across all of them rather than
+checking each individually - flag it if misses persist in dense
+list/compact feed views specifically.
 
 ### Block dismissal now goes back *and* home
 
