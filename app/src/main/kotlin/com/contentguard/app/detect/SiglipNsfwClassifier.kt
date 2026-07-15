@@ -32,15 +32,15 @@ enum class SiglipClass(val index: Int, val label: String) {
  * Picture, Enticing & Sensual, Hentai, Pornography, Safe for Work)
  * separates "sexy" (Enticing & Sensual) from actual explicit content -
  * [classPolicies] is a per-class probability threshold map deciding
- * which classes actually gate blocking. Currently blocking all three of
- * Pornography, Hentai, and Enticing & Sensual (0.6 each - lowered from
- * 0.7 after real-world testing found genuine Enticing & Sensual content
- * scoring 0.65, just under the old threshold, until the user zoomed in
- * for a clearer view) - Safe for Work
- * and Anime Picture are logged on every inference (for visibility while
- * tuning) but never contribute to the returned score. This is a
- * temporary, easily-reversed choice: to stop blocking Enticing & Sensual
- * later, just delete its line from DEFAULT_CLASS_POLICIES below (or pass
+ * which classes actually gate blocking. Only Pornography and Hentai
+ * (real nudity/explicit content) gate blocking, at 0.45 each - lowered
+ * from 0.6 for higher sensitivity to real explicit content. Enticing &
+ * Sensual ("sexy" but not explicit) deliberately has no policy entry, so
+ * it's logged on every inference (for visibility) but never blocks -
+ * back to the original "only block real nudity" design after a period
+ * of also blocking it. Safe for Work and Anime Picture are likewise
+ * logged but never gate blocking. To block Enticing & Sensual again
+ * later, just add its line back to DEFAULT_CLASS_POLICIES below (or pass
  * a different map to the constructor) - nothing else needs to change.
  *
  * scoreNsfw() returns max(classProb / classThreshold) across
@@ -151,15 +151,15 @@ class SiglipNsfwClassifier(
     companion object {
         private const val TAG = "SiglipNsfwClassifier"
 
-        // Delete the ENTICING_AND_SENSUAL line below to stop blocking
-        // "sexy" content and only block actual explicit content again.
-        // Lowered 0.7 -> 0.6 after real-world testing on Reddit found a
-        // genuine Enticing & Sensual photo scoring 0.65 - just under the
-        // old threshold - until the user zoomed in on it.
+        // Add an ENTICING_AND_SENSUAL line below to also block "sexy" (not
+        // explicit) content again. 0.45 (lowered from 0.6) for higher
+        // sensitivity to real nudity/pornography, per explicit request
+        // after testing showed the pipeline working correctly but wanting
+        // more sensitivity specifically to real explicit content, not
+        // Enticing & Sensual.
         val DEFAULT_CLASS_POLICIES: Map<SiglipClass, Float> = mapOf(
-            SiglipClass.PORNOGRAPHY to 0.6f,
-            SiglipClass.HENTAI to 0.6f,
-            SiglipClass.ENTICING_AND_SENSUAL to 0.6f,
+            SiglipClass.PORNOGRAPHY to 0.45f,
+            SiglipClass.HENTAI to 0.45f,
         )
     }
 }
