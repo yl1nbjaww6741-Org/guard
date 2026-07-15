@@ -163,6 +163,20 @@ The Settings screen has an "App password" card. Once set, it gates:
 No password set means both are open exactly as before - this is opt-in.
 Stored as a salted SHA-256 hash in `PrefsRepository`, never the raw text.
 
+### Gate 3 (image detection) also catches Compose-rendered content
+
+`NodeInspector` originally only flagged a node as "image-like" by className
+substring match (`ImageView`, `WebView`, `SurfaceView`, `TextureView`,
+`VideoView`). Real-world testing found this missed actual explicit content
+on Reddit's app, which is largely built with Jetpack Compose - Compose
+doesn't expose those classic View class names in its accessibility tree at
+all, so the whole cascade was exiting at `GATE3_NO_IMAGE_NODES` before ever
+taking a screenshot. Gate 3 now also flags any large, childless, textless
+node as image-like regardless of class name, which catches Compose-rendered
+images/media generically. This trades a few extra screenshots on plain
+screens (gates 6/7 still filter those out as safe) for not silently missing
+real content - the right side to err on for what this app is for.
+
 ### Block dismissal now goes back *and* home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss

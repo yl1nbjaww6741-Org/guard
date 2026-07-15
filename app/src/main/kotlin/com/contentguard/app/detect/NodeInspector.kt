@@ -31,7 +31,17 @@ object NodeInspector {
             visited++
 
             val className = node.className?.toString().orEmpty()
-            if (IMAGE_CLASS_HINTS.any { className.contains(it) }) {
+            val hasText = !node.text.isNullOrBlank()
+            // Compose-rendered images (Reddit's app, among many others) don't
+            // expose classic View class names at all, so a className-only
+            // check misses them entirely - a large leaf node with no text is
+            // very likely an image/media surface regardless of framework.
+            // False positives here just cost an extra screenshot; false
+            // negatives mean real content silently never gets scored, which
+            // is the far worse failure mode for what this app is for.
+            val looksLikeImage = IMAGE_CLASS_HINTS.any { className.contains(it) } ||
+                (node.childCount == 0 && !hasText)
+            if (looksLikeImage) {
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
                 if (rect.width() >= MIN_NODE_SIZE_PX && rect.height() >= MIN_NODE_SIZE_PX) {
