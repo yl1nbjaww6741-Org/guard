@@ -2,11 +2,21 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Lets us enumerate launchable apps for the whitelist editor without
-         the QUERY_ALL_PACKAGES special permission. -->
+         the QUERY_ALL_PACKAGES special permission. CATEGORY_HOME is
+         separate from CATEGORY_LAUNCHER - the home/launcher app itself
+         registers under HOME, not LAUNCHER, so without this declared here
+         too, Android 11+ package visibility rules silently filter it out
+         of queryIntentActivities() results even though the app icon list
+         works fine - meaning the launcher app itself couldn't be found or
+         whitelisted from the Apps list. -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
         </intent>
     </queries>
 

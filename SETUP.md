@@ -261,6 +261,21 @@ service's own `windows` list and ignores window-state-change events from
 non-application windows entirely, so they can no longer overwrite what
 the cascade thinks is foreground.
 
+### The launcher app is now visible in the Apps list
+
+The Apps list in Settings was built from `queryIntentActivities()` against
+`ACTION_MAIN` + `CATEGORY_LAUNCHER` - the intent apps register to show up
+in the app drawer. The home/launcher app itself doesn't have its own
+app-drawer icon; it registers under `CATEGORY_HOME` instead, so it never
+appeared in the list at all - meaning it couldn't be found or whitelisted,
+even though it was still being monitored/screenshotted like any other app
+under "Monitor all except whitelisted" (confirmed via real logs showing
+`com.android.launcher` reaching gates 6/7 repeatedly). `loadLaunchableApps()`
+now also queries `CATEGORY_HOME` and merges the results (deduped by
+package name); `AndroidManifest.xml`'s `<queries>` block had to declare
+that intent too, or Android 11+ package visibility rules would silently
+filter it back out even with the code change.
+
 ### Block dismissal now goes back *and* home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss

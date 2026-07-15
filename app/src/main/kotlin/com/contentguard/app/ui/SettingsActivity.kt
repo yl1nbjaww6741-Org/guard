@@ -706,8 +706,15 @@ private fun requestIgnoreBatteryOptimizations(context: Context) {
 @Suppress("DEPRECATION")
 private fun loadLaunchableApps(context: Context): List<AppEntry> {
     val pm = context.packageManager
-    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-    return pm.queryIntentActivities(intent, 0)
+    // CATEGORY_HOME on top of CATEGORY_LAUNCHER: the home/launcher app
+    // itself registers under HOME, not LAUNCHER (it doesn't have its own
+    // app-drawer icon the way regular apps do), so without this it never
+    // showed up in this list at all - meaning it couldn't be found or
+    // whitelisted, even though it was still being monitored/screenshotted
+    // like any other app under "Monitor all except whitelisted".
+    val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+    return (pm.queryIntentActivities(launcherIntent, 0) + pm.queryIntentActivities(homeIntent, 0))
         .distinctBy { it.activityInfo.packageName }
         .filter { it.activityInfo.packageName != context.packageName }
         .map { info ->
