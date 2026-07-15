@@ -188,11 +188,26 @@ class ContentGuardService : AccessibilityService() {
      * own throttle mean redundant ticks are cheap - they just exit at
      * GATE5_CAPTURE_THROTTLED_OR_FAILED when a real event already
      * triggered a capture recently.
+     *
+     * Deliberately queries rootInActiveWindow fresh on every tick instead
+     * of reusing lastForegroundPackage - that field is only as reliable as
+     * the event stream driving it, and real testing found brief,
+     * legitimate-looking TYPE_APPLICATION window events for other packages
+     * (the IME opening/closing; a partial gesture-nav swipe briefly
+     * showing the launcher behind the current app) hijacking it for
+     * seconds at a time, during which this recheck kept re-querying the
+     * wrong app entirely while real content sat unscanned underneath.
+     * Asking the OS what's actually active right now sidesteps that whole
+     * class of bug rather than trying to enumerate every spurious source.
      */
     private suspend fun recheckStaticContent() {
         while (serviceScope.isActive) {
             delay(STATIC_RECHECK_INTERVAL_MS)
-            val pkg = lastForegroundPackage ?: continue
+            val root = rootInActiveWindow
+            val pkg = root?.packageName?.toString()
+            @Suppress("DEPRECATION")
+            root?.recycle()
+            if (pkg == null) continue
             if (onGuardedSettingsScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) continue
             frameChannel.trySend(FrameRequest(pkg))
         }

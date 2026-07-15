@@ -276,6 +276,20 @@ package name); `AndroidManifest.xml`'s `<queries>` block had to declare
 that intent too, or Android 11+ package visibility rules would silently
 filter it back out even with the code change.
 
+### Static-content recheck now queries live state, not a cached variable
+
+A second, related instance of the IME hijacking bug: this time
+`com.android.launcher` itself hijacked `lastForegroundPackage` for 4+
+seconds while the user was still looking at a static Reddit photo - likely
+a partial gesture-navigation swipe briefly showing the home screen behind
+the current app. The launcher's window is a genuine `TYPE_APPLICATION`
+window, so the earlier IME-specific fix (checking window type) didn't
+catch this. Rather than special-case every possible spurious source,
+`recheckStaticContent()` now queries `rootInActiveWindow` fresh on every
+2s tick instead of trusting the event-driven `lastForegroundPackage`
+field - asking the OS what's actually active right now sidesteps this
+whole class of bug rather than enumerating causes one at a time.
+
 ### Block dismissal now goes back *and* home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss
