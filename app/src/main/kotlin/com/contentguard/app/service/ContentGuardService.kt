@@ -19,6 +19,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -77,6 +79,7 @@ class ContentGuardService : AccessibilityService() {
         )
 
         serviceScope.launch { consumeFrames() }
+        serviceScope.launch { recheckStaticContent() }
         Log.i(TAG, "connected: mode=${prefs.mode} threshold=${prefs.nsfwThreshold}")
     }
 
@@ -157,6 +160,27 @@ class ContentGuardService : AccessibilityService() {
             } catch (e: Exception) {
                 Log.e(TAG, "cascade error for ${request.packageName}", e)
             }
+        }
+    }
+
+    /**
+     * The cascade is otherwise purely event-driven - it only runs when an
+     * AccessibilityEvent fires (scroll, content change, app switch). A user
+     * static on an already-rendered image generates no further events at
+     * all, so real content could sit on screen indefinitely without ever
+     * being re-scanned. This periodically re-queues a frame for whatever
+     * app is currently foreground, independent of events, so dwelling on
+     * static content still gets caught. CONFLATED channel + ScreenCapturer's
+     * own throttle mean redundant ticks are cheap - they just exit at
+     * GATE5_CAPTURE_THROTTLED_OR_FAILED when a real event already
+     * triggered a capture recently.
+     */
+    private suspend fun recheckStaticContent() {
+        while (serviceScope.isActive) {
+            delay(STATIC_RECHECK_INTERVAL_MS)
+            val pkg = lastForegroundPackage ?: continue
+            if (onGuardedSettingsScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) continue
+            frameChannel.trySend(FrameRequest(pkg))
         }
     }
 
@@ -266,5 +290,9 @@ class ContentGuardService : AccessibilityService() {
         // Matched against the window's own title, not screen content - see
         // the comment at the call site.
         private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "accessibility")
+
+        // Just above ScreenCapturer's own 1500ms throttle floor, so this
+        // rarely fires more often than a real capture could happen anyway.
+        private const val STATIC_RECHECK_INTERVAL_MS = 2000L
     }
 }

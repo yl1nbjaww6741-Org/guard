@@ -177,6 +177,18 @@ images/media generically. This trades a few extra screenshots on plain
 screens (gates 6/7 still filter those out as safe) for not silently missing
 real content - the right side to err on for what this app is for.
 
+### Static content now gets caught, not just events
+
+The cascade only ran when an `AccessibilityEvent` fired (scroll, content
+change, app switch) - a user static on an already-rendered image generated
+no further events at all, so real content could sit on screen indefinitely
+without ever being re-scanned. `ContentGuardService.recheckStaticContent()`
+now periodically (every 2s) re-queues a frame for whatever app is currently
+foreground, independent of events. The frame channel is CONFLATED and
+`ScreenCapturer` has its own throttle, so redundant ticks are cheap - they
+just exit at `GATE5_CAPTURE_THROTTLED_OR_FAILED` when a real event already
+triggered a capture recently.
+
 ### Block dismissal now goes back *and* home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss
