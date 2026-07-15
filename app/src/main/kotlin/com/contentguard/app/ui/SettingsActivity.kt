@@ -117,6 +117,7 @@ private fun SettingsScreen(prefs: PrefsRepository) {
     var deviceAdminActive by remember { mutableStateOf(isDeviceAdminActive(context)) }
     var usageStats by remember { mutableStateOf(prefs.getUsageStats()) }
     var lockoutDurationMinutes by remember { mutableStateOf(prefs.lockoutDurationMinutes) }
+    var strikesToLockout by remember { mutableStateOf(prefs.strikesToLockout) }
     var activeLockouts by remember { mutableStateOf(prefs.getActiveLockouts()) }
     var hasPassword by remember { mutableStateOf(prefs.hasPassword()) }
     var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
@@ -223,6 +224,9 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                     durationMinutes = lockoutDurationMinutes,
                     onDurationChange = { lockoutDurationMinutes = it },
                     onDurationChangeFinished = { prefs.lockoutDurationMinutes = lockoutDurationMinutes },
+                    strikesToLockout = strikesToLockout,
+                    onStrikesChange = { strikesToLockout = it },
+                    onStrikesChangeFinished = { prefs.strikesToLockout = strikesToLockout },
                     activeLockouts = activeLockouts,
                     onRefresh = { activeLockouts = prefs.getActiveLockouts() },
                 )
@@ -408,17 +412,30 @@ private fun LockoutSection(
     durationMinutes: Int,
     onDurationChange: (Int) -> Unit,
     onDurationChangeFinished: () -> Unit,
+    strikesToLockout: Int,
+    onStrikesChange: (Int) -> Unit,
+    onStrikesChangeFinished: () -> Unit,
     activeLockouts: Map<String, Long>,
     onRefresh: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("3-strikes lockout", style = MaterialTheme.typography.titleMedium)
+            Text("$strikesToLockout-strikes lockout", style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "3 explicit-content blocks for the same app within 15 minutes locks just " +
-                    "that app for the duration below - switching back into it re-shows the block.",
+                "$strikesToLockout explicit-content blocks for the same app within 15 minutes " +
+                    "locks just that app for the duration below - switching back into it " +
+                    "re-shows the block.",
                 style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text("Strikes before lockout: $strikesToLockout")
+            Slider(
+                value = strikesToLockout.toFloat(),
+                onValueChange = { onStrikesChange(it.toInt()) },
+                onValueChangeFinished = onStrikesChangeFinished,
+                valueRange = 1f..20f,
+                steps = 18,
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text("Lockout duration: $durationMinutes min")

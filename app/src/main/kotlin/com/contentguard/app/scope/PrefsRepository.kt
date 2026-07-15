@@ -110,12 +110,21 @@ class PrefsRepository(context: Context) {
             prefs.edit().putInt(KEY_LOCKOUT_DURATION_MIN, value.coerceIn(1, 60)).apply()
         }
 
+    // Adjustable so testing doesn't keep tripping a real lockout after a
+    // couple of blocks - raise it for a longer test session, not a
+    // permanent behavior change.
+    var strikesToLockout: Int
+        get() = prefs.getInt(KEY_STRIKES_TO_LOCKOUT, DEFAULT_STRIKES_TO_LOCKOUT)
+        set(value) {
+            prefs.edit().putInt(KEY_STRIKES_TO_LOCKOUT, value.coerceIn(1, 20)).apply()
+        }
+
     /**
-     * Records an explicit-content detection for [packageName] and, once 3
-     * such strikes land within a rolling 15-minute window, locks that
-     * single app out for [lockoutDurationMinutes]. Returns true exactly
-     * when this call was the one that triggered the lockout, so the
-     * caller can log it distinctly from an ordinary strike.
+     * Records an explicit-content detection for [packageName] and, once
+     * [strikesToLockout] such strikes land within a rolling 15-minute
+     * window, locks that single app out for [lockoutDurationMinutes].
+     * Returns true exactly when this call was the one that triggered the
+     * lockout, so the caller can log it distinctly from an ordinary strike.
      */
     fun recordExplicitStrike(packageName: String): Boolean {
         val now = System.currentTimeMillis()
@@ -126,7 +135,7 @@ class PrefsRepository(context: Context) {
             .toMutableList()
         recentStrikes.add(now)
 
-        if (recentStrikes.size >= STRIKES_TO_LOCKOUT) {
+        if (recentStrikes.size >= strikesToLockout) {
             prefs.edit()
                 .remove(key)
                 .putLong(lockoutKey(packageName), now + lockoutDurationMinutes * 60_000L)
@@ -192,13 +201,14 @@ class PrefsRepository(context: Context) {
         private const val KEY_BLOCK_COUNT = "stats_block_count"
         private const val KEY_STATS_SINCE = "stats_since_millis"
         private const val KEY_LOCKOUT_DURATION_MIN = "lockout_duration_min"
+        private const val KEY_STRIKES_TO_LOCKOUT = "strikes_to_lockout"
         private const val KEY_STRIKES_PREFIX = "strike_times_"
         private const val KEY_LOCKOUT_PREFIX = "lockout_until_"
         private const val KEY_PASSWORD_HASH = "password_hash"
         private const val PASSWORD_SALT = "contentguard-v1-"
         const val DEFAULT_THRESHOLD = 0.80f
         const val DEFAULT_LOCKOUT_MINUTES = 1
-        private const val STRIKES_TO_LOCKOUT = 3
+        const val DEFAULT_STRIKES_TO_LOCKOUT = 3
         private const val STRIKE_WINDOW_MS = 15 * 60 * 1000L
     }
 }
