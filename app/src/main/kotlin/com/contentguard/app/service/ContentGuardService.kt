@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.graphics.Rect
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.core.content.ContextCompat
 import com.contentguard.app.capture.ScreenCapturer
 import com.contentguard.app.detect.NodeInspector
@@ -86,6 +87,18 @@ class ContentGuardService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val packageName = event.packageName?.toString() ?: return
+
+        // The on-screen keyboard opening/closing fires its own
+        // TYPE_WINDOW_STATE_CHANGED with its own package - not a real app
+        // switch. Without this check, that event set lastForegroundPackage
+        // to the IME's package, and the periodic static-content recheck
+        // then spent seconds re-querying the keyboard instead of whatever
+        // app (and image) was actually still on screen underneath it. Real
+        // app activities report as TYPE_APPLICATION; IME/system/overlay
+        // windows don't.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && !isApplicationWindow(event.windowId)) {
+            return
+        }
 
         val isRealAppSwitch = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             packageName != lastForegroundPackage &&
@@ -257,6 +270,12 @@ class ContentGuardService : AccessibilityService() {
         } finally {
             bitmap.recycle()
         }
+    }
+
+    /** Fails open (true) if the window can't be found - matches prior behavior for that case. */
+    private fun isApplicationWindow(windowId: Int): Boolean {
+        val window = windows.firstOrNull { it.id == windowId } ?: return true
+        return window.type == AccessibilityWindowInfo.TYPE_APPLICATION
     }
 
     private fun unionOf(rects: List<Rect>): Rect? {

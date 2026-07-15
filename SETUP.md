@@ -242,6 +242,25 @@ enough to produce real `imageBounds`, capture falls back to the whole
 frame rather than skipping entirely - a real capture without an optimal
 crop beats no capture at all.
 
+### Keyboard opening/closing was hijacking the "foreground app" tracker
+
+Real-world testing found a user could sit on a static explicit image
+indefinitely with no block, then have it block instantly on the slightest
+interaction. Cause: the on-screen keyboard (IME) fires its own
+`TYPE_WINDOW_STATE_CHANGED` event with its own package
+(`com.google.android.inputmethod.latin`) whenever it opens or closes.
+`onAccessibilityEvent` treated any window-state-change to a different
+package as a real app switch, so this event overwrote
+`lastForegroundPackage` with the keyboard's package - meaning the periodic
+static-content recheck (see above) then spent seconds re-querying the
+*keyboard* instead of whatever app and image were actually still on
+screen underneath it. Real app activities report as
+`AccessibilityWindowInfo.TYPE_APPLICATION`; the IME (and other system/
+overlay windows) don't - `onAccessibilityEvent` now checks this via the
+service's own `windows` list and ignores window-state-change events from
+non-application windows entirely, so they can no longer overwrite what
+the cascade thinks is foreground.
+
 ### Block dismissal now goes back *and* home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss
