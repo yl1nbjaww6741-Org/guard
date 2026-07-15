@@ -154,12 +154,16 @@ class SiglipNsfwClassifier(
 
         // Enticing & Sensual is the operative "real nudity" signal in this
         // model's taxonomy, not a separate "sexy" add-on - see the class
-        // doc comment above. All three at 0.45 (lowered from 0.6/0.7) for
-        // higher sensitivity.
+        // doc comment above. Set to 0.6, above where everyday non-explicit
+        // content has peaked (~0.50 in real testing) but below every
+        // confirmed-nudity score seen (0.65+), for margin against false
+        // positives on borderline/suggestive-but-not-nude content.
+        // Pornography/Hentai stay at 0.45 (higher sensitivity - these
+        // classes haven't shown the same false-positive risk).
         val DEFAULT_CLASS_POLICIES: Map<SiglipClass, Float> = mapOf(
             SiglipClass.PORNOGRAPHY to 0.45f,
             SiglipClass.HENTAI to 0.45f,
-            SiglipClass.ENTICING_AND_SENSUAL to 0.45f,
+            SiglipClass.ENTICING_AND_SENSUAL to 0.6f,
         )
     }
 }
