@@ -2,6 +2,7 @@ package com.contentguard.app.scope
 
 import android.content.Context
 import android.content.SharedPreferences
+import java.security.MessageDigest
 
 /**
  * SharedPreferences on purpose, not DataStore: after the first (async,
@@ -155,6 +156,29 @@ class PrefsRepository(context: Context) {
     private fun strikeKey(packageName: String) = "$KEY_STRIKES_PREFIX$packageName"
     private fun lockoutKey(packageName: String) = "$KEY_LOCKOUT_PREFIX$packageName"
 
+    /**
+     * Gates ContentGuard's own Settings screen and (see ContentGuardService)
+     * the system "Device admin apps" screen - without the latter, deactivating
+     * device admin would undo the force-stop/uninstall protection with zero
+     * friction. Stored as a salted SHA-256 hash, never the raw password.
+     */
+    fun hasPassword(): Boolean = prefs.contains(KEY_PASSWORD_HASH)
+
+    fun setPassword(raw: String) {
+        prefs.edit().putString(KEY_PASSWORD_HASH, hash(raw)).apply()
+    }
+
+    fun verifyPassword(raw: String): Boolean {
+        val stored = prefs.getString(KEY_PASSWORD_HASH, null) ?: return false
+        return stored == hash(raw)
+    }
+
+    private fun hash(raw: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val bytes = digest.digest((PASSWORD_SALT + raw).toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
     companion object {
         private const val PREFS_NAME = "content_guard_prefs"
         private const val KEY_MODE = "scope_mode"
@@ -170,6 +194,8 @@ class PrefsRepository(context: Context) {
         private const val KEY_LOCKOUT_DURATION_MIN = "lockout_duration_min"
         private const val KEY_STRIKES_PREFIX = "strike_times_"
         private const val KEY_LOCKOUT_PREFIX = "lockout_until_"
+        private const val KEY_PASSWORD_HASH = "password_hash"
+        private const val PASSWORD_SALT = "contentguard-v1-"
         const val DEFAULT_THRESHOLD = 0.80f
         const val DEFAULT_LOCKOUT_MINUTES = 1
         private const val STRIKES_TO_LOCKOUT = 3

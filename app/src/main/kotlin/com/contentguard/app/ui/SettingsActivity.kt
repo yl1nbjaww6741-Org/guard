@@ -38,6 +38,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -60,6 +61,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
@@ -94,6 +96,16 @@ private data class AppEntry(val packageName: String, val label: String, val icon
 
 @Composable
 private fun SettingsScreen(prefs: PrefsRepository) {
+    var unlocked by remember { mutableStateOf(!prefs.hasPassword()) }
+    if (!unlocked) {
+        PasswordUnlockScreen(onUnlock = { entered ->
+            val ok = prefs.verifyPassword(entered)
+            if (ok) unlocked = true
+            ok
+        })
+        return
+    }
+
     val context = LocalContext.current
 
     var mode by remember { mutableStateOf(prefs.mode) }
@@ -106,6 +118,7 @@ private fun SettingsScreen(prefs: PrefsRepository) {
     var usageStats by remember { mutableStateOf(prefs.getUsageStats()) }
     var lockoutDurationMinutes by remember { mutableStateOf(prefs.lockoutDurationMinutes) }
     var activeLockouts by remember { mutableStateOf(prefs.getActiveLockouts()) }
+    var hasPassword by remember { mutableStateOf(prefs.hasPassword()) }
     var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
 
     // Re-check accessibility-enabled/device-admin state and refresh usage
@@ -180,6 +193,16 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                         deviceAdminLauncher.launch(intent)
                     },
                     onOpenSecuritySettings = { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) },
+                )
+            }
+
+            item {
+                PasswordSection(
+                    hasPassword = hasPassword,
+                    onSetPassword = { newPassword ->
+                        prefs.setPassword(newPassword)
+                        hasPassword = true
+                    },
                 )
             }
 
@@ -424,6 +447,97 @@ private fun LockoutSection(
                     Text("$pkg - ${remainingSec}s left", style = MaterialTheme.typography.bodySmall)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PasswordUnlockScreen(onUnlock: (String) -> Boolean) {
+    var input by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("Enter password", style = MaterialTheme.typography.titleLarge)
+        Spacer(modifier = Modifier.height(16.dp))
+        OutlinedTextField(
+            value = input,
+            onValueChange = { input = it; error = false },
+            label = { Text("Password") },
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (error) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("Incorrect password", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = { if (!onUnlock(input)) error = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("Unlock")
+        }
+    }
+}
+
+@Composable
+private fun PasswordSection(hasPassword: Boolean, onSetPassword: (String) -> Unit) {
+    var newPassword by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var saved by remember { mutableStateOf(false) }
+    var mismatch by remember { mutableStateOf(false) }
+
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = if (hasPassword) "App password is set" else "App password is not set",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Required to open this Settings screen and to reach the Device admin apps " +
+                    "screen in system Settings - without it, either could be used to undo " +
+                    "ContentGuard's protections.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = newPassword,
+                onValueChange = { newPassword = it; saved = false; mismatch = false },
+                label = { Text(if (hasPassword) "New password" else "Set password") },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = confirmPassword,
+                onValueChange = { confirmPassword = it; saved = false; mismatch = false },
+                label = { Text("Confirm") },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (mismatch) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Passwords don't match", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            if (saved) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Saved", style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(onClick = {
+                if (newPassword.isNotEmpty() && newPassword == confirmPassword) {
+                    onSetPassword(newPassword)
+                    newPassword = ""
+                    confirmPassword = ""
+                    saved = true
+                } else {
+                    mismatch = true
+                }
+            }) { Text("Save Password") }
         }
     }
 }

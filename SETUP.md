@@ -138,6 +138,34 @@ into the app re-shows the fake-crash block immediately rather than
 waiting for a fresh detection. Strikes and lockout state are tracked
 per-package in `PrefsRepository` (`recordExplicitStrike`/`isLockedOut`).
 
+### App password + Device Admin screen guard
+
+The Settings screen has an "App password" card. Once set, it gates two
+things:
+
+1. **ContentGuard's own Settings screen** - reopening it prompts for the
+   password before showing anything (`SettingsActivity`'s `PasswordUnlockScreen`).
+2. **The system "Device admin apps" screen** - `ContentGuardService`
+   watches for `com.android.settings` foreground events, does a
+   lightweight text scan (`NodeInspector`) for "device admin", and if
+   matched, shows a full-screen password prompt (`PasswordGuardOverlayController`)
+   before the real screen becomes usable - wrong password or cancel
+   performs `GLOBAL_ACTION_HOME`. Without this, deactivating device admin
+   from system Settings would undo the force-stop/uninstall protection
+   with zero friction. The unlock persists until you leave the Settings
+   app entirely, not per-screen.
+
+No password set means both are open exactly as before - this is opt-in.
+Stored as a salted SHA-256 hash in `PrefsRepository`, never the raw text.
+
+### Block dismissal now goes back *and* home
+
+Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss
+on block" is on) now performs `GLOBAL_ACTION_BACK` followed by
+`GLOBAL_ACTION_HOME`, not just back - back alone could still leave you
+inside the same app on a different screen; home guarantees you land on
+the home screen instead.
+
 ### Watching the cascade
 
 ```bash

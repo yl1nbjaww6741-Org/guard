@@ -6,4 +6,8 @@
     <string name="fake_crash_ok">OK</string>
     <string name="device_admin_description">Prevents ContentGuard from being force-stopped or uninstalled without first turning this off here in Settings.</string>
     <string name="device_admin_disable_warning">Turning this off will let ContentGuard be force-stopped or uninstalled without coming back here first. Are you sure?</string>
+    <string name="password_guard_title">Enter password to continue</string>
+    <string name="password_guard_wrong">Incorrect password</string>
+    <string name="password_guard_unlock">Unlock</string>
+    <string name="password_guard_cancel">Cancel</string>
 </resources>

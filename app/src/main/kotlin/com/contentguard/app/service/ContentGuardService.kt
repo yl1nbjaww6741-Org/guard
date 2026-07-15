@@ -10,6 +10,7 @@ import com.contentguard.app.detect.NsfwClassifier
 import com.contentguard.app.detect.NsfwClassifierFactory
 import com.contentguard.app.detect.SkinTonePrefilter
 import com.contentguard.app.overlay.BlurOverlayController
+import com.contentguard.app.overlay.PasswordGuardOverlayController
 import com.contentguard.app.scope.AppScopePolicy
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.util.DebugLogBuffer
@@ -37,11 +38,13 @@ class ContentGuardService : AccessibilityService() {
     private lateinit var screenCapturer: ScreenCapturer
     private lateinit var nsfwClassifier: NsfwClassifier
     private lateinit var overlay: BlurOverlayController
+    private lateinit var passwordGuardOverlay: PasswordGuardOverlayController
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val frameChannel = Channel<FrameRequest>(Channel.CONFLATED)
 
     private var lastForegroundPackage: String? = null
+    private var deviceAdminScreenUnlocked = false
 
     private data class FrameRequest(val packageName: String)
 
@@ -54,8 +57,22 @@ class ContentGuardService : AccessibilityService() {
         nsfwClassifier = NsfwClassifierFactory.create(applicationContext)
         overlay = BlurOverlayController(
             service = this,
-            onBackKeyPressed = { if (prefs.dismissOnBlock) performGlobalAction(GLOBAL_ACTION_BACK) },
-            onOkTapped = { performGlobalAction(GLOBAL_ACTION_BACK) },
+            onBackKeyPressed = {
+                if (prefs.dismissOnBlock) {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    performGlobalAction(GLOBAL_ACTION_HOME)
+                }
+            },
+            onOkTapped = {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            },
+        )
+        passwordGuardOverlay = PasswordGuardOverlayController(
+            service = this,
+            onVerify = { entered -> prefs.verifyPassword(entered) },
+            onUnlocked = { deviceAdminScreenUnlocked = true },
+            onCancelled = { performGlobalAction(GLOBAL_ACTION_HOME) },
         )
 
         serviceScope.launch { consumeFrames() }
@@ -71,9 +88,22 @@ class ContentGuardService : AccessibilityService() {
 
         if (isRealAppSwitch) {
             lastForegroundPackage = packageName
+            if (packageName != SETTINGS_PACKAGE) deviceAdminScreenUnlocked = false
             if (overlay.isVisible() && !prefs.isLockedOut(packageName)) {
                 serviceScope.launch(Dispatchers.Main) { overlay.hide() }
             }
+        }
+
+        if (packageName == SETTINGS_PACKAGE && prefs.hasPassword() && !deviceAdminScreenUnlocked &&
+            looksLikeDeviceAdminScreen(currentScreenText())
+        ) {
+            if (!passwordGuardOverlay.isVisible()) {
+                val line = "[$packageName] exit@GATE_DEVICE_ADMIN_GUARD"
+                Log.i(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+                serviceScope.launch(Dispatchers.Main) { passwordGuardOverlay.show() }
+            }
+            return
         }
 
         if (prefs.isLockedOut(packageName)) {
@@ -199,6 +229,22 @@ class ContentGuardService : AccessibilityService() {
         DebugLogBuffer.add(TAG, line)
     }
 
+    /** Synchronous, called directly from onAccessibilityEvent - this must react before the user can interact with the screen, not queue through the cascade. */
+    private fun currentScreenText(): String {
+        val root = rootInActiveWindow ?: return ""
+        return try {
+            NodeInspector.scan(root).visibleText
+        } finally {
+            @Suppress("DEPRECATION")
+            root.recycle()
+        }
+    }
+
+    private fun looksLikeDeviceAdminScreen(screenText: String): Boolean {
+        val lower = screenText.lowercase()
+        return lower.contains("device admin")
+    }
+
     override fun onInterrupt() {
         Log.w(TAG, "onInterrupt")
     }
@@ -206,11 +252,18 @@ class ContentGuardService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         if (::overlay.isInitialized && overlay.isVisible()) overlay.hide()
+        if (::passwordGuardOverlay.isInitialized && passwordGuardOverlay.isVisible()) passwordGuardOverlay.hide()
         if (::nsfwClassifier.isInitialized) nsfwClassifier.close()
         serviceScope.cancel()
     }
 
     companion object {
         private const val TAG = "ContentGuardService"
+
+        // Standard AOSP Settings package - the "Device admin apps" screen is a
+        // core DevicePolicy fragment OEMs rarely reimplement (unlike the
+        // heavily-customized battery/app-info screens elsewhere in ColorOS),
+        // so this should hold even though other Settings screens don't.
+        private const val SETTINGS_PACKAGE = "com.android.settings"
     }
 }
