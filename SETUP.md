@@ -219,6 +219,26 @@ thumbnails visible at once still unions across all of them rather than
 checking each individually - flag it if misses persist in dense
 list/compact feed views specifically.
 
+### Gate 3 decoupled: permissive capture trigger vs strict crop region
+
+A third real miss, found scrolling Reddit's feed: `GATE3_NO_IMAGE_NODES`
+fired on essentially every frame, even though feed cards clearly have
+thumbnails. Cause: Reddit's Compose UI likely uses accessibility semantics
+merging (`mergeDescendants`), which collapses an image thumbnail and its
+post title/metadata into a single node - that merged node has real visual
+content but also carries its own text, failing the existing "childless and
+no text" heuristic (added for the earlier Compose-detection fix) outright.
+`NodeInspector` now tracks two separate signals instead of one:
+`hasImages` (whether to bother capturing at all) is permissive - any node
+at least 150x150px counts, regardless of children or text, since a node
+that large is almost certainly real content. `imageBounds` (fed into
+`ScreenCapturer`'s crop region) stays on the stricter heuristic, since
+loosening that one would make the crop degenerate back to nearly the
+whole screen. When a merged node trips `hasImages` but isn't specific
+enough to produce real `imageBounds`, capture falls back to the whole
+frame rather than skipping entirely - a real capture without an optimal
+crop beats no capture at all.
+
 ### Block dismissal now goes back *and* home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss
