@@ -496,9 +496,9 @@ private fun PasswordSection(hasPassword: Boolean, onSetPassword: (String) -> Uni
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "Required to open this Settings screen and to reach the Device admin apps " +
-                    "screen in system Settings - without it, either could be used to undo " +
-                    "ContentGuard's protections.",
+                "Required to open this Settings screen, and to reach the Accessibility or " +
+                    "Device admin apps screens in system Settings - without it, any of those " +
+                    "could be used to undo ContentGuard's protections.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(modifier = Modifier.height(12.dp))

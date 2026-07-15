@@ -44,7 +44,8 @@ class ContentGuardService : AccessibilityService() {
     private val frameChannel = Channel<FrameRequest>(Channel.CONFLATED)
 
     private var lastForegroundPackage: String? = null
-    private var deviceAdminScreenUnlocked = false
+    private var settingsGuardUnlocked = false
+    private var onGuardedSettingsScreen = false
 
     private data class FrameRequest(val packageName: String)
 
@@ -71,7 +72,7 @@ class ContentGuardService : AccessibilityService() {
         passwordGuardOverlay = PasswordGuardOverlayController(
             service = this,
             onVerify = { entered -> prefs.verifyPassword(entered) },
-            onUnlocked = { deviceAdminScreenUnlocked = true },
+            onUnlocked = { settingsGuardUnlocked = true },
             onCancelled = { performGlobalAction(GLOBAL_ACTION_HOME) },
         )
 
@@ -88,17 +89,28 @@ class ContentGuardService : AccessibilityService() {
 
         if (isRealAppSwitch) {
             lastForegroundPackage = packageName
-            if (packageName != SETTINGS_PACKAGE) deviceAdminScreenUnlocked = false
+            if (packageName != SETTINGS_PACKAGE) {
+                settingsGuardUnlocked = false
+                onGuardedSettingsScreen = false
+            }
             if (overlay.isVisible() && !prefs.isLockedOut(packageName)) {
                 serviceScope.launch(Dispatchers.Main) { overlay.hide() }
             }
         }
 
-        if (packageName == SETTINGS_PACKAGE && prefs.hasPassword() && !deviceAdminScreenUnlocked &&
-            looksLikeDeviceAdminScreen(currentScreenText())
-        ) {
+        // Keyed on the window's own title (from the TYPE_WINDOW_STATE_CHANGED
+        // event), not a scan of all visible text - scanning all text was
+        // matching "Device admin apps" and "Accessibility" wherever those
+        // words appeared, including as search-suggestion chips on Settings'
+        // own search screen, which isn't the real screen at all.
+        if (packageName == SETTINGS_PACKAGE && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val screenTitle = event.text.joinToString(" ").lowercase()
+            onGuardedSettingsScreen = GUARDED_SETTINGS_TITLE_MARKERS.any { screenTitle.contains(it) }
+        }
+
+        if (packageName == SETTINGS_PACKAGE && onGuardedSettingsScreen && prefs.hasPassword() && !settingsGuardUnlocked) {
             if (!passwordGuardOverlay.isVisible()) {
-                val line = "[$packageName] exit@GATE_DEVICE_ADMIN_GUARD"
+                val line = "[$packageName] exit@GATE_SETTINGS_GUARD"
                 Log.i(TAG, line)
                 DebugLogBuffer.add(TAG, line)
                 serviceScope.launch(Dispatchers.Main) { passwordGuardOverlay.show() }
@@ -229,22 +241,6 @@ class ContentGuardService : AccessibilityService() {
         DebugLogBuffer.add(TAG, line)
     }
 
-    /** Synchronous, called directly from onAccessibilityEvent - this must react before the user can interact with the screen, not queue through the cascade. */
-    private fun currentScreenText(): String {
-        val root = rootInActiveWindow ?: return ""
-        return try {
-            NodeInspector.scan(root).visibleText
-        } finally {
-            @Suppress("DEPRECATION")
-            root.recycle()
-        }
-    }
-
-    private fun looksLikeDeviceAdminScreen(screenText: String): Boolean {
-        val lower = screenText.lowercase()
-        return lower.contains("device admin")
-    }
-
     override fun onInterrupt() {
         Log.w(TAG, "onInterrupt")
     }
@@ -260,10 +256,15 @@ class ContentGuardService : AccessibilityService() {
     companion object {
         private const val TAG = "ContentGuardService"
 
-        // Standard AOSP Settings package - the "Device admin apps" screen is a
-        // core DevicePolicy fragment OEMs rarely reimplement (unlike the
-        // heavily-customized battery/app-info screens elsewhere in ColorOS),
-        // so this should hold even though other Settings screens don't.
+        // Standard AOSP Settings package - the "Device admin apps" and
+        // "Accessibility" screens are core fragments OEMs rarely
+        // reimplement (unlike the heavily-customized battery/app-info
+        // screens elsewhere in ColorOS), so this should hold even though
+        // other Settings screens don't.
         private const val SETTINGS_PACKAGE = "com.android.settings"
+
+        // Matched against the window's own title, not screen content - see
+        // the comment at the call site.
+        private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "accessibility")
     }
 }

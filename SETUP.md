@@ -138,22 +138,27 @@ into the app re-shows the fake-crash block immediately rather than
 waiting for a fresh detection. Strikes and lockout state are tracked
 per-package in `PrefsRepository` (`recordExplicitStrike`/`isLockedOut`).
 
-### App password + Device Admin screen guard
+### App password + Accessibility/Device Admin screen guard
 
-The Settings screen has an "App password" card. Once set, it gates two
-things:
+The Settings screen has an "App password" card. Once set, it gates:
 
 1. **ContentGuard's own Settings screen** - reopening it prompts for the
    password before showing anything (`SettingsActivity`'s `PasswordUnlockScreen`).
-2. **The system "Device admin apps" screen** - `ContentGuardService`
-   watches for `com.android.settings` foreground events, does a
-   lightweight text scan (`NodeInspector`) for "device admin", and if
-   matched, shows a full-screen password prompt (`PasswordGuardOverlayController`)
-   before the real screen becomes usable - wrong password or cancel
-   performs `GLOBAL_ACTION_HOME`. Without this, deactivating device admin
-   from system Settings would undo the force-stop/uninstall protection
-   with zero friction. The unlock persists until you leave the Settings
-   app entirely, not per-screen.
+2. **The system "Accessibility" and "Device admin apps" screens** -
+   `ContentGuardService` checks the *window title* (from the
+   `TYPE_WINDOW_STATE_CHANGED` event's own `text`, not a scan of all
+   on-screen content) whenever `com.android.settings` is foreground, and
+   if it matches, shows a full-screen password prompt
+   (`PasswordGuardOverlayController`) before the real screen becomes
+   usable - wrong password or cancel performs `GLOBAL_ACTION_HOME`.
+   Deliberately keyed on the window title rather than a full text scan:
+   an earlier version scanned all visible text and matched "Device admin
+   apps" wherever it appeared, including as a search-suggestion chip on
+   Settings' own search screen, which isn't the real screen at all and
+   shouldn't trigger anything. Without this guard, opening either real
+   screen and disabling the service/admin from system Settings would
+   undo ContentGuard's protections with zero friction. The unlock
+   persists until you leave the Settings app entirely, not per-screen.
 
 No password set means both are open exactly as before - this is opt-in.
 Stored as a salted SHA-256 hash in `PrefsRepository`, never the raw text.
