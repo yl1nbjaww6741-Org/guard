@@ -33,7 +33,10 @@ enum class SiglipClass(val index: Int, val label: String) {
  * separates "sexy" (Enticing & Sensual) from actual explicit content -
  * [classPolicies] is a per-class probability threshold map deciding
  * which classes actually gate blocking. Currently blocking all three of
- * Pornography, Hentai, and Enticing & Sensual (0.7 each) - Safe for Work
+ * Pornography, Hentai, and Enticing & Sensual (0.6 each - lowered from
+ * 0.7 after real-world testing found genuine Enticing & Sensual content
+ * scoring 0.65, just under the old threshold, until the user zoomed in
+ * for a clearer view) - Safe for Work
  * and Anime Picture are logged on every inference (for visibility while
  * tuning) but never contribute to the returned score. This is a
  * temporary, easily-reversed choice: to stop blocking Enticing & Sensual
@@ -150,10 +153,13 @@ class SiglipNsfwClassifier(
 
         // Delete the ENTICING_AND_SENSUAL line below to stop blocking
         // "sexy" content and only block actual explicit content again.
+        // Lowered 0.7 -> 0.6 after real-world testing on Reddit found a
+        // genuine Enticing & Sensual photo scoring 0.65 - just under the
+        // old threshold - until the user zoomed in on it.
         val DEFAULT_CLASS_POLICIES: Map<SiglipClass, Float> = mapOf(
-            SiglipClass.PORNOGRAPHY to 0.7f,
-            SiglipClass.HENTAI to 0.7f,
-            SiglipClass.ENTICING_AND_SENSUAL to 0.7f,
+            SiglipClass.PORNOGRAPHY to 0.6f,
+            SiglipClass.HENTAI to 0.6f,
+            SiglipClass.ENTICING_AND_SENSUAL to 0.6f,
         )
     }
 }

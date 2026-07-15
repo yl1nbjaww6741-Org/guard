@@ -319,9 +319,12 @@ nudity." This went through 3 stages, all now complete:
 
    Per-class thresholds decide what actually blocks -
    `SiglipNsfwClassifier.DEFAULT_CLASS_POLICIES` currently blocks
-   Pornography, Hentai, **and Enticing & Sensual** (all at 0.7 - blocking
-   "sexy" too is a deliberate, temporary, easily-reversed choice for now,
-   not the original "only block real nudity" design). Safe for Work and
+   Pornography, Hentai, **and Enticing & Sensual** (all at 0.6 - lowered
+   from 0.7 after real-world testing on Reddit found a genuine Enticing &
+   Sensual photo scoring 0.65, just under the old threshold, until zoomed
+   in on. Blocking "sexy" at all is a deliberate, temporary,
+   easily-reversed choice for now, not the original "only block real
+   nudity" design). Safe for Work and
    Anime Picture are logged on every inference (`adb logcat -s
    SiglipNsfwClassifier`, tag `class=... prob=...`) but never block.
    `scoreNsfw()` returns `max(classProb / classThreshold)` across the
