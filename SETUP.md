@@ -567,15 +567,24 @@ labels, `BELLY_EXPOSED`, `ARMPITS_EXPOSED`, `FEET_EXPOSED`, `FACE_MALE`,
 `FACE_FEMALE` - is absent from the map, which means it never blocks
 regardless of confidence.
 
-**`FEMALE_BREAST_EXPOSED`/`MALE_BREAST_EXPOSED` are intentionally excluded
-from the default block thresholds.** NudeNet has a documented tendency to
-mislabel male chests as `FEMALE_BREAST_EXPOSED` - for a cascade that also
-sees a lot of sport/gym content, blocking on that label would make
-shirtless men the dominant false-positive source. Both breast labels are
-still detected and logged (see below), just never gate blocking, unless
-you merge `NudeNetGatePolicy.BREAST_EXPOSED_THRESHOLDS` into the map
-passed to `NudeNetDetector`'s constructor after testing shows the
-false-positive rate is acceptable for your own usage.
+**`FEMALE_BREAST_EXPOSED`/`MALE_BREAST_EXPOSED` are excluded from
+`DEFAULT_BLOCK_THRESHOLDS` itself** (NudeNet has a documented tendency to
+mislabel male chests as `FEMALE_BREAST_EXPOSED`, which for a cascade that
+also sees a lot of sport/gym content risked making shirtless men the
+dominant false-positive source), **but `NsfwClassifierFactory` currently
+opts back in to `FEMALE_BREAST_EXPOSED` specifically** -
+`BLOCK_FEMALE_BREAST_EXPOSED = true` at the top of
+`NsfwClassifierFactory.kt` merges
+`NudeNetGatePolicy.FEMALE_BREAST_EXPOSED_THRESHOLD` into the thresholds
+passed to `NudeNetDetector`'s constructor, live as of this commit. This
+means real female breast exposure now blocks, at the accepted cost that
+NudeNet's gender-misclassification bug can still occasionally flag a
+shirtless man as `FEMALE_BREAST_EXPOSED` too - watch for that specific
+false-positive pattern. `MALE_BREAST_EXPOSED` stays off
+(`NsfwClassifierFactory.BLOCK_MALE_BREAST_EXPOSED = false`) - flip that
+constant too if you also want to block on that label after testing. Both
+breast labels are always detected and logged regardless of whether they
+gate blocking.
 
 `NudeNetDetector.scoreNsfw()` (the `NsfwClassifier` interface method the
 existing cascade calls) returns 1f if any block-listed label's detection

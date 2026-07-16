@@ -11,6 +11,18 @@ object NsfwClassifierFactory {
     const val TFLITE_MODEL_ASSET = "nsfw.tflite"
     private const val TAG = "NsfwClassifierFactory"
 
+    // Opt-in per NudeNetGatePolicy's doc comment - accepts the known
+    // gender-misclassification tradeoff (shirtless men sometimes tagged
+    // FEMALE_BREAST_EXPOSED) in exchange for catching real female breast
+    // exposure instead of ignoring it entirely.
+    private const val BLOCK_FEMALE_BREAST_EXPOSED = true
+
+    // Off by default - sport/gym content makes this the riskier of the two
+    // to enable (a correctly-labeled shirtless man is the common case this
+    // was built to avoid blocking on). Flip it if that false-positive rate
+    // turns out to be acceptable for your own usage.
+    private const val BLOCK_MALE_BREAST_EXPOSED = false
+
     /**
      * Prefers assets/320n.onnx (NudeNetDetector - label-set body-part
      * detection gate, see its class doc for why this replaced the old
@@ -23,7 +35,14 @@ object NsfwClassifierFactory {
     fun create(context: Context): NsfwClassifier {
         if (assetExists(context, NUDENET_MODEL_ASSET)) {
             try {
-                return NudeNetDetector(context, NUDENET_MODEL_ASSET)
+                var blockThresholds = NudeNetGatePolicy.DEFAULT_BLOCK_THRESHOLDS
+                if (BLOCK_FEMALE_BREAST_EXPOSED) {
+                    blockThresholds = blockThresholds + NudeNetGatePolicy.FEMALE_BREAST_EXPOSED_THRESHOLD
+                }
+                if (BLOCK_MALE_BREAST_EXPOSED) {
+                    blockThresholds = blockThresholds + NudeNetGatePolicy.MALE_BREAST_EXPOSED_THRESHOLD
+                }
+                return NudeNetDetector(context, NUDENET_MODEL_ASSET, blockThresholds)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load $NUDENET_MODEL_ASSET, falling back", e)
             }

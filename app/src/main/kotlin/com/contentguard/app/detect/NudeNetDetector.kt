@@ -72,13 +72,21 @@ object NudeNetGatePolicy {
     )
 
     /**
-     * Opt-in only, merge into a classifier's block thresholds after testing
-     * shows the gender-misclassification false-positive rate (shirtless
-     * men tagged FEMALE_BREAST_EXPOSED) is acceptable for your own usage.
-     * Not included in [DEFAULT_BLOCK_THRESHOLDS].
+     * Opt-in, merge into a classifier's block thresholds once you've
+     * accepted the gender-misclassification tradeoff (shirtless men
+     * sometimes tagged FEMALE_BREAST_EXPOSED - see [NudeNetDetector]'s
+     * class doc). Split into two separate maps rather than one combined
+     * one so female and male exposure can be toggled independently - e.g.
+     * enabling [FEMALE_BREAST_EXPOSED_THRESHOLD] alone still blocks real
+     * female nudity without also flagging ordinary shirtless-men content
+     * whenever NudeNet gets the gender label right. Not included in
+     * [DEFAULT_BLOCK_THRESHOLDS].
      */
-    val BREAST_EXPOSED_THRESHOLDS: Map<NudeNetLabel, Float> = mapOf(
+    val FEMALE_BREAST_EXPOSED_THRESHOLD: Map<NudeNetLabel, Float> = mapOf(
         NudeNetLabel.FEMALE_BREAST_EXPOSED to 0.5f,
+    )
+
+    val MALE_BREAST_EXPOSED_THRESHOLD: Map<NudeNetLabel, Float> = mapOf(
         NudeNetLabel.MALE_BREAST_EXPOSED to 0.5f,
     )
 }
