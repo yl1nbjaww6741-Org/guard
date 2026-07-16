@@ -9,6 +9,23 @@ jobs:
   assemble-debug:
     runs-on: ubuntu-latest
     steps:
+      # ubuntu-latest ships with several GB of preinstalled toolchains we
+      # never touch (.NET, Haskell, Swift, CodeQL) - removing them before
+      # the Android SDK/Gradle download anything is the standard fix for
+      # "No space left on device" on GitHub-hosted Android CI runners.
+      # `rm -rf` on a path that doesn't exist on a given runner image is a
+      # silent no-op, not an error, so this is safe even if some of these
+      # move or disappear in a future image update.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android/sdk/ndk
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
