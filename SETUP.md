@@ -311,6 +311,32 @@ Net effect: best-case first-detection latency drops from ~300-600ms to
 roughly the same range but hit far more often (worst-case gap shrinks
 from ~2s to ~1s), at a real, deliberate battery cost.
 
+### WebView was polluting the crop region in browsers
+
+Real-world testing found explicit content in Chrome consistently scoring
+low ("Safe for Work" dominating) while swiping through a page, but
+blocking immediately on the slightest zoom - the opposite pattern from a
+missed detection, and a strong signal the crop region itself was wrong
+rather than the classifier being wrong. Cause: `IMAGE_CLASS_HINTS`
+included `"WebView"`, which feeds the *strict* crop-region calculation
+(`imageBounds`), not just the permissive "should we bother capturing"
+check. Chrome renders an entire page inside one large `WebView`-classed
+node spanning nearly the whole screen, so the crop region degenerated to
+"the whole page" - diluting one specific photo among surrounding page
+content, same as the earlier Reddit-feed dilution bug, except here the
+crop mechanism couldn't help at all, because the "image" it found *was*
+the whole page. Zooming in worked because the photo then fills the whole
+WebView, making crop-to-page and crop-to-photo coincide by accident.
+`WebView` removed from `IMAGE_CLASS_HINTS` entirely - gate 3's permissive
+`hasSubstantialContent` check still triggers on browser content
+regardless (a WebView's sheer size guarantees that), so this only
+affects crop precision, not whether capture happens at all. Not fully
+verified whether Chrome exposes individual DOM image elements to
+`NodeInspector` in a form the remaining heuristics can target - if not,
+capture falls back to the whole frame (same dilution risk, minus the
+false confidence of a mislabeled "targeted" crop) - worth retesting to
+confirm.
+
 ### Block dismissal now goes back *and* home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss

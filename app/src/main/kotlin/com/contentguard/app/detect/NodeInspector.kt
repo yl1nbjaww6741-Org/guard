@@ -27,7 +27,22 @@ object NodeInspector {
     // carries text.
     private const val SUBSTANTIAL_CONTENT_SIZE_PX = 150
 
-    private val IMAGE_CLASS_HINTS = listOf("ImageView", "WebView", "SurfaceView", "TextureView", "VideoView")
+    // WebView deliberately excluded: unlike ImageView/SurfaceView/
+    // TextureView/VideoView (which are normally sized to their actual
+    // content), a WebView's bounds span the entire rendered page - so
+    // treating it as an "image bound" for cropping purposes made the crop
+    // region degenerate to nearly the whole page whenever browsing (e.g.
+    // Chrome), diluting one specific photo among surrounding page content
+    // exactly like the Reddit-feed dilution bug this crop mechanism was
+    // built to fix - except here the crop couldn't help, because the
+    // "image" it found *was* the whole page. This is why zooming in
+    // worked (the photo then fills the whole WebView, so crop-to-page and
+    // crop-to-photo coincide) while swiping through a page with the photo
+    // as one element among others didn't. WebView presence still
+    // contributes to hasSubstantialContent below regardless (its sheer
+    // size guarantees that), so gate 3 itself isn't affected - only the
+    // crop-region precision is.
+    private val IMAGE_CLASS_HINTS = listOf("ImageView", "SurfaceView", "TextureView", "VideoView")
 
     /** Does not recycle [root] - the caller owns that node's lifecycle. */
     fun scan(root: AccessibilityNodeInfo?): NodeScanResult {
