@@ -116,16 +116,13 @@ class ScreenCapturer(
 
         // AccessibilityService.takeScreenshot() is itself rate-limited by
         // the platform (ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT below
-        // roughly one call/second) - 900ms would sit just under that floor
-        // for maximum responsiveness. Deliberately raised to 1500ms instead:
-        // real on-device logs showed captures landing ~1.0-1.1s apart during
-        // active scrolling anyway (throttle + real processing overhead), so
-        // 900ms bought little responsiveness in practice while costing a
-        // capture+inference on every single one. 1500ms cuts capture
-        // frequency by roughly 40% for a real battery win, at the cost of
-        // being more likely to skip content that flashes by very quickly
-        // during fast scrolling rather than pausing on it.
-        private const val THROTTLE_FLOOR_MS = 1500L
+        // roughly one call/second) - 900ms sits just under that floor,
+        // the fastest this can go without the OS itself starting to
+        // reject calls (which would cost the attempt for zero benefit).
+        // Was raised to 1500ms for battery; reverted to 900ms per explicit
+        // "make detection as fast as possible" request - this is a real
+        // battery-for-latency trade, not a free change.
+        private const val THROTTLE_FLOOR_MS = 900L
 
         const val TARGET_LONGEST_EDGE = 640
     }

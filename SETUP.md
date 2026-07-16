@@ -290,6 +290,27 @@ catch this. Rather than special-case every possible spurious source,
 field - asking the OS what's actually active right now sidesteps this
 whole class of bug rather than enumerating causes one at a time.
 
+### Tuned for detection speed over battery, per explicit request
+
+Three timing constants were lowered together to minimize first-detection
+latency, trading away some of the battery savings they were originally
+tuned for:
+
+- `ScreenCapturer.THROTTLE_FLOOR_MS`: 1500ms -> 900ms - back down to just
+  under the platform's own screenshot rate limit
+  (`ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`, roughly one call/second).
+  Going lower than ~900ms buys nothing - the OS itself starts rejecting
+  calls at that point.
+- `ContentGuardService.STATIC_RECHECK_INTERVAL_MS`: 2000ms -> 1000ms - the
+  periodic static-content fallback now fires twice as often, staying just
+  above the new capture floor.
+- `EventDebouncer.settleWindowMs`: 250ms -> 100ms - less delay between
+  processing successive content-change events during scrolling.
+
+Net effect: best-case first-detection latency drops from ~300-600ms to
+roughly the same range but hit far more often (worst-case gap shrinks
+from ~2s to ~1s), at a real, deliberate battery cost.
+
 ### Block dismissal now goes back *and* home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss

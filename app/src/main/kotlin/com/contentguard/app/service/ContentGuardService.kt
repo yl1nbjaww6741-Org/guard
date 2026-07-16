@@ -343,8 +343,10 @@ class ContentGuardService : AccessibilityService() {
         // the comment at the call site.
         private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "accessibility")
 
-        // Just above ScreenCapturer's own 1500ms throttle floor, so this
+        // Just above ScreenCapturer's own 900ms throttle floor, so this
         // rarely fires more often than a real capture could happen anyway.
-        private const val STATIC_RECHECK_INTERVAL_MS = 2000L
+        // Lowered from 2000ms alongside that floor per explicit "make
+        // detection as fast as possible" request.
+        private const val STATIC_RECHECK_INTERVAL_MS = 1000L
     }
 }
