@@ -442,10 +442,21 @@ here, both instructive:**
    Chrome tab in one round of testing - but on-device logging
    (`GATE4_TITLE_DEBUG`, added specifically to check this rather than
    guess again) showed the title field is in fact clean and correct
-   (`"Chrome: New tab"` vs. `"Chrome: New Incognito tab"`); the earlier
+   (`"Chrome: New tab"` vs. `"Chrome: New Incognito tab"`); that particular
    report was almost certainly an incognito tab left open from testing the
-   previous fix, not a real false positive. The title check is confirmed
-   working and is the primary signal.
+   previous fix, not a real false positive.
+3. Even with the title logic confirmed correct in isolation, Chrome kept
+   coming back fully blocked on real-device retesting, and the actual
+   cause hasn't been root-caused yet - something about Chrome specifically
+   is still misfiring somewhere beyond what `GATE4_TITLE_DEBUG` checked.
+   **Chrome's package IDs are temporarily commented out of
+   `IncognitoDetector.BROWSER_PACKAGES`** so normal Chrome use isn't broken
+   in the meantime - incognito detection is currently inactive for Chrome
+   specifically (other browsers, e.g. Firefox/Edge/Samsung Internet, are
+   unaffected and still covered). Pick this back up by re-adding Chrome's
+   package IDs and gathering full-frame logs (`ContentGuardService` +
+   `NudeNetDetector` around a real incognito session) to find what's
+   actually triggering the block before assuming another keyword fix.
 
 Deliberately no Settings toggle to disable this - the point is that
 private browsing can't be used to evade the rest of the cascade, so it

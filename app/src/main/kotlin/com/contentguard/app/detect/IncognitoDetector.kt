@@ -54,12 +54,23 @@ object IncognitoDetector {
      * restricting to known browsers is what keeps this from ever firing
      * on an unrelated app (Gboard, or anything else) no matter what text
      * transiently appears in its own accessibility tree.
+     *
+     * Chrome's own package IDs are deliberately OUT of this set for now -
+     * real-device testing kept reporting Chrome fully blocked even after
+     * the title check was confirmed correct in isolation
+     * (GATE4_TITLE_DEBUG showed "Chrome: New tab" not matching and "Chrome:
+     * New Incognito tab" matching, exactly as intended), so something else
+     * about Chrome specifically is still misfiring that hasn't been root-
+     * caused yet. Pulled out entirely rather than half-fixed so normal
+     * Chrome use isn't broken while this gets revisited - re-add
+     * "com.android.chrome" (and the channel variants below) once the real
+     * cause is found.
      */
     val BROWSER_PACKAGES = setOf(
-        "com.android.chrome",
-        "com.chrome.beta",
-        "com.chrome.dev",
-        "com.chrome.canary",
+        // "com.android.chrome",
+        // "com.chrome.beta",
+        // "com.chrome.dev",
+        // "com.chrome.canary",
         "org.mozilla.firefox",
         "org.mozilla.firefox_beta",
         "org.mozilla.fenix",
