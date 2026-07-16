@@ -55,3 +55,11 @@ jobs:
           name: contentguard-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          # These are debug builds you download and install right after
+          # each run, not something needing long-term retention - the
+          # default 90-day retention meant every push's APK piled up
+          # against the account's Actions artifact storage quota until it
+          # got fully hit ("Failed to CreateArtifact: Artifact storage
+          # quota has been hit"). A short retention lets old ones expire
+          # and free that quota automatically instead of accumulating.
+          retention-days: 1
