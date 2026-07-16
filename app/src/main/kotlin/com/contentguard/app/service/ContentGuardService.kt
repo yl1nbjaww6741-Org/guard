@@ -160,6 +160,29 @@ class ContentGuardService : AccessibilityService() {
             return
         }
 
+        // Restricted to known browser packages specifically so this can
+        // never trigger on an unrelated app (Gboard's own "Incognito mode"
+        // privacy indicator was matching here before this restriction was
+        // added - see IncognitoDetector's doc comment). Keyed on the
+        // window's own title, same proven pattern as the Settings guard
+        // above - a single short string, not a scan of the whole
+        // accessibility tree, so it isn't at risk of unrelated node text
+        // concatenating into an accidental match.
+        if (IncognitoDetector.isBrowserPackage(packageName) &&
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ) {
+            val windowTitle = event.text.joinToString(" ")
+            if (IncognitoDetector.matchesTitle(windowTitle)) {
+                if (!overlay.isVisible()) {
+                    val line = "[$packageName] exit@GATE4_INCOGNITO_DETECTED title"
+                    Log.i(TAG, line)
+                    DebugLogBuffer.add(TAG, line)
+                    serviceScope.launch(Dispatchers.Main) { overlay.show(packageName) }
+                }
+                return
+            }
+        }
+
         if (!debouncer.shouldProcess(event)) {
             Log.d(TAG, "[$packageName] exit@GATE2_DEBOUNCE")
             return
@@ -230,14 +253,19 @@ class ContentGuardService : AccessibilityService() {
             root.recycle()
         }
 
-        // Checked before GATE3's image-content check, deliberately - this
-        // blocks private/incognito browsing outright regardless of whether
-        // there's an image on screen at all, since capture (gates 5-7)
-        // structurally cannot see into a FLAG_SECURE window anyway. See
-        // IncognitoDetector's doc comment for why this is text-based
-        // rather than pixel-based.
-        if (IncognitoDetector.matches(scan.visibleText)) {
-            val line = "[$pkg] exit@GATE4_INCOGNITO_DETECTED"
+        // Fallback for when the window-title check in onAccessibilityEvent
+        // didn't catch it (e.g. the title only changes on the initial
+        // window-state-change and a private tab's *content* wasn't loaded
+        // yet at that point). Restricted to known browser packages and to
+        // the narrower CONTENT_KEYWORDS set - see IncognitoDetector's doc
+        // comment for why the whole-tree scan can't safely use the same
+        // bare "incognito" keyword the title check does. Checked before
+        // GATE3's image-content check, deliberately - this blocks private
+        // browsing outright regardless of whether there's an image on
+        // screen at all, since capture (gates 5-7) structurally cannot see
+        // into a FLAG_SECURE window anyway.
+        if (IncognitoDetector.isBrowserPackage(pkg) && IncognitoDetector.matchesContent(scan.visibleText)) {
+            val line = "[$pkg] exit@GATE4_INCOGNITO_DETECTED content"
             Log.i(TAG, line)
             DebugLogBuffer.add(TAG, line)
             withContext(Dispatchers.Main) { overlay.show(pkg) }

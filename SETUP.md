@@ -405,18 +405,44 @@ tab at all, on any browser, ever - no amount of retuning fixes that,
 because the classifier never gets a frame to look at.
 
 `IncognitoDetector.kt` sidesteps this by detecting *presence* instead of
-inspecting content: it matches a small set of phrases
-(`incognito`, `private browsing`, `private tab`, `private window`,
-`inprivate`, `secret mode`) against `NodeInspector.scan().visibleText`
-(the same accessibility-tree text/content-description scan gate 3 already
-does every frame) - the semantic accessibility tree isn't blocked by
-`FLAG_SECURE`, only the rendering/capture pipeline is, so this works
-identically regardless of which browser is in front. Checked in
-`ContentGuardService.processFrame()` before gate 3's image check
-(`GATE4_INCOGNITO_DETECTED`), so it fires even on a text-only private page
-with no images at all, and blocks with the same overlay as a real
-`GATE8_BLOCK` - same persist-until-dismiss-or-app-switch behavior, no new
-UI. Deliberately no Settings toggle to disable it, same reasoning as the
+inspecting content, via two signals - a title check in
+`onAccessibilityEvent` (immediate, matched against the window's own
+title, same proven pattern as the Settings/Accessibility guard) and a
+content fallback in `processFrame()` (matched against
+`NodeInspector.scan().visibleText`, the same tree scan gate 3 already does
+every frame, for cases where the title alone didn't carry the signal). The
+semantic accessibility tree isn't blocked by `FLAG_SECURE`, only the
+rendering/capture pipeline is, so both work regardless of which browser is
+in front.
+
+**Real-world testing found the first version of this false-positived
+badly** - it fired on ordinary Chrome browsing and even on Gboard, because
+it checked every app (not just browsers) and matched a bare `"incognito"`
+against the *entire* accessibility tree's concatenated text. Two fixes,
+both load-bearing:
+
+1. **`IncognitoDetector.BROWSER_PACKAGES` allowlist** - both checks now
+   only ever run for known browser packages. Gboard genuinely does show
+   its own "Incognito mode" privacy indicator whenever the field it's
+   typing into is flagged private (in any app), and this codebase has hit
+   the general "the IME's own window briefly looks like the foreground
+   package" bug class before - restricting to browser packages rules this
+   out regardless of what Gboard's own UI says.
+2. **Split keyword sets** - `TITLE_KEYWORDS` (used against the single,
+   short window-title string, no concatenation risk) includes the bare
+   word `"incognito"`; `CONTENT_KEYWORDS` (used against the whole-tree
+   scan) deliberately excludes it, since Chrome's own tab-switcher button
+   reports an incognito tab *count* in its content description even at
+   zero, so that bare word was present in the tree on ordinary,
+   non-incognito pages too. `CONTENT_KEYWORDS` keeps only the multi-word
+   phrases (`private browsing`, `private tab`, `private window`,
+   `inprivate`, `secret mode`) that appear on a browser's actual "you're
+   private now" landing content.
+
+Logs `GATE4_INCOGNITO_DETECTED title` or `... content` depending on which
+signal caught it, and blocks with the same overlay as a real `GATE8_BLOCK`
+- same persist-until-dismiss-or-app-switch behavior, no new UI.
+Deliberately no Settings toggle to disable it, same reasoning as the
 password-gated Settings/Accessibility screens: the point is that private
 browsing can't be used to evade the rest of the cascade, so it shouldn't
 have an easy in-app off switch either. Not wired into the N-strikes/
