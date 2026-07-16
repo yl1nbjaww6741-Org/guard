@@ -160,27 +160,28 @@ class ContentGuardService : AccessibilityService() {
             return
         }
 
-        // DIAGNOSTIC ONLY, deliberately not blocking yet: real-device
-        // testing found this event's own text matches TITLE_KEYWORDS on
-        // every Chrome tab, not just incognito ones - meaning
-        // AccessibilityEvent.text carries something other than a clean
-        // per-tab title for Chrome (unlike the Settings guard's use of the
-        // same field, which does work correctly there). Logging the raw
-        // text here instead of acting on it, so the next real incognito
-        // vs. regular tab comparison can be read directly out of the
-        // Settings screen's Debug log card (DebugLogBuffer, not just adb
-        // logcat - the phone alone is enough to gather this) and used to
-        // build a title-based rule grounded in what Chrome actually sends,
-        // rather than guessing again. The content-based fallback in
-        // processFrame() is the only active blocking signal for now.
+        // Restricted to known browser packages so this can never trigger
+        // on an unrelated app (Gboard's own "Incognito mode" privacy
+        // indicator was matching here before that restriction was added -
+        // see IncognitoDetector's doc comment). Confirmed correct against
+        // real on-device titles: a regular tab reports e.g. "Chrome: New
+        // tab" (no match) while an incognito tab reports "Chrome: New
+        // Incognito tab" (matches) - the window's own title, a single
+        // short string, isn't at risk of the whole-tree concatenation
+        // false positives that affected the content-based check earlier.
         if (IncognitoDetector.isBrowserPackage(packageName) &&
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         ) {
             val windowTitle = event.text.joinToString(" ")
-            val wouldMatch = IncognitoDetector.matchesTitle(windowTitle)
-            val line = "[$packageName] GATE4_TITLE_DEBUG wouldMatch=$wouldMatch title=\"$windowTitle\""
-            Log.d(TAG, line)
-            DebugLogBuffer.add(TAG, line)
+            if (IncognitoDetector.matchesTitle(windowTitle)) {
+                if (!overlay.isVisible()) {
+                    val line = "[$packageName] exit@GATE4_INCOGNITO_DETECTED title=\"$windowTitle\""
+                    Log.i(TAG, line)
+                    DebugLogBuffer.add(TAG, line)
+                    serviceScope.launch(Dispatchers.Main) { overlay.show(packageName) }
+                }
+                return
+            }
         }
 
         if (!debouncer.shouldProcess(event)) {

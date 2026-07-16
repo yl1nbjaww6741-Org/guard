@@ -405,51 +405,54 @@ tab at all, on any browser, ever - no amount of retuning fixes that,
 because the classifier never gets a frame to look at.
 
 `IncognitoDetector.kt` sidesteps this by detecting *presence* instead of
-inspecting content, via one active signal plus one disabled-pending-data
-signal:
+inspecting content, via two signals, both restricted to
+`IncognitoDetector.BROWSER_PACKAGES`:
 
-- **Content fallback (active)**: `processFrame()` matches
-  `IncognitoDetector.CONTENT_KEYWORDS` against
-  `NodeInspector.scan().visibleText` (the same tree scan gate 3 already
-  does every frame), restricted to `IncognitoDetector.BROWSER_PACKAGES`.
-  Logs `GATE4_INCOGNITO_DETECTED content` and blocks with the same overlay
-  as a real `GATE8_BLOCK` when it fires.
-- **Title check (diagnostic only, not blocking)**: `onAccessibilityEvent`
-  logs (`GATE4_TITLE_DEBUG wouldMatch=... title="..."`) what
-  `AccessibilityEvent.text` contains on a `TYPE_WINDOW_STATE_CHANGED` for
-  browser packages, without acting on it yet.
+- **Title check (primary)**: `onAccessibilityEvent` matches
+  `TITLE_KEYWORDS` against the window's own title on a
+  `TYPE_WINDOW_STATE_CHANGED` event - confirmed against real on-device
+  titles (Chrome): a regular tab reports `"Chrome: New tab"` (no match), an
+  incognito tab reports `"Chrome: New Incognito tab"` (matches). Logs
+  `GATE4_INCOGNITO_DETECTED title="..."` and blocks immediately.
+- **Content fallback**: `processFrame()` matches the narrower
+  `CONTENT_KEYWORDS` against `NodeInspector.scan().visibleText` (the same
+  tree scan gate 3 already does every frame), for cases where the title
+  alone didn't carry the signal. Logs `GATE4_INCOGNITO_DETECTED content`.
 
-**Real-world testing found two rounds of false positives, in order:**
+Both block with the same overlay as a real `GATE8_BLOCK` - same
+persist-until-dismiss-or-app-switch behavior, no new UI.
 
-1. First version checked every app (not just browsers) and matched a bare
-   `"incognito"` against the *entire* accessibility tree's concatenated
-   text - fired on ordinary Chrome browsing and on Gboard, which genuinely
-   shows its own "Incognito mode" privacy indicator whenever the field
-   it's typing into is flagged private (in any app) - and this codebase
-   has hit the general "the IME's own window briefly looks like the
-   foreground package" bug class before. Fixed by restricting both checks
-   to `BROWSER_PACKAGES`, and splitting `TITLE_KEYWORDS` (safe to include
-   the bare word - a single short string, no concatenation risk) from a
-   narrower `CONTENT_KEYWORDS` (multi-word phrases only, since Chrome's
-   tab-switcher button reports an incognito tab *count* in its content
-   description even at zero, so the bare word was present in the tree on
-   ordinary pages too).
-2. With the false positives above fixed, real-device logs then showed the
-   *title* check itself firing on every Chrome tab, incognito or not -
-   meaning `AccessibilityEvent.text` carries something other than a clean
-   per-tab title for Chrome specifically (unlike the Settings guard's use
-   of the same field, which does work correctly there). Rather than guess
-   a third time, the title check was demoted to log-only
-   (`GATE4_TITLE_DEBUG`) so the actual difference between a regular tab's
-   and an incognito tab's event text can be read directly out of logcat
-   and used to build a correct rule - see the raw text before touching
-   this again.
+**Real-world testing found two rounds of false positives before landing
+here, both instructive:**
 
-Deliberately no Settings toggle to disable it, same reasoning as the
-browsing can't be used to evade the rest of the cascade, so it shouldn't
-have an easy in-app off switch either. Not wired into the N-strikes/
-lockout counters or usage stats - it's an independent block, not treated
-as an explicit-content strike.
+1. The first version checked every app (not just browsers) and matched a
+   bare `"incognito"` against the *entire* accessibility tree's
+   concatenated text - fired on ordinary Chrome browsing and on Gboard,
+   which genuinely shows its own "Incognito mode" privacy indicator
+   whenever the field it's typing into is flagged private (in any app),
+   and this codebase has hit the general "the IME's own window briefly
+   looks like the foreground package" bug class before. Fixed by
+   restricting both checks to `BROWSER_PACKAGES`, and splitting
+   `TITLE_KEYWORDS` (safe to include the bare word - a single short
+   string, no concatenation risk) from a narrower `CONTENT_KEYWORDS`
+   (multi-word phrases only, since Chrome's tab-switcher button reports an
+   incognito tab *count* in its content description even at zero, so the
+   bare word was present in the tree on ordinary pages too).
+2. With those fixed, the *title* check then appeared to fire on every
+   Chrome tab in one round of testing - but on-device logging
+   (`GATE4_TITLE_DEBUG`, added specifically to check this rather than
+   guess again) showed the title field is in fact clean and correct
+   (`"Chrome: New tab"` vs. `"Chrome: New Incognito tab"`); the earlier
+   report was almost certainly an incognito tab left open from testing the
+   previous fix, not a real false positive. The title check is confirmed
+   working and is the primary signal.
+
+Deliberately no Settings toggle to disable this - the point is that
+private browsing can't be used to evade the rest of the cascade, so it
+shouldn't have an easy in-app off switch any more than the password-gated
+Settings/Accessibility screens do. Not wired into the N-strikes/lockout
+counters or usage stats - it's an independent block, not treated as an
+explicit-content strike.
 
 ## 4. Dropping in the real model
 
