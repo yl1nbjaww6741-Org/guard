@@ -6,25 +6,26 @@ import java.io.IOException
 
 object NsfwClassifierFactory {
 
-    const val SIGLIP_MODEL_ASSET = "siglip2_nsfw.onnx"
+    const val NUDENET_MODEL_ASSET = NudeNetDetector.ASSET_NAME
     const val ONNX_MODEL_ASSET = "nsfw.onnx"
     const val TFLITE_MODEL_ASSET = "nsfw.tflite"
     private const val TAG = "NsfwClassifierFactory"
 
     /**
-     * Prefers assets/siglip2_nsfw.onnx (SiglipNsfwClassifier - separates
-     * "sexy" from real nudity, NNAPI-accelerated, confirmed engaging on
-     * real hardware), then falls back to the legacy assets/nsfw.onnx
-     * (OnnxNsfwClassifier) and assets/nsfw.tflite (TFLiteNsfwClassifier) in
-     * that order if only those are present, so swapping the model file is
-     * the only thing needed to change backends - no caller-side changes.
+     * Prefers assets/320n.onnx (NudeNetDetector - label-set body-part
+     * detection gate, see its class doc for why this replaced the old
+     * whole-image SigLIP2 classifier), then falls back to the legacy
+     * assets/nsfw.onnx (OnnxNsfwClassifier) and assets/nsfw.tflite
+     * (TFLiteNsfwClassifier) in that order if only those are present, so
+     * swapping the model file is the only thing needed to change backends
+     * - no caller-side changes.
      */
     fun create(context: Context): NsfwClassifier {
-        if (assetExists(context, SIGLIP_MODEL_ASSET)) {
+        if (assetExists(context, NUDENET_MODEL_ASSET)) {
             try {
-                return SiglipNsfwClassifier(context, SIGLIP_MODEL_ASSET)
+                return NudeNetDetector(context, NUDENET_MODEL_ASSET)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load $SIGLIP_MODEL_ASSET, falling back", e)
+                Log.e(TAG, "Failed to load $NUDENET_MODEL_ASSET, falling back", e)
             }
         }
 

@@ -386,7 +386,7 @@ the home screen instead.
 ### Watching the cascade
 
 ```bash
-adb logcat -s ContentGuardService ScreenCapturer NsfwClassifierFactory BlurOverlayController
+adb logcat -s ContentGuardService ScreenCapturer NsfwClassifierFactory NudeNetDetector BlurOverlayController
 ```
 
 Every processed event logs exactly one `exit@GATE...` line (see
@@ -435,72 +435,112 @@ machine - none of this works in a sandbox without normal internet access):
    `DEFAULT_UNSAFE_CLASS_INDICES` in `TFLiteNsfwClassifier.kt` if you only
    want explicit content (hentai+porn) blocked.
 
-## 5. SigLIP2 model - separating "sexy" from real nudity (live, gate 7 default)
+## 5. NudeNet 320n - detection instead of classification (live, gate 7 default)
 
-GantMan's model and the older ONNX ViT model (`assets/nsfw.onnx`) both
-either lack a "suggestive but not explicit" class or fold it into NSFW.
-`prithivMLmods/siglip2-mini-explicit-content` has 5 classes (Anime
-Picture, Enticing & Sensual, Hentai, Pornography, Safe for Work) that
-separate "sensual" from actual porn/hentai - closer to "only block real
-nudity." This went through 3 stages, all now complete:
+Gate 7 previously ran `prithivMLmods/siglip2-mini-explicit-content`, a
+whole-image 5-class classifier. That was replaced because the underlying
+problem was **taxonomy, not model quality**: a whole-image classifier makes
+one global judgement, and "gym clothes" vs. real nudity share the same
+dominant visual signal (skin area + body shape) - no amount of threshold
+tuning on a single scalar score reliably separates them.
 
-1. **Export + quantize** (`tools/export_siglip_onnx.py`, run on your own
-   machine - needs Hugging Face access this project's sandbox doesn't
-   have: `pip install torch transformers onnx onnxruntime`, then just run
-   the script). Confirmed input size 224x224, mean/std (0.5, 0.5, 0.5) -
-   both read off the model's own processor config, not assumed. Uses
-   `dynamo=False` in the `torch.onnx.export()` call - the default
-   TorchDynamo-based exporter produces a graph that trips a real bug in
-   onnxruntime's quantizer (`ONNXQuantizer.__init__` unconditionally calls
-   `replace_gemm_with_matmul()`, which leaves a stale shape annotation on
-   the classifier head's Gemm node); the legacy tracer avoids it. Produces
-   `siglip2_mini_explicit.onnx` (fp32, 328MB) and
-   `siglip2_mini_explicit_int8.onnx` (dynamic QUInt8, 83MB) - both
-   committed under `models/` for reference.
-2. **NNAPI engagement spike** - confirmed on a real Find X9 Pro:
-   `executionProvider=NNAPI`, avg 148ms/inference. Two ways to re-check
-   this on any device: the throwaway instrumented test
-   (`app/src/androidTest/kotlin/com/contentguard/app/NnapiEngagementSpikeTest.kt`,
-   via `./gradlew connectedAndroidTest`), or the "Run NNAPI Spike
-   (SigLIP2)" debug button at the bottom of the Settings screen in a
-   normal installed debug APK (`SiglipNnapiSpike.kt`) - the latter is
-   easier since it needs no test harness, just an installed APK and
-   logcat (`adb logcat -s SiglipNnapiSpike`).
-3. **Full integration**: `SiglipNsfwClassifier.kt` implements the same
-   `NsfwClassifier` interface as every other gate-7 backend. Preprocessing
-   reuses `ViTPreprocessor` (identical mean/std convention, different
-   confirmed size). `NsfwClassifierFactory` now prefers
-   `assets/siglip2_nsfw.onnx` over the legacy `nsfw.onnx`/`nsfw.tflite`,
-   which still work as fallbacks if this model fails to load.
+`notAI-tech/NudeNet` v3's `320n` model is a body-part **detector**
+(YOLOv8-family, ~7MB ONNX, bundled directly in the `nudenet` PyPI wheel -
+no external download needed) instead of a whole-image classifier. Exposed
+vs. covered is encoded directly in its 18-label set (e.g. gym clothes -> a
+`*_COVERED` label -> never blocks), so the safe/unsafe distinction is a
+rule over labels, not a tuned threshold over one global score.
 
-   Per-class thresholds decide what actually blocks -
-   `SiglipNsfwClassifier.DEFAULT_CLASS_POLICIES` blocks **Pornography,
-   Hentai (0.45 each), and Enticing & Sensual (0.8)**. Enticing & Sensual
-   was briefly removed on the theory that it only meant "sexy but not
-   explicit," but real-world testing contradicted that: confirmed
-   full-nudity content scored ~98-99% Enticing & Sensual and under 3%
-   Pornography in the same frames - this model's own taxonomy evidently
-   classifies plain nudity under Enticing & Sensual and reserves
-   Pornography for more explicit sexual acts specifically, so it's back
-   and is in fact the operative "real nudity" signal, not a separate
-   "also block sexy content" add-on. Its threshold history: 0.6 -> 0.7 ->
-   0.6 -> 0.8. 0.7 avoided a gym-clothes false positive (0.676) but then
-   missed real borderline nudity scoring 0.59-0.60; 0.6 caught that but
-   then, once the pixel-based skin-region crop
-   (`SkinTonePrefilter.analyze()`) fixed the underlying dilution problem
-   and classifier confidence rose across the board, 0.6 started tripping
-   on plain dresses. Raised to 0.8 now that genuine nudity scores much
-   higher-confidence post-crop-fix, giving more headroom above non-nude
-   "sensual" content - the earlier 0.59-0.68 athletic-wear/borderline-
-   nudity overlap was measured before that fix and may no longer reflect
-   current scores. Safe for Work and Anime Picture are
-   logged on every inference (`adb logcat -s SiglipNsfwClassifier`, tag
-   `class=... prob=...`) but never block. `scoreNsfw()` returns
-   `max(classProb / classThreshold)` across the configured classes - a
-   ratio >= 1.0 means some class's own threshold was met, which always
-   trips the app's existing global `nsfwThreshold` slider (it tops out at
-   1.0) regardless of where you've set it; below 1.0 it scales with how
-   close the closest configured class got.
+### Model + runtime
+
+- **Asset**: `app/src/main/assets/320n.onnx`, extracted as-is from the
+  `nudenet` PyPI package (`pip download nudenet --no-deps`, unzip the
+  wheel, the model is at `nudenet/320n.onnx`). **FP32, not quantized** -
+  INT8 would need a static calibration dataset made of exactly the content
+  this app exists to avoid collecting, and quantization degrades
+  small-object recall worst, which is already this model's weakest point
+  (see "Known limitation" below).
+- **Execution provider**: XNNPACK (`OrtSession.SessionOptions.addXnnpack()`,
+  confirmed present in `onnxruntime-android:1.27.0`'s Java API via
+  `javap` against the real AAR from Maven Central), 2 threads
+  (`intra_op_num_threads`), CPU EP as automatic fallback if XNNPACK init
+  fails - same fallback pattern as every other gate-7 backend in this
+  project. Deliberately **not** NNAPI (deprecated on Android 15) and
+  **not** the NPU (its fixed per-call wake cost dominates for this
+  cascade's tiny, sporadic inferences).
+- **Input**: 320x320, NCHW float32, RGB, values in [0,1]. Letterboxed by
+  padding to a square on the **bottom/right only** (black fill, no
+  centering) then resizing - confirmed from `nudenet.py`'s own
+  `_read_image`/`cv2.copyMakeBorder` + `cv2.dnn.blobFromImage` recipe in
+  the PyPI package, not assumed.
+- **Output**: `output0`, shape `[1, 22, 2100]` - confirmed by loading the
+  actual ONNX graph and running it (`onnxruntime.InferenceSession.get_outputs()`
+  plus a real inference call). 4 box channels (`cx, cy, w, h`, absolute
+  320-space pixel coordinates, already grid+stride decoded in the graph) +
+  18 class-confidence channels (already sigmoid-activated in-graph -
+  confirmed by the output range on a random-noise input). **NMS is not
+  baked into the graph** - `NudeNetDetector` runs its own greedy
+  class-agnostic NMS (IoU 0.45, 0.2 candidate cutoff before NMS), matching
+  `nudenet.py`'s own `cv2.dnn.NMSBoxes(boxes, scores, 0.25, 0.45)` call.
+
+### Label-set gate, not a scalar threshold
+
+`NudeNetGatePolicy.DEFAULT_BLOCK_THRESHOLDS` (in `NudeNetDetector.kt`) is
+the only place block-list membership and per-label thresholds live -
+config-driven the same way `SiglipNsfwClassifier`'s (now removed)
+`DEFAULT_CLASS_POLICIES` was, a constructor-overridable map rather than
+scattered `if (label == ...)` checks. Only four labels gate blocking by
+default, each at 0.5: `FEMALE_GENITALIA_EXPOSED`, `MALE_GENITALIA_EXPOSED`,
+`BUTTOCKS_EXPOSED`, `ANUS_EXPOSED`. Every other label - all `*_COVERED`
+labels, `BELLY_EXPOSED`, `ARMPITS_EXPOSED`, `FEET_EXPOSED`, `FACE_MALE`,
+`FACE_FEMALE` - is absent from the map, which means it never blocks
+regardless of confidence.
+
+**`FEMALE_BREAST_EXPOSED`/`MALE_BREAST_EXPOSED` are intentionally excluded
+from the default block thresholds.** NudeNet has a documented tendency to
+mislabel male chests as `FEMALE_BREAST_EXPOSED` - for a cascade that also
+sees a lot of sport/gym content, blocking on that label would make
+shirtless men the dominant false-positive source. Both breast labels are
+still detected and logged (see below), just never gate blocking, unless
+you merge `NudeNetGatePolicy.BREAST_EXPOSED_THRESHOLDS` into the map
+passed to `NudeNetDetector`'s constructor after testing shows the
+false-positive rate is acceptable for your own usage.
+
+`NudeNetDetector.scoreNsfw()` (the `NsfwClassifier` interface method the
+existing cascade calls) returns 1f if any block-listed label's detection
+score exceeds its threshold, else 0f - same "always trips the app's
+capped-at-1.0 `nsfwThreshold` slider" trick `SiglipNsfwClassifier` used, so
+the label-set decision is authoritative regardless of where that slider
+sits, without needing to touch `ContentGuardService`'s existing
+threshold-compare line or any persisted setting.
+
+### Per-frame logging + timing instrumentation
+
+Every call to `NudeNetDetector.detect()`/`scoreNsfw()` logs one line (tag
+`NudeNetDetector`, also mirrored to `DebugLogBuffer` for the Settings
+"Debug log" card): the source package, the analyzed region's pixel
+dimensions, every post-NMS detection (label + score + box), the block
+decision, which execution provider actually served the inference, and a
+preprocess/inference/decision timing breakdown.
+`ContentGuardService.processFrame()` separately logs the capture-phase
+timing (`captureMs`) right before calling into the classifier, so the full
+capture -> preprocess -> inference -> decision chain is visible together
+in `adb logcat -s NudeNetDetector ContentGuardService` (or the Debug log
+card), tagged by the same package on every line.
+
+### Known limitation, deliberately not worked around yet
+
+320x320 is roughly a 4x downscale from a 1272px-class screen, and YOLO's
+stride-8 detection head needs ~16px at *model* resolution to fire on
+something - back-projected to the real screen, that's about 64px. A
+fullscreen photo or video is unaffected; a small feed thumbnail may go
+undetected. Rather than guess at a fix before real usage data justifies
+the extra cost, the per-frame logging above exists specifically so
+miss-rate can be measured first. `NudeNetDetector.TILED_ESCALATION_ENABLED`
+is a disabled-by-default stub flag for a future 2x2 tiled-inference
+escalation pass (`maybeRunTiledEscalation()`) - it's an unwired hook, not
+an implementation; don't flip it until tiled inference is actually built
+there.
 
 ## ColorOS / OPPO Find X9 Pro notes
 

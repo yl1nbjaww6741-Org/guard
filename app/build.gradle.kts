@@ -19,10 +19,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // assets/nsfw.onnx (or the legacy nsfw.tflite) is intentionally not
-    // shipped. NsfwClassifierFactory falls back to StubNsfwClassifier when
-    // neither file is present. Avoid aapt compressing the model if/when
-    // it's dropped in later - a compressed model can't be mmap'd.
+    // assets/320n.onnx (gate 7's live model, see NudeNetDetector.kt) is
+    // committed via Git LFS. The legacy assets/nsfw.onnx/nsfw.tflite
+    // fallbacks are intentionally not shipped - NsfwClassifierFactory falls
+    // back to StubNsfwClassifier when none of the three are present. Avoid
+    // aapt compressing model assets - a compressed model can't be mmap'd.
     androidResources {
         noCompress += listOf("tflite", "onnx")
     }
@@ -108,10 +109,10 @@ dependencies {
     implementation("org.tensorflow:tensorflow-lite:2.16.1")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
 
-    // ONNX Runtime Mobile - primary gate-7 backend (assets/nsfw.onnx). This
-    // build includes the NNAPI EP (NPU/GPU acceleration on-device) with
-    // automatic CPU fallback for unsupported ops or older devices; see
-    // OnnxNsfwClassifier for the session setup.
+    // ONNX Runtime Mobile - primary gate-7 backend (assets/320n.onnx, see
+    // NudeNetDetector). This build includes the XNNPACK EP (CPU, thread-
+    // pooled) with automatic plain-CPU-EP fallback if XNNPACK init fails;
+    // also used by the legacy OnnxNsfwClassifier fallback (NNAPI-preferring).
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.27.0")
 
     testImplementation("junit:junit:4.13.2")

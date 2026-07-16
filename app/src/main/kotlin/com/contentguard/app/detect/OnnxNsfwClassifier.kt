@@ -93,7 +93,7 @@ class OnnxNsfwClassifier(
     }
 
     /** Gate 7 entry point for the existing accessibility-event cascade (ContentGuardService). */
-    override fun scoreNsfw(bitmap: Bitmap): Float = runInference(bitmap).nsfwProb
+    override fun scoreNsfw(bitmap: Bitmap, packageName: String?): Float = runInference(bitmap).nsfwProb
 
     /** Richer standalone API for any direct caller that wants the full breakdown. */
     suspend fun classifyImage(bitmap: Bitmap): NsfwResult = withContext(Dispatchers.Default) {

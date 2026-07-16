@@ -1,7 +1,7 @@
 package com.contentguard.app.detect
 
 /** Which backend actually served the last inference - for on-device EP verification. */
-enum class ExecutionProvider { NNAPI, CPU }
+enum class ExecutionProvider { NNAPI, XNNPACK, CPU }
 
 /**
  * Rich result for direct callers (as opposed to [NsfwClassifier.scoreNsfw], which

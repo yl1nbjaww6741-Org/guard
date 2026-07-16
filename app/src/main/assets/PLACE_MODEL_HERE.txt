@@ -1,14 +1,15 @@
-NsfwClassifierFactory looks for siglip2_nsfw.onnx first, then nsfw.onnx,
+NsfwClassifierFactory looks for 320n.onnx first, then nsfw.onnx,
 then nsfw.tflite, then falls back to StubNsfwClassifier (always scores 0,
 never blocks) if none are present.
 
-As of this commit, siglip2_nsfw.onnx is the live gate-7 model
-(prithivMLmods/siglip2-mini-explicit-content, dynamic-QUInt8-quantized -
-see SiglipNsfwClassifier.kt for the NNAPI/CPU session setup, per-class
-threshold policy, and ViTPreprocessor.kt for the 224x224/mean-0.5/std-0.5
-preprocessing it expects). This is the one that actually separates "sexy"
-from real nudity - see SETUP.md section 5 for the full story and how to
-retune which classes block.
+As of this commit, 320n.onnx is the live gate-7 model (notAI-tech/NudeNet
+v3's 320n export, FP32, run via NudeNetDetector.kt with the XNNPACK
+execution provider). Unlike the earlier whole-image classifiers, this is a
+body-part detector - exposed vs. covered is encoded in its label set
+directly (see NudeNetGatePolicy in NudeNetDetector.kt for exactly which
+labels gate blocking and their thresholds), which is what lets it tell
+"gym clothes" apart from real nudity instead of relying on a single tuned
+scalar. See SETUP.md section 5 for the full story.
 
 nsfw.onnx (AdamCodd/vit-base-nsfw-detector, model_fp16.onnx variant - see
 OnnxNsfwClassifier.kt) is kept as a fallback if siglip2_nsfw.onnx fails to

@@ -249,7 +249,9 @@ class ContentGuardService : AccessibilityService() {
         // region stay near its real resolution instead.
         val cropRegion = unionOf(scan.imageBounds)
 
+        val captureStartNanos = System.nanoTime()
         val bitmap = screenCapturer.captureDownscaled(cropRegion = cropRegion)
+        val captureMs = (System.nanoTime() - captureStartNanos) / 1_000_000
         if (bitmap == null) {
             val line = "[$pkg] exit@GATE5_CAPTURE_THROTTLED_OR_FAILED"
             Log.d(TAG, line)
@@ -278,8 +280,9 @@ class ContentGuardService : AccessibilityService() {
 
         try {
             val inferenceStartNanos = System.nanoTime()
-            val score = nsfwClassifier.scoreNsfw(analysisBitmap)
+            val score = nsfwClassifier.scoreNsfw(analysisBitmap, pkg)
             prefs.recordInference((System.nanoTime() - inferenceStartNanos) / 1_000_000)
+            DebugLogBuffer.add(TAG, "[$pkg] captureMs=$captureMs")
 
             if (score < prefs.nsfwThreshold) {
                 exitSafe(pkg, "GATE7_BELOW_THRESHOLD score=$score")

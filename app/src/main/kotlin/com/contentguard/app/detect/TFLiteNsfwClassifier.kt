@@ -86,7 +86,7 @@ class TFLiteNsfwClassifier(
         imageProcessor = processorBuilder.build()
     }
 
-    override fun scoreNsfw(bitmap: Bitmap): Float {
+    override fun scoreNsfw(bitmap: Bitmap, packageName: String?): Float {
         var tensorImage = TensorImage(inputDataType)
         tensorImage.load(bitmap)
         tensorImage = imageProcessor.process(tensorImage)
