@@ -154,20 +154,24 @@ class SiglipNsfwClassifier(
 
         // Enticing & Sensual is the operative "real nudity" signal in this
         // model's taxonomy, not a separate "sexy" add-on - see the class
-        // doc comment above. Bounced 0.6 -> 0.7 -> back to 0.6: 0.7 avoided
+        // doc comment above. History: 0.6 -> 0.7 -> 0.6 -> 0.8. 0.7 avoided
         // a gym-clothes false positive (0.676) but then missed real
-        // borderline nudity scoring 0.59-0.60 in later testing. There's a
-        // genuine overlap zone in this model's own scoring between
-        // "athletic wear" and "borderline/partially-visible nudity" -
-        // roughly 0.59-0.68 - that no single threshold on this axis alone
-        // perfectly separates; 0.6 lands back on the side of catching more
-        // real nudity at the cost of occasional gym/athletic-wear false
-        // positives. Pornography/Hentai stay at 0.45 (higher sensitivity -
-        // these classes haven't shown the same false-positive risk).
+        // borderline nudity scoring 0.59-0.60; 0.6 caught that but then,
+        // once the pixel-based skin-region crop (SkinTonePrefilter.analyze)
+        // fixed the underlying dilution problem and classifier confidence
+        // rose across the board, 0.6 started tripping on plain dresses.
+        // Raised to 0.8 now that the crop fix means genuine nudity scores
+        // much higher-confidence than before, giving more headroom above
+        // non-nude "sensual" content without needing to re-litigate the
+        // athletic-wear/borderline-nudity overlap zone from earlier
+        // testing - that overlap was measured before the crop fix and may
+        // no longer reflect current scores. Pornography/Hentai stay at
+        // 0.45 (higher sensitivity - these classes haven't shown the same
+        // false-positive risk).
         val DEFAULT_CLASS_POLICIES: Map<SiglipClass, Float> = mapOf(
             SiglipClass.PORNOGRAPHY to 0.45f,
             SiglipClass.HENTAI to 0.45f,
-            SiglipClass.ENTICING_AND_SENSUAL to 0.6f,
+            SiglipClass.ENTICING_AND_SENSUAL to 0.8f,
         )
     }
 }

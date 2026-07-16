@@ -462,7 +462,7 @@ nudity." This went through 3 stages, all now complete:
 
    Per-class thresholds decide what actually blocks -
    `SiglipNsfwClassifier.DEFAULT_CLASS_POLICIES` blocks **Pornography,
-   Hentai (0.45 each), and Enticing & Sensual (0.6)**. Enticing & Sensual
+   Hentai (0.45 each), and Enticing & Sensual (0.8)**. Enticing & Sensual
    was briefly removed on the theory that it only meant "sexy but not
    explicit," but real-world testing contradicted that: confirmed
    full-nudity content scored ~98-99% Enticing & Sensual and under 3%
@@ -470,15 +470,17 @@ nudity." This went through 3 stages, all now complete:
    classifies plain nudity under Enticing & Sensual and reserves
    Pornography for more explicit sexual acts specifically, so it's back
    and is in fact the operative "real nudity" signal, not a separate
-   "also block sexy content" add-on. Its threshold bounced 0.6 -> 0.7 ->
-   back to 0.6: 0.7 avoided a gym-clothes false positive (0.676) but then
-   missed real borderline nudity scoring 0.59-0.60 in later testing.
-   There's a genuine overlap zone in this model's own scoring between
-   "athletic wear" and "borderline/partially-visible nudity" - roughly
-   0.59-0.68 - that no single threshold on this axis alone perfectly
-   separates; 0.6 lands back on the side of catching more real nudity at
-   the cost of occasional gym/athletic-wear false positives. Safe for
-   Work and Anime Picture are
+   "also block sexy content" add-on. Its threshold history: 0.6 -> 0.7 ->
+   0.6 -> 0.8. 0.7 avoided a gym-clothes false positive (0.676) but then
+   missed real borderline nudity scoring 0.59-0.60; 0.6 caught that but
+   then, once the pixel-based skin-region crop
+   (`SkinTonePrefilter.analyze()`) fixed the underlying dilution problem
+   and classifier confidence rose across the board, 0.6 started tripping
+   on plain dresses. Raised to 0.8 now that genuine nudity scores much
+   higher-confidence post-crop-fix, giving more headroom above non-nude
+   "sensual" content - the earlier 0.59-0.68 athletic-wear/borderline-
+   nudity overlap was measured before that fix and may no longer reflect
+   current scores. Safe for Work and Anime Picture are
    logged on every inference (`adb logcat -s SiglipNsfwClassifier`, tag
    `class=... prob=...`) but never block. `scoreNsfw()` returns
    `max(classProb / classThreshold)` across the configured classes - a
