@@ -167,17 +167,20 @@ class ContentGuardService : AccessibilityService() {
         // per-tab title for Chrome (unlike the Settings guard's use of the
         // same field, which does work correctly there). Logging the raw
         // text here instead of acting on it, so the next real incognito
-        // vs. regular tab comparison can be read directly out of logcat
-        // and used to build a title-based rule grounded in what Chrome
-        // actually sends - rather than guessing again. The content-based
-        // fallback in processFrame() is the only active blocking signal
-        // for now.
+        // vs. regular tab comparison can be read directly out of the
+        // Settings screen's Debug log card (DebugLogBuffer, not just adb
+        // logcat - the phone alone is enough to gather this) and used to
+        // build a title-based rule grounded in what Chrome actually sends,
+        // rather than guessing again. The content-based fallback in
+        // processFrame() is the only active blocking signal for now.
         if (IncognitoDetector.isBrowserPackage(packageName) &&
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         ) {
             val windowTitle = event.text.joinToString(" ")
             val wouldMatch = IncognitoDetector.matchesTitle(windowTitle)
-            Log.d(TAG, "[$packageName] GATE4_TITLE_DEBUG wouldMatch=$wouldMatch title=\"$windowTitle\"")
+            val line = "[$packageName] GATE4_TITLE_DEBUG wouldMatch=$wouldMatch title=\"$windowTitle\""
+            Log.d(TAG, line)
+            DebugLogBuffer.add(TAG, line)
         }
 
         if (!debouncer.shouldProcess(event)) {
