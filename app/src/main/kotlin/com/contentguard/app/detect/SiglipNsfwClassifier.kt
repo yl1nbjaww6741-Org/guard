@@ -154,21 +154,20 @@ class SiglipNsfwClassifier(
 
         // Enticing & Sensual is the operative "real nudity" signal in this
         // model's taxonomy, not a separate "sexy" add-on - see the class
-        // doc comment above. Raised 0.6 -> 0.7 after real-world testing
-        // found gym-clothes content scoring 0.676, directly overlapping
-        // confirmed-nudity scores seen as low as 0.65 - there's a genuine
-        // overlap zone in this model's own scoring between "athletic wear"
-        // and "borderline/partially-visible nudity" that no single
-        // threshold perfectly separates. 0.7 trades away catching that
-        // most-borderline nudity (only scoring in the 0.65-0.7 range) in
-        // exchange for not blocking gym/athletic wear - still catches the
-        // clear majority of confirmed nudity (0.74+) easily.
-        // Pornography/Hentai stay at 0.45 (higher sensitivity - these
-        // classes haven't shown the same false-positive risk).
+        // doc comment above. Bounced 0.6 -> 0.7 -> back to 0.6: 0.7 avoided
+        // a gym-clothes false positive (0.676) but then missed real
+        // borderline nudity scoring 0.59-0.60 in later testing. There's a
+        // genuine overlap zone in this model's own scoring between
+        // "athletic wear" and "borderline/partially-visible nudity" -
+        // roughly 0.59-0.68 - that no single threshold on this axis alone
+        // perfectly separates; 0.6 lands back on the side of catching more
+        // real nudity at the cost of occasional gym/athletic-wear false
+        // positives. Pornography/Hentai stay at 0.45 (higher sensitivity -
+        // these classes haven't shown the same false-positive risk).
         val DEFAULT_CLASS_POLICIES: Map<SiglipClass, Float> = mapOf(
             SiglipClass.PORNOGRAPHY to 0.45f,
             SiglipClass.HENTAI to 0.45f,
-            SiglipClass.ENTICING_AND_SENSUAL to 0.7f,
+            SiglipClass.ENTICING_AND_SENSUAL to 0.6f,
         )
     }
 }

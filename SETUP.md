@@ -390,7 +390,7 @@ nudity." This went through 3 stages, all now complete:
 
    Per-class thresholds decide what actually blocks -
    `SiglipNsfwClassifier.DEFAULT_CLASS_POLICIES` blocks **Pornography,
-   Hentai (0.45 each), and Enticing & Sensual (0.7)**. Enticing & Sensual
+   Hentai (0.45 each), and Enticing & Sensual (0.6)**. Enticing & Sensual
    was briefly removed on the theory that it only meant "sexy but not
    explicit," but real-world testing contradicted that: confirmed
    full-nudity content scored ~98-99% Enticing & Sensual and under 3%
@@ -398,14 +398,14 @@ nudity." This went through 3 stages, all now complete:
    classifies plain nudity under Enticing & Sensual and reserves
    Pornography for more explicit sexual acts specifically, so it's back
    and is in fact the operative "real nudity" signal, not a separate
-   "also block sexy content" add-on. Its threshold was raised 0.6 -> 0.7
-   after real-world testing found gym-clothes content scoring 0.676,
-   directly overlapping confirmed-nudity scores seen as low as 0.65 -
-   there's a genuine overlap zone in this model's own scoring between
-   "athletic wear" and "borderline/partially-visible nudity" that no
-   single threshold perfectly separates; 0.7 trades away catching the
-   most-borderline nudity in exchange for not blocking gym/athletic wear,
-   while still easily catching clearer confirmed nudity (0.74+). Safe for
+   "also block sexy content" add-on. Its threshold bounced 0.6 -> 0.7 ->
+   back to 0.6: 0.7 avoided a gym-clothes false positive (0.676) but then
+   missed real borderline nudity scoring 0.59-0.60 in later testing.
+   There's a genuine overlap zone in this model's own scoring between
+   "athletic wear" and "borderline/partially-visible nudity" - roughly
+   0.59-0.68 - that no single threshold on this axis alone perfectly
+   separates; 0.6 lands back on the side of catching more real nudity at
+   the cost of occasional gym/athletic-wear false positives. Safe for
    Work and Anime Picture are
    logged on every inference (`adb logcat -s SiglipNsfwClassifier`, tag
    `class=... prob=...`) but never block. `scoreNsfw()` returns
