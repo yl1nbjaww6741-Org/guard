@@ -114,15 +114,14 @@ class ScreenCapturer(
     companion object {
         private const val TAG = "ScreenCapturer"
 
-        // AccessibilityService.takeScreenshot() is itself rate-limited by
-        // the platform (ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT below
-        // roughly one call/second) - 900ms sits just under that floor,
-        // the fastest this can go without the OS itself starting to
-        // reject calls (which would cost the attempt for zero benefit).
-        // Was raised to 1500ms for battery; reverted to 900ms per explicit
-        // "make detection as fast as possible" request - this is a real
-        // battery-for-latency trade, not a free change.
-        private const val THROTTLE_FLOOR_MS = 900L
+        // History: 900ms (near platform floor) -> 1500ms (battery) -> 900ms
+        // (explicit "fast as possible" request) -> 1800ms. Doubled back up
+        // once the pixel-based skin-region crop made per-frame detection
+        // reliable enough that a slower cadence only costs latency (worst
+        // case ~2s before a genuinely explicit frame gets caught), not
+        // whether it gets caught at all - a better trade now than it would
+        // have been before that fix.
+        private const val THROTTLE_FLOOR_MS = 1800L
 
         const val TARGET_LONGEST_EDGE = 640
     }

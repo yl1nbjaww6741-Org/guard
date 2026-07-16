@@ -311,6 +311,19 @@ Net effect: best-case first-detection latency drops from ~300-600ms to
 roughly the same range but hit far more often (worst-case gap shrinks
 from ~2s to ~1s), at a real, deliberate battery cost.
 
+### Doubled back up for battery once detection became reliable
+
+Once the pixel-based skin-region crop (`SkinTonePrefilter.analyze()`)
+made per-frame detection reliable, the calculus above flipped: a slower
+capture cadence now only costs latency, not whether explicit content gets
+caught, since the classifier reliably catches it whenever it does get a
+look. `ScreenCapturer.THROTTLE_FLOOR_MS` doubled 900ms -> 1800ms and
+`ContentGuardService.STATIC_RECHECK_INTERVAL_MS` doubled 1000ms -> 2000ms
+together, roughly halving capture+inference frequency for a real battery
+win, at the cost of up to ~2s (from ~1s) before a fresh capture happens.
+`EventDebouncer.settleWindowMs` (100ms) was left as-is - it wasn't part
+of this specific trade.
+
 ### WebView was polluting the crop region in browsers
 
 Real-world testing found explicit content in Chrome consistently scoring
