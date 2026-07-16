@@ -337,6 +337,31 @@ capture falls back to the whole frame (same dilution risk, minus the
 false confidence of a mislabeled "targeted" crop) - worth retesting to
 confirm.
 
+### Gate 6 now finds *where* skin is, not just *whether*, pixel-based
+
+Real-world screenshots confirmed the root cause behind persistent misses
+on both native Reddit and Chrome: a photo post's actual explicit content
+typically occupies under half the screen, surrounded by real UI chrome
+(header/toolbar, username/NSFW tag/title text, vote/comment buttons,
+even the next post already peeking in) - sometimes with black
+letterboxing bars around the photo itself on top of that. This dilutes
+classifier confidence the same way regardless of whether the surrounding
+app is native Compose (Reddit) or a rendered webpage (Chrome), and
+accessibility-tree-based cropping (`NodeInspector`/`ScreenCapturer`'s
+`cropRegion`) can't be made reliable across every framework - Reddit's
+semantics-merging and Chrome's DOM/CSS rendering are two unrelated
+reasons precise bounds aren't always available.
+
+Rather than keep chasing framework-specific accessibility quirks,
+`SkinTonePrefilter.analyze()` now buckets the captured frame into an 8x8
+grid and returns the bounding region of wherever skin-toned pixels are
+actually concentrated, not just a global yes/no ratio. `processFrame`
+crops to that region (on top of whatever accessibility-based crop, if
+any, already applied) before running the classifier. This works
+identically no matter what drew the pixels, since it never touches the
+accessibility tree at all - a real, pixel-level view of where the
+explicit content actually is.
+
 ### Block dismissal now goes back *and* home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss

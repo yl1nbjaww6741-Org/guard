@@ -1,6 +1,7 @@
 package com.contentguard.app.service
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -257,14 +258,27 @@ class ContentGuardService : AccessibilityService() {
         }
         prefs.recordScreenshot()
 
-        try {
-            if (!SkinTonePrefilter.looksSkinLike(bitmap)) {
-                exitSafe(pkg, "GATE6_NO_SKIN_TONE")
-                return
-            }
+        val skinAnalysis = SkinTonePrefilter.analyze(bitmap)
+        if (!skinAnalysis.hasSkin) {
+            exitSafe(pkg, "GATE6_NO_SKIN_TONE")
+            bitmap.recycle()
+            return
+        }
 
+        // Refine to wherever skin is actually concentrated, on top of
+        // whatever crop (if any) the accessibility tree already gave us -
+        // real testing found a photo's surrounding UI chrome (header,
+        // username/title, vote/comment buttons, even the next post
+        // already peeking in) diluting classifier confidence the same way
+        // regardless of app/framework, since the accessibility-based crop
+        // can't reliably isolate the photo alone in every case. This
+        // works directly off pixels, so it doesn't depend on any
+        // particular app exposing precise bounds.
+        val analysisBitmap = skinAnalysis.region?.let { cropToRegion(bitmap, it) } ?: bitmap
+
+        try {
             val inferenceStartNanos = System.nanoTime()
-            val score = nsfwClassifier.scoreNsfw(bitmap)
+            val score = nsfwClassifier.scoreNsfw(analysisBitmap)
             prefs.recordInference((System.nanoTime() - inferenceStartNanos) / 1_000_000)
 
             if (score < prefs.nsfwThreshold) {
@@ -283,7 +297,21 @@ class ContentGuardService : AccessibilityService() {
             }
             withContext(Dispatchers.Main) { overlay.show(pkg) }
         } finally {
+            if (analysisBitmap !== bitmap) analysisBitmap.recycle()
             bitmap.recycle()
+        }
+    }
+
+    private fun cropToRegion(bitmap: Bitmap, region: Rect): Bitmap {
+        val left = region.left.coerceIn(0, bitmap.width - 1)
+        val top = region.top.coerceIn(0, bitmap.height - 1)
+        val right = region.right.coerceIn(left + 1, bitmap.width)
+        val bottom = region.bottom.coerceIn(top + 1, bitmap.height)
+        return try {
+            Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        } catch (e: Exception) {
+            Log.w(TAG, "cropToRegion failed, using full frame", e)
+            bitmap
         }
     }
 
