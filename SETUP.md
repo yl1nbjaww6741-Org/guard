@@ -394,6 +394,35 @@ Every processed event logs exactly one `exit@GATE...` line (see
 screen got through the cascade - `GATE1_WHITELIST` / `GATE2_DEBOUNCE` mean
 gate 1/2 stopped it, `GATE8_BLOCK` means it was blocked, etc.
 
+### Gate 4: private/incognito browsing is blocked outright, browser-agnostic
+
+Browsers set `FLAG_SECURE` on private/incognito windows specifically to
+block screenshots and screen recording - which also blocks
+`AccessibilityService.takeScreenshot()` (what `ScreenCapturer` uses) with
+no exception for accessibility services. That means gates 5-7 (capture,
+skin-tone prefilter, NN classifier) structurally cannot see into a private
+tab at all, on any browser, ever - no amount of retuning fixes that,
+because the classifier never gets a frame to look at.
+
+`IncognitoDetector.kt` sidesteps this by detecting *presence* instead of
+inspecting content: it matches a small set of phrases
+(`incognito`, `private browsing`, `private tab`, `private window`,
+`inprivate`, `secret mode`) against `NodeInspector.scan().visibleText`
+(the same accessibility-tree text/content-description scan gate 3 already
+does every frame) - the semantic accessibility tree isn't blocked by
+`FLAG_SECURE`, only the rendering/capture pipeline is, so this works
+identically regardless of which browser is in front. Checked in
+`ContentGuardService.processFrame()` before gate 3's image check
+(`GATE4_INCOGNITO_DETECTED`), so it fires even on a text-only private page
+with no images at all, and blocks with the same overlay as a real
+`GATE8_BLOCK` - same persist-until-dismiss-or-app-switch behavior, no new
+UI. Deliberately no Settings toggle to disable it, same reasoning as the
+password-gated Settings/Accessibility screens: the point is that private
+browsing can't be used to evade the rest of the cascade, so it shouldn't
+have an easy in-app off switch either. Not wired into the N-strikes/
+lockout counters or usage stats - it's an independent block, not treated
+as an explicit-content strike.
+
 ## 4. Dropping in the real model
 
 Put your quantized classifier at `app/src/main/assets/nsfw.tflite`. See

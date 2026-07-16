@@ -8,6 +8,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.core.content.ContextCompat
 import com.contentguard.app.capture.ScreenCapturer
+import com.contentguard.app.detect.IncognitoDetector
 import com.contentguard.app.detect.NodeInspector
 import com.contentguard.app.detect.NsfwClassifier
 import com.contentguard.app.detect.NsfwClassifierFactory
@@ -229,15 +230,24 @@ class ContentGuardService : AccessibilityService() {
             root.recycle()
         }
 
+        // Checked before GATE3's image-content check, deliberately - this
+        // blocks private/incognito browsing outright regardless of whether
+        // there's an image on screen at all, since capture (gates 5-7)
+        // structurally cannot see into a FLAG_SECURE window anyway. See
+        // IncognitoDetector's doc comment for why this is text-based
+        // rather than pixel-based.
+        if (IncognitoDetector.matches(scan.visibleText)) {
+            val line = "[$pkg] exit@GATE4_INCOGNITO_DETECTED"
+            Log.i(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+            withContext(Dispatchers.Main) { overlay.show(pkg) }
+            return
+        }
+
         if (!scan.hasImages) {
             exitSafe(pkg, "GATE3_NO_IMAGE_NODES")
             return
         }
-
-        // Gate 4 (text/URL signal) is a hook, not a shipped blocklist - out
-        // of scope per the design doc (no bundled lists, no cloud calls).
-        // scan.visibleText is exactly where a known-good/known-bad keyword
-        // or URL check would plug in, before we ever call takeScreenshot().
 
         // Crop to the union of detected image regions at capture time, not
         // after the whole-frame downscale - cropping post-downscale (an
