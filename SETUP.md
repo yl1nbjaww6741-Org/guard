@@ -68,6 +68,21 @@ so `assembleDebug` succeeds with `StubNsfwClassifier` active (gate 7 always
 scores 0, nothing ever gets blocked, capture/inspection cascade otherwise
 runs normally so you can see it working in logs).
 
+### Getting a build without building it yourself
+
+Every push to `main` triggers `.github/workflows/build.yml`, which builds
+the debug APK and publishes it to a single rolling GitHub Release tagged
+`latest-debug` (repo's Releases page) - not an Actions artifact. Actions
+artifacts are billed against a separate, small per-account storage quota
+that filled up fast under this project's push cadence
+("Failed to CreateArtifact: Artifact storage quota has been hit", which
+only clears on GitHub's own 6-12 hour recalculation cycle, not by deleting
+old runs or waiting a few minutes); release assets use the repo's normal
+storage instead, so this doesn't recur. The release's single APK asset is
+overwritten (`gh release upload ... --clobber`) on every run rather than
+creating a new release per push, so there's one stable URL to bookmark
+instead of a growing list.
+
 ### Signing (why updates install in place)
 
 `app/debug.keystore` is a committed, fixed debug signing key (see

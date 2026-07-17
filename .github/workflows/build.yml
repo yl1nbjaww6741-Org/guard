@@ -5,6 +5,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Needed to create/update the rolling release + upload its asset below -
+# without this, some default token permission setups reject the release
+# API calls with a 403.
+permissions:
+  contents: write
+
 jobs:
   assemble-debug:
     runs-on: ubuntu-latest
@@ -49,17 +55,36 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: contentguard-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          # These are debug builds you download and install right after
-          # each run, not something needing long-term retention - the
-          # default 90-day retention meant every push's APK piled up
-          # against the account's Actions artifact storage quota until it
-          # got fully hit ("Failed to CreateArtifact: Artifact storage
-          # quota has been hit"). A short retention lets old ones expire
-          # and free that quota automatically instead of accumulating.
-          retention-days: 1
+      # Publishes to a single rolling "latest-debug" GitHub Release instead
+      # of an Actions artifact. Release assets are billed against the
+      # repo's normal storage, not the separate Actions artifact storage
+      # quota - the previous actions/upload-artifact step kept failing with
+      # "Failed to CreateArtifact: Artifact storage quota has been hit"
+      # once enough debug builds (each run's APK) piled up against that
+      # quota, even with a short retention-days set. This sidesteps that
+      # quota entirely rather than continuing to manage around it.
+      #
+      # Uses the `gh` CLI (preinstalled on GitHub-hosted runners, already
+      # authenticated via GITHUB_TOKEN) directly instead of a third-party
+      # release action, matching this workflow's existing preference for
+      # official/well-known actions only. One tag/release ("latest-debug")
+      # is created once and its asset is replaced (--clobber) on every
+      # run, so there's a single stable URL to bookmark rather than a new
+      # release cluttering the list on every push.
+      - name: Publish APK to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          APK_PATH=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          TAG="latest-debug"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "ContentGuard debug build (rolling)" \
+              --notes "Automated debug build - always reflects the latest push to main, not a versioned release." \
+              --prerelease
+          fi
+          gh release upload "$TAG" "$APK_PATH" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --notes "Automated debug build from commit ${GITHUB_SHA} - always reflects the latest push to main, not a versioned release."
