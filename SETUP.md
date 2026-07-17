@@ -683,6 +683,44 @@ escalation pass (`maybeRunTiledEscalation()`) - it's an unwired hook, not
 an implementation; don't flip it until tiled inference is actually built
 there.
 
+## 6. Self-commitment: requiring a second reviewer before weakening a gate
+
+This app is deliberately hard to loosen from *inside* itself (no in-app
+off-switch for incognito detection, no way to disable the accessibility
+watchdog from Settings) - but none of that stops someone from just asking
+Claude Code (or editing the Kotlin directly) to loosen a threshold and
+push a new build. `.github/CODEOWNERS` plus branch protection closes that
+gap by requiring a second person's real approval before any change to the
+gate/policy files can merge - not just a social convention, an actual
+GitHub-enforced check that self-approval doesn't satisfy.
+
+**Setup (one-time, via github.com - no API/CLI covers repo admin settings
+like these):**
+
+1. **Settings > Collaborators and teams > Add people** - add the trusted
+   second reviewer with **Write** access (not Admin, so they can't change
+   these protection settings themselves).
+2. **Settings > Branches > Add branch protection rule**, branch name
+   `main`:
+   - Enable **"Require a pull request before merging"** - this is what
+     blocks direct pushes to `main` entirely, for everyone (including
+     Claude Code sessions) from this point on.
+   - Enable **"Require review from Code Owners"** - `.github/CODEOWNERS`
+     already names the reviewer for the specific gate/policy paths, so
+     GitHub auto-requests their review only on PRs touching those files,
+     not every change.
+
+**What changes day to day**: instead of a direct push landing on `main`
+immediately, changes land as a PR; CI (`build.yml`) only builds/publishes
+once that PR is actually merged, not at PR-open time (no `pull_request`
+trigger is configured - only `push: [main]` and manual dispatch), so the
+reviewer would be reviewing a diff without a build/CI signal unless a
+`pull_request` trigger is added separately. GitHub notifies the reviewer
+automatically once a matching PR opens (assuming their own GitHub
+notification settings - email or the mobile app's push - are actually
+on), not on a rejected direct-push attempt, which fails silently with no
+notification to anyone.
+
 ## ColorOS / OPPO Find X9 Pro notes
 
 See [`docs/COLOROS.md`](docs/COLOROS.md) for battery-optimization exemption,

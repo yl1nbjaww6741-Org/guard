@@ -1,0 +1,26 @@
+# Requires review from @yl1nbajww6741 before merging any change to the
+# files/directories below - the actual gating/blocking logic, not the
+# whole repo. This exists as a deliberate self-commitment device: the
+# point is that gate thresholds and policies can't be quietly loosened by
+# a single person alone (self-approval doesn't satisfy GitHub's required-
+# review check), including via a Claude Code session asked to "help" with
+# a weaker build. See SETUP.md for the full reasoning.
+#
+# Only takes effect once main's branch protection has "Require a pull
+# request before merging" + "Require review from Code Owners" enabled -
+# see SETUP.md for the walkthrough. Until then this file has no effect.
+
+# The classifier, gate policy, and incognito detection - everything that
+# decides what gets blocked and what doesn't.
+/app/src/main/kotlin/com/contentguard/app/detect/ @yl1nbajww6741
+
+# Cascade orchestration, the accessibility watchdog, and the N-strikes/
+# kill-on-lockout logic.
+/app/src/main/kotlin/com/contentguard/app/service/ @yl1nbajww6741
+
+# Permissions and service/receiver declarations - so protection can't be
+# quietly removed at the manifest level instead of the Kotlin level.
+/app/src/main/AndroidManifest.xml @yl1nbajww6741
+
+# Threshold/lockout defaults and limits.
+/app/src/main/kotlin/com/contentguard/app/scope/PrefsRepository.kt @yl1nbajww6741
