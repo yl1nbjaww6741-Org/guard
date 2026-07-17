@@ -96,6 +96,24 @@ mode, whitelist, threshold, lockout duration, usage stats). With every
 build signed identically, `adb install -r` (or tapping a downloaded APK
 again) always updates in place and every setting survives.
 
+### Downgrade protection
+
+The fixed signing key above is what makes in-place updates possible at
+all - but it also means a saved older APK (e.g. one built before some
+protection was tightened) installs over the current one just as easily as
+a newer one does, unless something stops it. Android's own installer
+already refuses this (`INSTALL_FAILED_VERSION_DOWNGRADE`) whenever the new
+APK's `versionCode` is lower than the installed one - but `versionCode`
+was a static `1` on every build, so every APK this project ever produced
+compared *equal*, not lower, and the check never actually fired. `app/build.gradle.kts`
+now derives `versionCode` from build time (minutes since a fixed epoch)
+instead, so each build is guaranteed strictly newer than the last and the
+stock downgrade check finally has something to act on. This only blocks
+the normal tap-to-install/`adb install -r` path - `adb install -d`
+(explicit allow-downgrade) can still force it, but that needs USB
+debugging enabled plus a connected computer, a materially higher-effort
+bypass than resurfacing a saved APK file.
+
 ## 3. Install + enable, via adb
 
 ```bash

@@ -4,6 +4,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Minutes since 2024-01-01T00:00:00Z, so every build gets a strictly
+// larger versionCode than the last one - a static versionCode meant every
+// build compared equal, so Android's stock downgrade check
+// (INSTALL_FAILED_VERSION_DOWNGRADE, which only fires on a *lower*
+// versionCode) never actually refused installing an older/weaker saved
+// APK over whatever's currently installed. Time-based rather than a git
+// commit count so it doesn't depend on CI's checkout fetching full
+// history (this repo's checkout is shallow) and works the same for local
+// builds without a git history at all.
+val versionCodeFromBuildTime = ((System.currentTimeMillis() / 1000 / 60) - 28401120L).toInt()
+
 android {
     namespace = "com.contentguard.app"
     compileSdk = 35
@@ -12,7 +23,7 @@ android {
         applicationId = "com.contentguard.app"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
+        versionCode = versionCodeFromBuildTime
         versionName = "0.1.0"
         // Needed to run the throwaway NNAPI-engagement spike in
         // androidTest/ via `./gradlew connectedAndroidTest`.
