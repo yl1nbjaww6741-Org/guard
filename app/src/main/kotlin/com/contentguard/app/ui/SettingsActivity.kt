@@ -125,6 +125,7 @@ private fun SettingsScreen(prefs: PrefsRepository) {
     var mode by remember { mutableStateOf(prefs.mode) }
     var threshold by remember { mutableFloatStateOf(prefs.nsfwThreshold) }
     var dismissOnBlock by remember { mutableStateOf(prefs.dismissOnBlock) }
+    var captureThrottleMs by remember { mutableStateOf(prefs.captureThrottleMs) }
     var whitelist by remember { mutableStateOf(prefs.getWhitelist()) }
     var explicitKeywords by remember { mutableStateOf(prefs.getExplicitKeywords()) }
     var explicitKeywordsCustomized by remember { mutableStateOf(prefs.explicitKeywordsAreCustomized()) }
@@ -243,6 +244,14 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                     onThresholdChangeFinished = { prefs.nsfwThreshold = threshold },
                     dismissOnBlock = dismissOnBlock,
                     onDismissOnBlockChange = { dismissOnBlock = it; prefs.dismissOnBlock = it },
+                )
+            }
+
+            item {
+                CaptureCadenceSection(
+                    throttleMs = captureThrottleMs,
+                    onThrottleChange = { captureThrottleMs = it },
+                    onThrottleChangeFinished = { prefs.captureThrottleMs = captureThrottleMs },
                 )
             }
 
@@ -684,6 +693,33 @@ private fun ThresholdSection(
                 Text("Auto-dismiss (go back) on block")
                 Switch(checked = dismissOnBlock, onCheckedChange = onDismissOnBlockChange)
             }
+        }
+    }
+}
+
+@Composable
+private fun CaptureCadenceSection(
+    throttleMs: Long,
+    onThrottleChange: (Long) -> Unit,
+    onThrottleChangeFinished: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Capture cadence: ${throttleMs}ms", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Minimum time between screenshots while a monitored app is open. Lower is " +
+                    "faster detection, higher saves battery - the periodic static-content " +
+                    "recheck follows this automatically, ${PrefsRepository.STATIC_RECHECK_MARGIN_MS}ms behind it.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Slider(
+                value = throttleMs.toFloat(),
+                onValueChange = { onThrottleChange(it.toLong()) },
+                onValueChangeFinished = onThrottleChangeFinished,
+                valueRange = PrefsRepository.MIN_CAPTURE_THROTTLE_MS.toFloat()..PrefsRepository.MAX_CAPTURE_THROTTLE_MS.toFloat(),
+            )
         }
     }
 }

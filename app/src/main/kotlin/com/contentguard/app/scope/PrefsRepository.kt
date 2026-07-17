@@ -37,6 +37,30 @@ class PrefsRepository(context: Context) {
             prefs.edit().putBoolean(KEY_DISMISS_ON_BLOCK, value).apply()
         }
 
+    /**
+     * Minimum time between screenshots while a monitored app is open -
+     * previously ScreenCapturer's own hardcoded THROTTLE_FLOOR_MS, now
+     * user-tunable from Settings since it's a real latency-vs-battery trade
+     * (see SETUP.md's "Tuned for detection speed over battery" / "Doubled
+     * back up for battery" history) rather than a one-size-fits-all value.
+     */
+    var captureThrottleMs: Long
+        get() = prefs.getLong(KEY_CAPTURE_THROTTLE_MS, DEFAULT_CAPTURE_THROTTLE_MS)
+        set(value) {
+            prefs.edit().putLong(KEY_CAPTURE_THROTTLE_MS, value.coerceIn(MIN_CAPTURE_THROTTLE_MS, MAX_CAPTURE_THROTTLE_MS)).apply()
+        }
+
+    /**
+     * Kept in lockstep with [captureThrottleMs] rather than independently
+     * configurable - it only ever needs to stay a little above the capture
+     * throttle floor (see ContentGuardService.recheckStaticContent's doc
+     * comment), or the periodic backstop would just spend ticks getting
+     * throttled away for no benefit. A second slider for this specifically
+     * would let the user create that exact bad configuration for no gain.
+     */
+    val staticRecheckIntervalMs: Long
+        get() = captureThrottleMs + STATIC_RECHECK_MARGIN_MS
+
     fun getWhitelist(): Set<String> = prefs.getStringSet(KEY_WHITELIST, null)?.toSet() ?: emptySet()
 
     fun setWhitelisted(packageName: String, whitelisted: Boolean) {
@@ -239,10 +263,26 @@ class PrefsRepository(context: Context) {
         private const val KEY_STRIKES_PREFIX = "strike_times_"
         private const val KEY_LOCKOUT_PREFIX = "lockout_until_"
         private const val KEY_PASSWORD_HASH = "password_hash"
+        private const val KEY_CAPTURE_THROTTLE_MS = "capture_throttle_ms"
         private const val PASSWORD_SALT = "contentguard-v1-"
         const val DEFAULT_THRESHOLD = 0.80f
         const val DEFAULT_LOCKOUT_MINUTES = 1
         const val DEFAULT_STRIKES_TO_LOCKOUT = 3
         private const val STRIKE_WINDOW_MS = 15 * 60 * 1000L
+
+        // 1800ms default matches ScreenCapturer's old hardcoded value - see
+        // SETUP.md's capture-cadence history for how that number was
+        // reached. Floor of 900ms because going lower buys nothing: that's
+        // roughly the platform's own takeScreenshot() rate limit
+        // (ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT), so the OS starts
+        // rejecting calls before a lower slider value would even matter.
+        const val DEFAULT_CAPTURE_THROTTLE_MS = 1800L
+        const val MIN_CAPTURE_THROTTLE_MS = 900L
+        const val MAX_CAPTURE_THROTTLE_MS = 5000L
+
+        // Not private - SettingsActivity's capture-cadence card references
+        // this directly so its description text can't drift from the
+        // actual margin staticRecheckIntervalMs applies.
+        const val STATIC_RECHECK_MARGIN_MS = 200L
     }
 }

@@ -9,6 +9,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import androidx.annotation.RequiresApi
+import com.contentguard.app.scope.PrefsRepository
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.concurrent.Executor
 import kotlin.math.max
@@ -18,6 +19,7 @@ import kotlin.math.max
 class ScreenCapturer(
     private val service: AccessibilityService,
     private val callbackExecutor: Executor,
+    private val prefs: PrefsRepository,
 ) {
 
     private var lastCaptureAt = 0L
@@ -41,7 +43,7 @@ class ScreenCapturer(
      */
     suspend fun captureDownscaled(longestEdgePx: Int = TARGET_LONGEST_EDGE, cropRegion: Rect? = null): Bitmap? {
         val now = SystemClock.elapsedRealtime()
-        if (now - lastCaptureAt < THROTTLE_FLOOR_MS) {
+        if (now - lastCaptureAt < prefs.captureThrottleMs) {
             return null
         }
 
@@ -114,14 +116,15 @@ class ScreenCapturer(
     companion object {
         private const val TAG = "ScreenCapturer"
 
-        // History: 900ms (near platform floor) -> 1500ms (battery) -> 900ms
-        // (explicit "fast as possible" request) -> 1800ms. Doubled back up
-        // once the pixel-based skin-region crop made per-frame detection
-        // reliable enough that a slower cadence only costs latency (worst
-        // case ~2s before a genuinely explicit frame gets caught), not
-        // whether it gets caught at all - a better trade now than it would
-        // have been before that fix.
-        private const val THROTTLE_FLOOR_MS = 1800L
+        // Was a hardcoded constant here - history: 900ms (near platform
+        // floor) -> 1500ms (battery) -> 900ms (explicit "fast as possible"
+        // request) -> 1800ms (once the pixel-based skin-region crop made
+        // per-frame detection reliable enough that a slower cadence only
+        // costs latency, not whether content gets caught). Now
+        // PrefsRepository.captureThrottleMs, user-tunable from Settings
+        // instead of another manual retune - see
+        // PrefsRepository.DEFAULT_CAPTURE_THROTTLE_MS for the current
+        // default (still 1800ms) and MIN/MAX for the slider's range.
 
         const val TARGET_LONGEST_EDGE = 640
     }

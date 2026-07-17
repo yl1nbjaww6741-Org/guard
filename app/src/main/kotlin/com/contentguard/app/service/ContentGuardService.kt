@@ -72,7 +72,7 @@ class ContentGuardService : AccessibilityService() {
         prefs = PrefsRepository(applicationContext)
         scopePolicy = AppScopePolicy(prefs)
         debouncer = EventDebouncer()
-        screenCapturer = ScreenCapturer(this, ContextCompat.getMainExecutor(this))
+        screenCapturer = ScreenCapturer(this, ContextCompat.getMainExecutor(this), prefs)
         nsfwClassifier = NsfwClassifierFactory.create(applicationContext)
         overlay = BlurOverlayController(
             service = this,
@@ -220,7 +220,9 @@ class ContentGuardService : AccessibilityService() {
      * all, so real content could sit on screen indefinitely without ever
      * being re-scanned. This periodically re-queues a frame for whatever
      * app is currently foreground, independent of events, so dwelling on
-     * static content still gets caught. CONFLATED channel + ScreenCapturer's
+     * static content still gets caught. Interval is prefs.staticRecheckIntervalMs
+     * (derived from the user-tunable capture cadence in Settings, see
+     * PrefsRepository), not a fixed constant. CONFLATED channel + ScreenCapturer's
      * own throttle mean redundant ticks are cheap while the screen is
      * genuinely in use - they just exit at GATE5_CAPTURE_THROTTLED_OR_FAILED
      * when a real event already triggered a capture recently. Skips entirely
@@ -249,7 +251,7 @@ class ContentGuardService : AccessibilityService() {
      */
     private suspend fun recheckStaticContent() {
         while (serviceScope.isActive) {
-            delay(STATIC_RECHECK_INTERVAL_MS)
+            delay(prefs.staticRecheckIntervalMs)
 
             // Unlike onAccessibilityEvent (naturally quiet with the screen
             // off, since no window-state changes occur), this loop is timer-
@@ -537,12 +539,5 @@ class ContentGuardService : AccessibilityService() {
         // Matched against the window's own title, not screen content - see
         // the comment at the call site.
         private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "accessibility")
-
-        // Just above ScreenCapturer's own 1800ms throttle floor, so this
-        // rarely fires more often than a real capture could happen anyway.
-        // Doubled back up from 1000ms alongside that floor - see
-        // ScreenCapturer.THROTTLE_FLOOR_MS for why this is a safe trade
-        // now that per-frame detection is reliable.
-        private const val STATIC_RECHECK_INTERVAL_MS = 2000L
     }
 }

@@ -462,6 +462,28 @@ wasn't just a redundant safety net. Fixed by applying the identical
 `isApplicationWindow` check to this loop's `root.windowId` before
 capture/scoring can happen at all.
 
+### Capture cadence is now user-tunable instead of a hardcoded constant
+
+`ScreenCapturer.THROTTLE_FLOOR_MS` and `ContentGuardService.STATIC_RECHECK_INTERVAL_MS`
+were both hardcoded - every retune documented above ("Tuned for detection
+speed over battery", "Doubled back up for battery") meant editing the
+constant and shipping a new build, for a trade-off (detection latency vs.
+battery) that's genuinely device/user-dependent rather than one-size-fits-all.
+
+`PrefsRepository.captureThrottleMs` replaces `ScreenCapturer`'s constant,
+editable from a new "Capture cadence" card in Settings (same slider
+pattern as the NSFW threshold and lockout cards) - default unchanged at
+1800ms, range 900ms (the platform's own `takeScreenshot()` rate-limit
+floor, so lower buys nothing) to 5000ms. `PrefsRepository.staticRecheckIntervalMs`
+is derived from it (`captureThrottleMs + 200ms`) rather than exposed as
+its own slider - it only ever needs to stay a little above the capture
+throttle floor (see `recheckStaticContent()`'s doc comment for why), so a
+second independent slider would just let the user create that specific
+bad configuration for no benefit. `ScreenCapturer` now takes a
+`PrefsRepository` in its constructor and reads `captureThrottleMs` fresh
+on every capture call, so a Settings change takes effect immediately, no
+service restart needed.
+
 ### WebView was polluting the crop region in browsers
 
 Real-world testing found explicit content in Chrome consistently scoring
