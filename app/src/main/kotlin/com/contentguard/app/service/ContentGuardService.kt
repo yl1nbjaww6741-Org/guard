@@ -10,6 +10,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 import androidx.core.content.ContextCompat
 import com.contentguard.app.capture.ScreenCapturer
 import com.contentguard.app.detect.IncognitoDetector
+import com.contentguard.app.detect.KeywordBlocklist
 import com.contentguard.app.detect.NodeInspector
 import com.contentguard.app.detect.NsfwClassifier
 import com.contentguard.app.detect.NsfwClassifierFactory
@@ -285,6 +286,29 @@ class ContentGuardService : AccessibilityService() {
             // scratch (see IncognitoDetector's doc comment).
             if (!overlay.isVisible()) {
                 val line = "[$pkg] exit@GATE4_INCOGNITO_DETECTED content keyword=\"$matchedContentKeyword\""
+                Log.i(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+                withContext(Dispatchers.Main) { overlay.show(pkg) }
+            }
+            return
+        }
+
+        // Blocks on explicit search intent - what's typed into an address
+        // bar or search box - before any page/image ever loads. Matches
+        // against scan.inputFieldText specifically (editable nodes only),
+        // not the whole-page visibleText above, so this doesn't inherit
+        // gate 4's false-positive history from matching ordinary page
+        // content. See KeywordBlocklist's doc comment. Checked before
+        // GATE3 for the same reason as the incognito checks above - this
+        // blocks outright regardless of whether an image is on screen.
+        val matchedExplicitKeyword = if (IncognitoDetector.isBrowserPackage(pkg)) {
+            KeywordBlocklist.matchingKeyword(scan.inputFieldText)
+        } else {
+            null
+        }
+        if (matchedExplicitKeyword != null) {
+            if (!overlay.isVisible()) {
+                val line = "[$pkg] exit@GATE4B_KEYWORD_BLOCKED keyword=\"$matchedExplicitKeyword\""
                 Log.i(TAG, line)
                 DebugLogBuffer.add(TAG, line)
                 withContext(Dispatchers.Main) { overlay.show(pkg) }

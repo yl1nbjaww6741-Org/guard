@@ -7,6 +7,10 @@ data class NodeScanResult(
     val hasImages: Boolean,
     val imageBounds: List<Rect>,
     val visibleText: String,
+    // Text from editable nodes only (isEditable, e.g. an address bar or
+    // search box), separate from visibleText - see KeywordBlocklist for why
+    // search-intent matching deliberately doesn't use the whole-page text.
+    val inputFieldText: String,
 )
 
 /** Gate 3 of the cascade: is there even image-shaped content on screen? */
@@ -46,10 +50,13 @@ object NodeInspector {
 
     /** Does not recycle [root] - the caller owns that node's lifecycle. */
     fun scan(root: AccessibilityNodeInfo?): NodeScanResult {
-        if (root == null) return NodeScanResult(hasImages = false, imageBounds = emptyList(), visibleText = "")
+        if (root == null) {
+            return NodeScanResult(hasImages = false, imageBounds = emptyList(), visibleText = "", inputFieldText = "")
+        }
 
         val bounds = mutableListOf<Rect>()
         val text = StringBuilder()
+        val inputText = StringBuilder()
         var visited = 0
         var hasSubstantialContent = false
 
@@ -94,6 +101,16 @@ object NodeInspector {
             if (node.isVisibleToUser()) {
                 node.text?.let { if (it.isNotBlank()) text.append(it).append(' ') }
                 node.contentDescription?.let { if (it.isNotBlank()) text.append(it).append(' ') }
+
+                // isEditable (not a className check) is the framework-provided
+                // signal for "this is a text input," independent of whatever
+                // concrete widget class each browser actually uses for its
+                // address/search bar - and a WebView's rendered page body
+                // never sets this on the nodes it exposes, so this stays
+                // scoped to what's actually being typed, not page content.
+                if (node.isEditable) {
+                    node.text?.let { if (it.isNotBlank()) inputText.append(it).append(' ') }
+                }
             }
 
             for (i in 0 until node.childCount) {
@@ -109,6 +126,11 @@ object NodeInspector {
         }
 
         walk(root, 0)
-        return NodeScanResult(bounds.isNotEmpty() || hasSubstantialContent, bounds, text.toString().trim())
+        return NodeScanResult(
+            hasImages = bounds.isNotEmpty() || hasSubstantialContent,
+            imageBounds = bounds,
+            visibleText = text.toString().trim(),
+            inputFieldText = inputText.toString().trim(),
+        )
     }
 }

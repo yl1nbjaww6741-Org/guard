@@ -559,6 +559,42 @@ Settings/Accessibility screens do. Not wired into the N-strikes/lockout
 counters or usage stats - it's an independent block, not treated as an
 explicit-content strike.
 
+### Gate 4b: keyword-based search blocking, on search intent not page content
+
+`KeywordBlocklist.kt` blocks a browser outright the moment an explicit
+search term is typed into an address bar or search box, before any page
+or image ever loads - same placement in `processFrame` as gate 4 above,
+checked before GATE3's image-content check, for the same reason: this
+should block regardless of whether an image is even on screen yet.
+
+Deliberately matches against a *new*, narrower text source -
+`NodeScanResult.inputFieldText` - rather than reusing gate 4's
+`visibleText` whole-page scan. `NodeInspector.scan()` now also collects
+text from nodes where `isEditable` is true (the framework's own signal for
+"this is a text input," not a className guess - works the same regardless
+of which concrete widget class a given browser uses for its address bar),
+kept in a separate field from the general page-text scan. Matching against
+the whole page instead would catch far more than intended: health/biology
+articles, sex-ed material, and ordinary news coverage all legitimately
+contain many of these words, and gate 4 already hit exactly this failure
+mode once (see above) before its root cause was found. A rendered
+WebView's page body is never exposed as an editable node's own text, so
+restricting to `inputFieldText` keeps this to what's actually being
+searched for.
+
+`KeywordBlocklist.EXPLICIT_KEYWORDS` favors high-precision terms - known
+adult platform names (`pornhub`, `xvideos`, etc. - unambiguous by
+themselves) and explicit-content genre phrases (`"xxx video"`, `"nude
+pics"`, ...) - over bare anatomical terms, which show up constantly in
+ordinary non-adult contexts and would make even this narrower scope noisy.
+Not exhaustive by design - a fixed starting set of the terms someone would
+actually type to search for adult content, easy to extend later based on
+real `GATE4B_KEYWORD_BLOCKED keyword="..."` log activity, the same
+diagnose-from-logs pattern gate 4 now follows.
+
+Restricted to `IncognitoDetector.BROWSER_PACKAGES` (same set gate 4 uses),
+and deliberately no Settings toggle, same reasoning as gate 4.
+
 ## 4. Dropping in the real model
 
 Put your quantized classifier at `app/src/main/assets/nsfw.tflite`. See
