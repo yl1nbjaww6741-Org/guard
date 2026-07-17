@@ -495,8 +495,11 @@ inspecting content, via two signals, both restricted to
   `GATE4_INCOGNITO_DETECTED title="..."` and blocks immediately.
 - **Content fallback**: `processFrame()` matches the narrower
   `CONTENT_KEYWORDS` against `NodeInspector.scan().visibleText` (the same
-  tree scan gate 3 already does every frame), for cases where the title
-  alone didn't carry the signal. Logs `GATE4_INCOGNITO_DETECTED content`.
+  tree scan gate 3 already does every frame, restricted to nodes
+  `isVisibleToUser()` reports as actually on screen - see point 3 below),
+  for cases where the title alone didn't carry the signal. Logs
+  `GATE4_INCOGNITO_DETECTED content keyword="..."`, naming the specific
+  keyword that matched.
 
 Both block with the same overlay as a real `GATE8_BLOCK` - same
 persist-until-dismiss-or-app-switch behavior, no new UI.
@@ -526,16 +529,28 @@ here, both instructive:**
    previous fix, not a real false positive.
 3. Even with the title logic confirmed correct in isolation, Chrome kept
    coming back fully blocked on real-device retesting, and the actual
-   cause hasn't been root-caused yet - something about Chrome specifically
-   is still misfiring somewhere beyond what `GATE4_TITLE_DEBUG` checked.
-   **Chrome's package IDs are temporarily commented out of
-   `IncognitoDetector.BROWSER_PACKAGES`** so normal Chrome use isn't broken
-   in the meantime - incognito detection is currently inactive for Chrome
-   specifically (other browsers, e.g. Firefox/Edge/Samsung Internet, are
-   unaffected and still covered). Pick this back up by re-adding Chrome's
-   package IDs and gathering full-frame logs (`ContentGuardService` +
-   `NudeNetDetector` around a real incognito session) to find what's
-   actually triggering the block before assuming another keyword fix.
+   cause wasn't root-caused at the time - something about Chrome
+   specifically was still misfiring somewhere beyond what
+   `GATE4_TITLE_DEBUG` checked. Chrome's package IDs were temporarily
+   commented out of `IncognitoDetector.BROWSER_PACKAGES` so normal Chrome
+   use wasn't broken in the meantime.
+
+   **Root cause, found on a later pass**: `NodeInspector.scan()`'s
+   `visibleText` - despite the name - never actually checked
+   `isVisibleToUser()`. It walked and concatenated text/contentDescription
+   from *every* node reachable from the root, including anything off-screen
+   or sitting in a collapsed/hidden panel, not just what was actually
+   showing. The content-based check (unlike the title check) also ran
+   continuously - every real event plus every 2s static-content recheck -
+   with no debug logging of *which* keyword matched, so a stray
+   `CONTENT_KEYWORDS` match anywhere in Chrome's tree had both a much wider
+   surface to fire on and no way to diagnose it when it did. Fixed by (1)
+   gating `NodeInspector`'s text collection on `isVisibleToUser()`, and (2)
+   `IncognitoDetector.matchingContentKeyword()` now surfacing which keyword
+   matched in the `GATE4_INCOGNITO_DETECTED content keyword="..."` log line.
+   Chrome's package IDs are back in `BROWSER_PACKAGES` on that basis - if
+   this recurs, the log now says which keyword fired instead of leaving
+   another unexplained report to re-investigate from scratch.
 
 Deliberately no Settings toggle to disable this - the point is that
 private browsing can't be used to evade the rest of the cascade, so it

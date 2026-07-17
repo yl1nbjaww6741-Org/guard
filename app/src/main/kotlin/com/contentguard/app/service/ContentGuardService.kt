@@ -272,11 +272,23 @@ class ContentGuardService : AccessibilityService() {
         // browsing outright regardless of whether there's an image on
         // screen at all, since capture (gates 5-7) structurally cannot see
         // into a FLAG_SECURE window anyway.
-        if (IncognitoDetector.isBrowserPackage(pkg) && IncognitoDetector.matchesContent(scan.visibleText)) {
-            val line = "[$pkg] exit@GATE4_INCOGNITO_DETECTED content"
-            Log.i(TAG, line)
-            DebugLogBuffer.add(TAG, line)
-            withContext(Dispatchers.Main) { overlay.show(pkg) }
+        val matchedContentKeyword = if (IncognitoDetector.isBrowserPackage(pkg)) {
+            IncognitoDetector.matchingContentKeyword(scan.visibleText)
+        } else {
+            null
+        }
+        if (matchedContentKeyword != null) {
+            // Logs which keyword matched, not just that gate 4 fired - if this
+            // is ever a false positive on an ordinary (non-incognito) tab, the
+            // log immediately says what tripped it instead of leaving another
+            // unexplained "Chrome fully blocked" report to re-investigate from
+            // scratch (see IncognitoDetector's doc comment).
+            if (!overlay.isVisible()) {
+                val line = "[$pkg] exit@GATE4_INCOGNITO_DETECTED content keyword=\"$matchedContentKeyword\""
+                Log.i(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+                withContext(Dispatchers.Main) { overlay.show(pkg) }
+            }
             return
         }
 

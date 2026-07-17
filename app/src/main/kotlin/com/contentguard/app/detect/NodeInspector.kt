@@ -82,8 +82,19 @@ object NodeInspector {
                 hasSubstantialContent = true
             }
 
-            node.text?.let { if (it.isNotBlank()) text.append(it).append(' ') }
-            node.contentDescription?.let { if (it.isNotBlank()) text.append(it).append(' ') }
+            // isVisibleToUser() gate matters specifically for IncognitoDetector's
+            // content-based check (the only consumer of visibleText) - without
+            // it, a node scrolled off-screen or sitting in a collapsed/hidden
+            // panel still contributes its text/contentDescription here, so a
+            // stray "private tab"-style label anywhere in the window's tree
+            // (not just what's actually on screen) could false-positive gate 4
+            // even though nothing matching is visible to the user. Doesn't
+            // affect hasImages/imageBounds above - those are geometry-only and
+            // already require a real size regardless of this filter.
+            if (node.isVisibleToUser()) {
+                node.text?.let { if (it.isNotBlank()) text.append(it).append(' ') }
+                node.contentDescription?.let { if (it.isNotBlank()) text.append(it).append(' ') }
+            }
 
             for (i in 0 until node.childCount) {
                 if (visited >= MAX_NODES) break

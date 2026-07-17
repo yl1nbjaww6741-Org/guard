@@ -39,7 +39,7 @@ package com.contentguard.app.detect
  *    ordinary, non-incognito pages too. [CONTENT_KEYWORDS] (used against
  *    that whole-tree text) is deliberately narrower than [TITLE_KEYWORDS]
  *    (used against the window's own title, a single short string with no
- *    concatenation risk) for exactly this reason - see [matchesContent].
+ *    concatenation risk) for exactly this reason - see [matchingContentKeyword].
  *
  * Deliberately no Settings toggle to disable this - the whole point is
  * that private/incognito mode can't be used to evade the rest of the
@@ -55,22 +55,30 @@ object IncognitoDetector {
      * on an unrelated app (Gboard, or anything else) no matter what text
      * transiently appears in its own accessibility tree.
      *
-     * Chrome's own package IDs are deliberately OUT of this set for now -
+     * Chrome's own package IDs were previously pulled out of this set -
      * real-device testing kept reporting Chrome fully blocked even after
-     * the title check was confirmed correct in isolation
-     * (GATE4_TITLE_DEBUG showed "Chrome: New tab" not matching and "Chrome:
-     * New Incognito tab" matching, exactly as intended), so something else
-     * about Chrome specifically is still misfiring that hasn't been root-
-     * caused yet. Pulled out entirely rather than half-fixed so normal
-     * Chrome use isn't broken while this gets revisited - re-add
-     * "com.android.chrome" (and the channel variants below) once the real
-     * cause is found.
+     * the title check was confirmed correct in isolation (GATE4_TITLE_DEBUG
+     * showed "Chrome: New tab" not matching and "Chrome: New Incognito tab"
+     * matching, exactly as intended). Root cause found on closer read of
+     * [NodeInspector.scan]: the content-based check below matches against
+     * *all* text/contentDescription reachable from the root node, with no
+     * check for whether a node is actually visible on screen - so a stray
+     * "private tab"-style label sitting off-screen or in a collapsed panel
+     * anywhere in Chrome's tree could match regardless of what's actually
+     * showing, and unlike the title check there was no logging to show
+     * which keyword/node caused it. Fixed by (1) gating NodeInspector's text
+     * collection on `isVisibleToUser()`, so only what's actually on screen
+     * can match, and (2) [matchingContentKeyword] surfacing which keyword
+     * matched in the exit log, so a recurrence is a direct lookup instead of
+     * another guess. Re-enabled here on that basis - if GATE4_INCOGNITO_DETECTED
+     * content still fires on ordinary Chrome browsing, the logged keyword is
+     * the next lead, not a re-run of the whole investigation.
      */
     val BROWSER_PACKAGES = setOf(
-        // "com.android.chrome",
-        // "com.chrome.beta",
-        // "com.chrome.dev",
-        // "com.chrome.canary",
+        "com.android.chrome",
+        "com.chrome.beta",
+        "com.chrome.dev",
+        "com.chrome.canary",
         "org.mozilla.firefox",
         "org.mozilla.firefox_beta",
         "org.mozilla.fenix",
@@ -117,7 +125,17 @@ object IncognitoDetector {
 
     fun matchesTitle(text: String): Boolean = containsAny(text, TITLE_KEYWORDS)
 
-    fun matchesContent(text: String): Boolean = containsAny(text, CONTENT_KEYWORDS)
+    // Returns which keyword matched, not just whether one did - the title
+    // check had GATE4_TITLE_DEBUG logging to show exactly what it saw before
+    // being trusted; the content check had no equivalent, which is exactly
+    // why a real false-positive here (a stray "private tab"-style label
+    // somewhere in the tree) was undiagnosable last time instead of being a
+    // quick keyword-and-source lookup.
+    fun matchingContentKeyword(text: String): String? {
+        if (text.isBlank()) return null
+        val lower = text.lowercase()
+        return CONTENT_KEYWORDS.firstOrNull { lower.contains(it) }
+    }
 
     private fun containsAny(text: String, keywords: List<String>): Boolean {
         if (text.isBlank()) return false
