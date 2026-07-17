@@ -17,15 +17,24 @@ package com.contentguard.app.detect
  * Restricting matches to editable input fields keeps this to what someone
  * is actively searching for, not incidental page content.
  *
- * The keyword list favors high-precision terms - known adult platform
+ * [EXPLICIT_KEYWORDS] favors high-precision terms - known adult platform
  * names and explicit-content genre words - over bare anatomical terms,
  * which appear constantly in ordinary, non-adult contexts and would make
- * even the narrower input-field scope noisy. Not exhaustive by design:
- * this is a fixed starting set of the terms someone would actually type to
- * search for adult content, not an attempt to enumerate every possible
- * adult site or slang term that exists.
+ * even the narrower input-field scope noisy. Not exhaustive by design: a
+ * starting set of the terms someone would actually type to search for
+ * adult content, not an attempt to enumerate every possible adult site or
+ * slang term that exists - see [PrefsRepository.getExplicitKeywords] for
+ * the editable, persisted set actually used at runtime (this constant is
+ * only its default until customized).
  *
- * Deliberately no Settings toggle, same reasoning as IncognitoDetector.
+ * No dedicated on/off Settings toggle, same reasoning as IncognitoDetector -
+ * but unlike that gate, the keyword *content* itself is deliberately
+ * editable through the same password-gated Settings screen threshold/
+ * lockout/whitelist already use, not hardcoded. That's a real, accepted
+ * trade-off: clearing every keyword does functionally disable this gate,
+ * same as setting the NSFW threshold to 1.0 already can for gates 6/7 -
+ * kept editable anyway because a fixed, unreviewable list can't be tuned
+ * for false positives/negatives the developer actually observes.
  */
 object KeywordBlocklist {
 
@@ -46,9 +55,10 @@ object KeywordBlocklist {
         "stripchat", "bongacams", "myfreecams",
     )
 
-    fun matchingKeyword(text: String): String? {
+    /** [keywords] defaults to the built-in list; callers pass PrefsRepository's stored set instead when available. */
+    fun matchingKeyword(text: String, keywords: Set<String> = EXPLICIT_KEYWORDS): String? {
         if (text.isBlank()) return null
         val lower = text.lowercase()
-        return EXPLICIT_KEYWORDS.firstOrNull { lower.contains(it) }
+        return keywords.firstOrNull { lower.contains(it) }
     }
 }

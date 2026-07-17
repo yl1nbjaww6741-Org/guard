@@ -68,6 +68,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.contentguard.app.R
 import com.contentguard.app.admin.ContentGuardDeviceAdminReceiver
+import com.contentguard.app.detect.KeywordBlocklist
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.scope.ScopeMode
 import com.contentguard.app.service.ContentGuardService
@@ -111,6 +112,8 @@ private fun SettingsScreen(prefs: PrefsRepository) {
     var threshold by remember { mutableFloatStateOf(prefs.nsfwThreshold) }
     var dismissOnBlock by remember { mutableStateOf(prefs.dismissOnBlock) }
     var whitelist by remember { mutableStateOf(prefs.getWhitelist()) }
+    var explicitKeywords by remember { mutableStateOf(prefs.getExplicitKeywords()) }
+    var explicitKeywordsCustomized by remember { mutableStateOf(prefs.explicitKeywordsAreCustomized()) }
     var monitored by remember { mutableStateOf(prefs.getMonitoredSet()) }
     var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
     var deviceAdminActive by remember { mutableStateOf(isDeviceAdminActive(context)) }
@@ -219,6 +222,28 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                     onThresholdChangeFinished = { prefs.nsfwThreshold = threshold },
                     dismissOnBlock = dismissOnBlock,
                     onDismissOnBlockChange = { dismissOnBlock = it; prefs.dismissOnBlock = it },
+                )
+            }
+
+            item {
+                KeywordBlocklistSection(
+                    keywords = explicitKeywords,
+                    customized = explicitKeywordsCustomized,
+                    onAdd = { keyword ->
+                        prefs.addExplicitKeyword(keyword)
+                        explicitKeywords = prefs.getExplicitKeywords()
+                        explicitKeywordsCustomized = prefs.explicitKeywordsAreCustomized()
+                    },
+                    onRemove = { keyword ->
+                        prefs.removeExplicitKeyword(keyword)
+                        explicitKeywords = prefs.getExplicitKeywords()
+                        explicitKeywordsCustomized = prefs.explicitKeywordsAreCustomized()
+                    },
+                    onResetToDefault = {
+                        prefs.resetExplicitKeywordsToDefault()
+                        explicitKeywords = prefs.getExplicitKeywords()
+                        explicitKeywordsCustomized = prefs.explicitKeywordsAreCustomized()
+                    },
                 )
             }
 
@@ -616,6 +641,85 @@ private fun ThresholdSection(
             ) {
                 Text("Auto-dismiss (go back) on block")
                 Switch(checked = dismissOnBlock, onCheckedChange = onDismissOnBlockChange)
+            }
+        }
+    }
+}
+
+@Composable
+private fun KeywordBlocklistSection(
+    keywords: Set<String>,
+    customized: Boolean,
+    onAdd: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onResetToDefault: () -> Unit,
+) {
+    var newKeyword by remember { mutableStateOf("") }
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Explicit search keywords (${keywords.size})", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Blocks a browser immediately when one of these is typed into an address bar " +
+                    "or search box, before any page loads. Starts from a built-in default list " +
+                    "(${KeywordBlocklist.EXPLICIT_KEYWORDS.size} terms) - add or remove as needed below.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (customized) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Customized - no longer the built-in default list.", style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = newKeyword,
+                    onValueChange = { newKeyword = it },
+                    label = { Text("Add keyword") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(onClick = {
+                    if (newKeyword.isNotBlank()) {
+                        onAdd(newKeyword)
+                        newKeyword = ""
+                    }
+                }) { Text("Add") }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (expanded) "▾ Hide list" else "▸ Show list",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.clickable { expanded = !expanded },
+                )
+                Button(onClick = onResetToDefault, enabled = customized) { Text("Reset to default") }
+            }
+            if (expanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Column(modifier = Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                    keywords.sorted().forEach { keyword ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            Text(keyword, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Remove",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.clickable { onRemove(keyword) },
+                            )
+                        }
+                    }
+                }
             }
         }
     }

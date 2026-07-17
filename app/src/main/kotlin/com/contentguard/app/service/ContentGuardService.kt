@@ -302,7 +302,7 @@ class ContentGuardService : AccessibilityService() {
         // GATE3 for the same reason as the incognito checks above - this
         // blocks outright regardless of whether an image is on screen.
         val matchedExplicitKeyword = if (IncognitoDetector.isBrowserPackage(pkg)) {
-            KeywordBlocklist.matchingKeyword(scan.inputFieldText)
+            KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
         } else {
             null
         }

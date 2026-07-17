@@ -2,6 +2,7 @@ package com.contentguard.app.scope
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.contentguard.app.detect.KeywordBlocklist
 import java.security.MessageDigest
 
 /**
@@ -51,6 +52,38 @@ class PrefsRepository(context: Context) {
         if (monitored) next.add(packageName) else next.remove(packageName)
         prefs.edit().putStringSet(KEY_MONITORED, next).apply()
     }
+
+    /**
+     * Gate 4b's active keyword set - starts from [KeywordBlocklist.EXPLICIT_KEYWORDS]
+     * (the built-in default) until the user customizes it via Settings, at
+     * which point the stored set becomes authoritative rather than layered
+     * on top of the default. Editable the same way threshold/lockout/
+     * whitelist already are - password-gated Settings, not a dedicated
+     * on/off switch (see IncognitoDetector/KeywordBlocklist doc comments
+     * for why this feature itself has no such switch).
+     */
+    fun getExplicitKeywords(): Set<String> =
+        prefs.getStringSet(KEY_EXPLICIT_KEYWORDS, null)?.toSet() ?: KeywordBlocklist.EXPLICIT_KEYWORDS
+
+    fun setExplicitKeywords(keywords: Set<String>) {
+        val normalized = keywords.map { it.trim().lowercase() }.filter { it.isNotBlank() }.toSet()
+        prefs.edit().putStringSet(KEY_EXPLICIT_KEYWORDS, normalized).apply()
+    }
+
+    fun addExplicitKeyword(keyword: String) {
+        setExplicitKeywords(getExplicitKeywords() + keyword)
+    }
+
+    fun removeExplicitKeyword(keyword: String) {
+        setExplicitKeywords(getExplicitKeywords() - keyword)
+    }
+
+    /** Reverts to the built-in default list by clearing the stored override entirely. */
+    fun resetExplicitKeywordsToDefault() {
+        prefs.edit().remove(KEY_EXPLICIT_KEYWORDS).apply()
+    }
+
+    fun explicitKeywordsAreCustomized(): Boolean = prefs.contains(KEY_EXPLICIT_KEYWORDS)
 
     /**
      * Not real battery-percentage accounting - Android doesn't expose that
@@ -192,6 +225,7 @@ class PrefsRepository(context: Context) {
         private const val PREFS_NAME = "content_guard_prefs"
         private const val KEY_MODE = "scope_mode"
         private const val KEY_WHITELIST = "whitelist_packages"
+        private const val KEY_EXPLICIT_KEYWORDS = "explicit_keywords"
         private const val KEY_MONITORED = "monitored_packages"
         private const val KEY_THRESHOLD = "nsfw_threshold"
         private const val KEY_DISMISS_ON_BLOCK = "dismiss_on_block"

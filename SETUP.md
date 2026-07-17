@@ -587,13 +587,23 @@ adult platform names (`pornhub`, `xvideos`, etc. - unambiguous by
 themselves) and explicit-content genre phrases (`"xxx video"`, `"nude
 pics"`, ...) - over bare anatomical terms, which show up constantly in
 ordinary non-adult contexts and would make even this narrower scope noisy.
-Not exhaustive by design - a fixed starting set of the terms someone would
+Not exhaustive by design - a starting set of the terms someone would
 actually type to search for adult content, easy to extend later based on
 real `GATE4B_KEYWORD_BLOCKED keyword="..."` log activity, the same
 diagnose-from-logs pattern gate 4 now follows.
 
-Restricted to `IncognitoDetector.BROWSER_PACKAGES` (same set gate 4 uses),
-and deliberately no Settings toggle, same reasoning as gate 4.
+Restricted to `IncognitoDetector.BROWSER_PACKAGES` (same set gate 4 uses).
+No dedicated on/off Settings toggle, same reasoning as gate 4 - but unlike
+gate 4, the keyword list itself is editable: `PrefsRepository.getExplicitKeywords()`
+starts from `KeywordBlocklist.EXPLICIT_KEYWORDS` until customized, at which
+point the stored set replaces the default rather than layering on top of
+it. The Settings screen's "Explicit search keywords" card (password-gated,
+same as every other Settings card) lets the developer add/remove terms and
+reset back to the built-in list. This is a real, accepted trade-off -
+clearing every keyword functionally disables the gate, the same way
+setting the NSFW threshold to 1.0 already can for gates 6/7 - kept
+editable anyway because a fixed, unreviewable list can't be tuned for
+false positives/negatives actually observed on a real device.
 
 ## 4. Dropping in the real model
 
