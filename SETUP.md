@@ -432,13 +432,17 @@ identically no matter what drew the pixels, since it never touches the
 accessibility tree at all - a real, pixel-level view of where the
 explicit content actually is.
 
-### Block dismissal now goes back *and* home
+### Block dismissal goes back twice, then home
 
 Tapping "OK" on the fake-crash dialog (or pressing back, if "Auto-dismiss
-on block" is on) now performs `GLOBAL_ACTION_BACK` followed by
-`GLOBAL_ACTION_HOME`, not just back - back alone could still leave you
-inside the same app on a different screen; home guarantees you land on
-the home screen instead.
+on block" is on) performs `GLOBAL_ACTION_BACK` **twice** (200ms apart, so
+each transition actually finishes before the next fires) followed by
+`GLOBAL_ACTION_HOME` (`ContentGuardService.dismissBlockedApp()`). One back
+press alone often only closes an in-app photo/video viewer without
+leaving the app itself - which meant Recents' task-switcher thumbnail for
+that app could still show whatever explicit content was last rendered
+right before the overlay went up, even though the overlay itself was
+gone. Two back presses plus home closes that gap.
 
 ### Watching the cascade
 

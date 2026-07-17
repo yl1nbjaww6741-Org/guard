@@ -75,13 +75,11 @@ class ContentGuardService : AccessibilityService() {
             service = this,
             onBackKeyPressed = {
                 if (prefs.dismissOnBlock) {
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                    performGlobalAction(GLOBAL_ACTION_HOME)
+                    serviceScope.launch(Dispatchers.Main) { dismissBlockedApp() }
                 }
             },
             onOkTapped = {
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                performGlobalAction(GLOBAL_ACTION_HOME)
+                serviceScope.launch(Dispatchers.Main) { dismissBlockedApp() }
             },
         )
         passwordGuardOverlay = PasswordGuardOverlayController(
@@ -384,6 +382,24 @@ class ContentGuardService : AccessibilityService() {
             Log.w(TAG, "cropToRegion failed, using full frame", e)
             bitmap
         }
+    }
+
+    /**
+     * Backs out of a dismissed block twice, not once, before landing on
+     * the home screen. A single back-press often only closes an in-app
+     * photo/video viewer without leaving the app itself - which meant
+     * Recents' task-switcher thumbnail for that app could still show
+     * whatever explicit content was last rendered right before the
+     * overlay went up, even though the overlay itself was gone. The delay
+     * between each action gives its UI transition a real chance to finish
+     * before the next one fires, rather than racing/coalescing them.
+     */
+    private suspend fun dismissBlockedApp() {
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        delay(200)
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        delay(200)
+        performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
     /** Fails open (true) if the window can't be found - matches prior behavior for that case. */
