@@ -18,6 +18,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -119,6 +120,10 @@ private fun SettingsScreen(prefs: PrefsRepository) {
     var activeLockouts by remember { mutableStateOf(prefs.getActiveLockouts()) }
     var hasPassword by remember { mutableStateOf(prefs.hasPassword()) }
     var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
+    // Collapsed by default - with every launchable app on the device
+    // rendered as its own row, this list alone made the Settings screen a
+    // very long single page. Collapsed, it's just a one-line summary.
+    var appsExpanded by remember { mutableStateOf(false) }
 
     // Re-check accessibility-enabled/device-admin state and refresh usage
     // stats whenever we come back to the foreground - e.g. after the user
@@ -231,20 +236,28 @@ private fun SettingsScreen(prefs: PrefsRepository) {
             }
 
             item {
-                Text(
-                    text = "Apps",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(16.dp),
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { appsExpanded = !appsExpanded }
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Text(text = "Apps (${apps.size})", style = MaterialTheme.typography.titleMedium)
+                    Text(if (appsExpanded) "▾ Hide" else "▸ Show", style = MaterialTheme.typography.bodyMedium)
+                }
             }
 
-            items(apps, key = { it.packageName }) { app ->
-                AppRow(
-                    app = app,
-                    monitored = isMonitored(app.packageName),
-                    onToggle = { setMonitored(app.packageName, it) },
-                )
-                HorizontalDivider()
+            if (appsExpanded) {
+                items(apps, key = { it.packageName }) { app ->
+                    AppRow(
+                        app = app,
+                        monitored = isMonitored(app.packageName),
+                        onToggle = { setMonitored(app.packageName, it) },
+                    )
+                    HorizontalDivider()
+                }
             }
 
             item {
