@@ -21,6 +21,19 @@
         </intent>
     </queries>
 
+    <!-- Surfaces every installed package in the Apps list, not just ones
+         with a launcher icon - background services, input methods (see
+         ContentGuardService.recheckStaticContent's IME-window comment for
+         why those specifically matter), and other OEM system apps that
+         could still end up monitored/whitelisted but were previously
+         unfindable and untoggleable from Settings. Safe to use here despite
+         Play Store restricting it: this app is only ever sideloaded (see
+         SETUP.md's GitHub-Release-based distribution), never submitted to
+         Play, so that policy doesn't apply. -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
     <!-- Requested so SettingsActivity can deep-link the user to the OS
          "ignore battery optimizations" dialog. ColorOS's own battery
          manager (see docs/COLOROS.md) is separate and must be handled

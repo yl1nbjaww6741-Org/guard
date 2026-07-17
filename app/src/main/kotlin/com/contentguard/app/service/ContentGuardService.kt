@@ -239,6 +239,13 @@ class ContentGuardService : AccessibilityService() {
      * wrong app entirely while real content sat unscanned underneath.
      * Asking the OS what's actually active right now sidesteps that whole
      * class of bug rather than trying to enumerate every spurious source.
+     *
+     * Also applies the same isApplicationWindow check onAccessibilityEvent
+     * already does, which this loop was missing entirely - rootInActiveWindow
+     * isn't restricted to TYPE_APPLICATION, and real-device logs showed the
+     * IME's own window (com.google.android.inputmethod.latin) repeatedly
+     * becoming "the active window" from typing alone, with no app ever
+     * opened, getting captured and scored every tick as a result.
      */
     private suspend fun recheckStaticContent() {
         while (serviceScope.isActive) {
@@ -264,9 +271,21 @@ class ContentGuardService : AccessibilityService() {
 
             val root = rootInActiveWindow
             val pkg = root?.packageName?.toString()
+            val windowId = root?.windowId
             @Suppress("DEPRECATION")
             root?.recycle()
             if (pkg == null) continue
+            // Same defense onAccessibilityEvent already applies to the
+            // event-driven path (see the IME-hijacking comment above) - it
+            // was missing here. rootInActiveWindow isn't limited to
+            // TYPE_APPLICATION windows, and an IME window (Gboard etc.) can
+            // genuinely become "the active window" while it has input
+            // focus, not just via a spurious event - real-device logs
+            // showed this loop repeatedly queuing and scoring
+            // com.google.android.inputmethod.latin every ~2s purely from
+            // typing, with no app ever opened. A keyboard's own window is
+            // never content worth scoring regardless of scope mode.
+            if (windowId != null && !isApplicationWindow(windowId)) continue
             if (onGuardedSettingsScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) continue
             frameChannel.trySend(FrameRequest(pkg))
         }

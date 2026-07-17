@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.TextUtils
+import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -92,7 +93,20 @@ class SettingsActivity : ComponentActivity() {
     }
 }
 
-private data class AppEntry(val packageName: String, val label: String, val icon: ImageBitmap?)
+private data class AppEntry(
+    val packageName: String,
+    val label: String,
+    val icon: ImageBitmap?,
+    // No launcher/home icon - a background service, OEM system app, etc.
+    // that a user could never find or whitelist before QUERY_ALL_PACKAGES
+    // was added specifically to surface these.
+    val hidden: Boolean,
+    // Called out specifically, not just lumped into "hidden" - see
+    // ContentGuardService.recheckStaticContent's IME-window comment for why
+    // an input method's own window can end up monitored from typing alone,
+    // with no app ever opened.
+    val isInputMethod: Boolean,
+)
 
 @Composable
 private fun SettingsScreen(prefs: PrefsRepository) {
@@ -123,10 +137,17 @@ private fun SettingsScreen(prefs: PrefsRepository) {
     var activeLockouts by remember { mutableStateOf(prefs.getActiveLockouts()) }
     var hasPassword by remember { mutableStateOf(prefs.hasPassword()) }
     var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
-    // Collapsed by default - with every launchable app on the device
-    // rendered as its own row, this list alone made the Settings screen a
-    // very long single page. Collapsed, it's just a one-line summary.
+    // Collapsed by default - with every installed package on the device
+    // rendered as its own row (not just launchable ones, now that hidden/
+    // system packages and input methods are included too), this list alone
+    // made the Settings screen a very long single page. Collapsed, it's
+    // just a one-line summary.
     var appsExpanded by remember { mutableStateOf(false) }
+    // A flat list of every installed package can run into the hundreds
+    // once hidden/system packages are included - without this, finding one
+    // specific package (an input method, say) would mean scrolling through
+    // all of them.
+    var appSearchQuery by remember { mutableStateOf("") }
 
     // Re-check accessibility-enabled/device-admin state and refresh usage
     // stats whenever we come back to the foreground - e.g. after the user
@@ -275,7 +296,28 @@ private fun SettingsScreen(prefs: PrefsRepository) {
             }
 
             if (appsExpanded) {
-                items(apps, key = { it.packageName }) { app ->
+                item {
+                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                        OutlinedTextField(
+                            value = appSearchQuery,
+                            onValueChange = { appSearchQuery = it },
+                            label = { Text("Search apps") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+
+                val filteredApps = if (appSearchQuery.isBlank()) {
+                    apps
+                } else {
+                    apps.filter {
+                        it.label.contains(appSearchQuery, ignoreCase = true) ||
+                            it.packageName.contains(appSearchQuery, ignoreCase = true)
+                    }
+                }
+                items(filteredApps, key = { it.packageName }) { app ->
                     AppRow(
                         app = app,
                         monitored = isMonitored(app.packageName),
@@ -737,7 +779,21 @@ private fun AppRow(app: AppEntry, monitored: Boolean, onToggle: (Boolean) -> Uni
                 Image(bitmap = app.icon, contentDescription = null, modifier = Modifier.size(32.dp))
                 Spacer(modifier = Modifier.width(8.dp))
             }
-            Text(app.label)
+            Column {
+                Text(app.label)
+                val tag = when {
+                    app.isInputMethod -> "Input method · ${app.packageName}"
+                    app.hidden -> "Hidden · ${app.packageName}"
+                    else -> null
+                }
+                if (tag != null) {
+                    Text(
+                        tag,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
         Switch(checked = monitored, onCheckedChange = onToggle)
     }
@@ -785,15 +841,36 @@ private fun loadLaunchableApps(context: Context): List<AppEntry> {
     // like any other app under "Monitor all except whitelisted".
     val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
     val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-    return (pm.queryIntentActivities(launcherIntent, 0) + pm.queryIntentActivities(homeIntent, 0))
-        .distinctBy { it.activityInfo.packageName }
-        .filter { it.activityInfo.packageName != context.packageName }
+    val launchablePackages = (pm.queryIntentActivities(launcherIntent, 0) + pm.queryIntentActivities(homeIntent, 0))
+        .map { it.activityInfo.packageName }
+        .toSet()
+
+    // Called out specifically (not just left to fall out of the full
+    // package list below as "hidden") since an input method's own window
+    // is the concrete, real-device-confirmed case of a package with no
+    // launcher icon that can still end up monitored - see
+    // ContentGuardService.recheckStaticContent's IME-window comment.
+    val inputMethodPackages = (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+        .inputMethodList
+        .map { it.packageName }
+        .toSet()
+
+    // Every installed package, not just launchable ones - background
+    // services and other OEM system apps could never be found or
+    // whitelisted before, even though they're just as monitorable as any
+    // launchable app under "Monitor all except whitelisted". Requires
+    // QUERY_ALL_PACKAGES (see AndroidManifest.xml for why that's safe here).
+    return pm.getInstalledApplications(0)
+        .filter { it.packageName != context.packageName }
         .map { info ->
             val icon = runCatching { info.loadIcon(pm).toBitmap(96, 96).asImageBitmap() }.getOrNull()
+            val label = runCatching { pm.getApplicationLabel(info).toString() }.getOrDefault(info.packageName)
             AppEntry(
-                packageName = info.activityInfo.packageName,
-                label = info.loadLabel(pm).toString(),
+                packageName = info.packageName,
+                label = label,
                 icon = icon,
+                hidden = info.packageName !in launchablePackages,
+                isInputMethod = info.packageName in inputMethodPackages,
             )
         }
         .sortedBy { it.label.lowercase() }

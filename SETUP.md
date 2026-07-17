@@ -351,6 +351,30 @@ package name); `AndroidManifest.xml`'s `<queries>` block had to declare
 that intent too, or Android 11+ package visibility rules would silently
 filter it back out even with the code change.
 
+### Hidden/system packages and input methods are now visible in the Apps list too
+
+Prompted directly by the Gboard false-monitoring bug above: even after
+fixing the underlying cascade bug, there was still no way to *find*
+`com.google.android.inputmethod.latin` (or any other package with no
+launcher icon) in Settings to whitelist it as a belt-and-suspenders
+measure - `loadLaunchableApps()` only ever queried `CATEGORY_LAUNCHER` +
+`CATEGORY_HOME`, which by definition excludes input methods, background
+services, and other OEM system packages.
+
+`loadLaunchableApps()` now calls `PackageManager.getInstalledApplications()`
+instead, returning every installed package regardless of launcher
+visibility, tagged in the Apps list as "Input method" (cross-referenced
+against `InputMethodManager.getInputMethodList()`) or "Hidden" (no
+launcher/home intent) so they're easy to distinguish from ordinary apps.
+Requires the `QUERY_ALL_PACKAGES` permission - Play Store restricts that
+permission's use, but doesn't apply here since this app is only ever
+sideloaded (see section 2's "Getting a build without building it
+yourself"), never submitted to Play. A full unfiltered list of every
+installed package can run into the hundreds once hidden/system ones are
+included, so a search box was added above the (still collapsed-by-default)
+list, filtering by label or package name - without it, finding one
+specific package in that list would mean scrolling through all of them.
+
 ### Static-content recheck now queries live state, not a cached variable
 
 A second, related instance of the IME hijacking bug: this time
@@ -422,6 +446,21 @@ throttle doesn't cover this case, since it's shorter than this loop's own
 2000ms interval and so wouldn't actually suppress a screen-off capture
 attempt the way it suppresses genuinely redundant same-second ticks while
 the screen is in use.
+
+### Static recheck was also missing the IME-window check the event path already had
+
+A third instance of the IME-hijacking bug class (see "Keyboard opening/
+closing was hijacking the 'foreground app' tracker" above), found from
+real device logs: `com.google.android.inputmethod.latin` (Gboard) reaching
+gates 5/6 repeatedly - `exit@GATE6_NO_SKIN_TONE` every ~2s - purely from
+typing, with no monitored app ever opened. `onAccessibilityEvent` already
+guards against IME windows via `isApplicationWindow(event.windowId)`, but
+`recheckStaticContent()`'s direct `rootInActiveWindow` query never applied
+that same check - and an IME window can genuinely become "the active
+window" while it has input focus, not just via a spurious event, so this
+wasn't just a redundant safety net. Fixed by applying the identical
+`isApplicationWindow` check to this loop's `root.windowId` before
+capture/scoring can happen at all.
 
 ### WebView was polluting the crop region in browsers
 
