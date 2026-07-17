@@ -107,6 +107,9 @@ object IncognitoDetector {
         "private window",
         "inprivate",
         "secret mode",
+        "go incognito",
+        "browse privately",
+        "you've gone incognito",
     )
 
     // Checked against NodeInspector's whole-tree concatenated text -
@@ -115,12 +118,29 @@ object IncognitoDetector {
     // browser's actual "you're private now" landing content, which aren't
     // known to leak from persistent chrome/menu residue the way the bare
     // word did.
+    //
+    // "go incognito" / "browse privately" added after real-device testing
+    // found entering incognito via Google's own account-chooser page (the
+    // "Go Incognito" / "Browse privately or sign in temporarily" option
+    // under accounts.google.com's account picker, not Chrome's own "New
+    // Incognito Tab" menu item) wasn't blocked. That flow opens a real
+    // incognito tab, but navigates straight to a page rather than showing
+    // the blank "New Incognito tab" placeholder - so TITLE_KEYWORDS' bare
+    // "incognito" match never fired, since the resulting title is just
+    // whatever page loaded, not a title containing "incognito" at all.
+    // "you've gone incognito" is Chrome's own well-known Incognito New Tab
+    // Page heading, added on the same reasoning even though it wasn't
+    // directly observed missing - covers the case where an incognito tab
+    // does land on Chrome's own NTP rather than a specific URL.
     private val CONTENT_KEYWORDS = listOf(
         "private browsing",
         "private tab",
         "private window",
         "inprivate",
         "secret mode",
+        "go incognito",
+        "browse privately",
+        "you've gone incognito",
     )
 
     fun matchesTitle(text: String): Boolean = containsAny(text, TITLE_KEYWORDS)

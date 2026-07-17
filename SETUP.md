@@ -636,6 +636,29 @@ here, both instructive:**
    Chrome's package IDs are back in `BROWSER_PACKAGES` on that basis - if
    this recurs, the log now says which keyword fired instead of leaving
    another unexplained report to re-investigate from scratch.
+4. Real-device testing (with a screenshot) found a real detection gap, not
+   a false positive this time: entering incognito via Google's own account-
+   chooser page (`accounts.google.com`'s "Go Incognito" / "Browse privately
+   or sign in temporarily" option under the account picker, not Chrome's
+   own 3-dot-menu "New Incognito Tab" item) wasn't blocked. That flow does
+   open a real incognito tab, but navigates straight to a page instead of
+   showing the blank "New Incognito tab" placeholder Chrome normally shows
+   - so the resulting window title is just whatever page loaded, never
+   containing the word "incognito" at all, and `TITLE_KEYWORDS`' bare-word
+   match had nothing to catch. Added `"go incognito"`, `"browse privately"`,
+   and `"you've gone incognito"` (Chrome's own well-known Incognito New Tab
+   Page heading, for the case where an incognito tab does land on Chrome's
+   own NTP) to both `TITLE_KEYWORDS` and `CONTENT_KEYWORDS`. This is
+   inherently a text-matching approach, though, so it can only ever cover
+   phrases actually observed or reasonably predicted - if incognito is
+   entered via some other flow that lands directly on a third-party page
+   with no incognito-related text anywhere in its title or visible content,
+   neither check has anything to match. The existing `GATE5_CAPTURE_THROTTLED_OR_FAILED`
+   log line (from `ScreenCapturer`'s own throttle *and* from `FLAG_SECURE`
+   structurally blocking capture) repeating for a browser package with no
+   preceding `GATE4_INCOGNITO_DETECTED` line is the diagnostic signal for
+   this specific failure mode - it means capture is failing (consistent
+   with a private tab) but gate 4 never caught it.
 
 Deliberately no Settings toggle to disable this - the point is that
 private browsing can't be used to evade the rest of the cascade, so it
