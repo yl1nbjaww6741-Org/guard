@@ -1,6 +1,7 @@
 package com.contentguard.app.service
 
 import android.accessibilityservice.AccessibilityService
+import android.app.ActivityManager
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.util.Log
@@ -52,6 +53,8 @@ class ContentGuardService : AccessibilityService() {
     private var lastForegroundPackage: String? = null
     private var settingsGuardUnlocked = false
     private var onGuardedSettingsScreen = false
+
+    private val activityManager: ActivityManager by lazy { getSystemService(ActivityManager::class.java) }
 
     private data class FrameRequest(val packageName: String)
 
@@ -342,6 +345,26 @@ class ContentGuardService : AccessibilityService() {
                 val lockLine = "[$pkg] LOCKOUT_TRIGGERED durationMin=${prefs.lockoutDurationMinutes}"
                 Log.i(TAG, lockLine)
                 DebugLogBuffer.add(TAG, lockLine)
+
+                // Stronger than the plain GLOBAL_ACTION_HOME every block
+                // already does on dismissal - on the strike that actually
+                // trips the lockout, back out of the app immediately
+                // (rather than waiting for the user to tap through the
+                // fake-crash dialog first) and ask the OS to kill its
+                // background process, so switching back via Recents finds
+                // a cold start instead of resuming exactly where they left
+                // off. killBackgroundProcesses() only needs the normal
+                // KILL_BACKGROUND_PROCESSES permission (no root/adb), but
+                // it's a hint the OS can decline, not a guaranteed kill
+                // the way Settings' own "Force Stop" button is - that API
+                // is signature-protected and unavailable to third-party
+                // apps even with Shizuku's shell-level access.
+                withContext(Dispatchers.Main) { performGlobalAction(GLOBAL_ACTION_HOME) }
+                delay(500)
+                activityManager.killBackgroundProcesses(pkg)
+                val killLine = "[$pkg] KILL_BACKGROUND_PROCESSES requested after lockout"
+                Log.i(TAG, killLine)
+                DebugLogBuffer.add(TAG, killLine)
             }
             withContext(Dispatchers.Main) { overlay.show(pkg) }
         } finally {

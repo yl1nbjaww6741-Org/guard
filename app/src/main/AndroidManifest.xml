@@ -42,6 +42,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Lets the N-strikes lockout ask the OS to kill the offending app's
+         background process, not just navigate away from it - a normal,
+         install-time-granted permission, no adb/root needed. Documented as
+         a hint the OS can decline, not a guaranteed kill the way Settings'
+         own "Force Stop" button is (that's a signature-protected API
+         unavailable to third-party apps). -->
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"

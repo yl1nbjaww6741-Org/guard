@@ -185,6 +185,19 @@ detection. Strikes and lockout state are tracked per-package in
 `PrefsRepository` (`recordExplicitStrike`/`isLockedOut`); the strike count
 itself is `strikesToLockout`.
 
+On the specific strike that trips the lockout, `ContentGuardService` does
+more than just show the block overlay: it navigates home immediately
+(`GLOBAL_ACTION_HOME`, not waiting for the user to dismiss the fake-crash
+dialog first) and then calls `ActivityManager.killBackgroundProcesses()`
+on the offending package, so switching back to it via Recents finds a cold
+start instead of resuming exactly where it was left. This only needs the
+normal, install-time-granted `KILL_BACKGROUND_PROCESSES` permission - no
+adb/root/Shizuku required - but it's documented by Android as a hint the
+OS can decline, not a guaranteed kill the way Settings' own "Force Stop"
+button is (that uses a signature-protected API third-party apps can't
+call even with Shizuku's shell-level access). Every other (non-lockout)
+block still just shows the overlay on dismissal, same as before.
+
 ### App password + Accessibility/Device Admin screen guard
 
 The Settings screen has an "App password" card. Once set, it gates:
