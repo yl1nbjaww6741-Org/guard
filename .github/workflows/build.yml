@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  assemble-debug:
+  build:
     runs-on: ubuntu-latest
     steps:
       # ubuntu-latest ships with several GB of preinstalled toolchains we
@@ -55,16 +55,43 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
 
+      # Short-lived hand-off to the publish job below only - not meant for
+      # direct download (that's what the GitHub Release in publish is
+      # for), so a short retention keeps this from contributing to the
+      # Actions artifact storage quota problem this project hit before
+      # switching the user-facing download to a Release asset.
+      - name: Stash APK for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  # Self-commitment gate: requires a "release" environment configured in
+  # this repo's Settings > Environments with a required reviewer. The job
+  # pauses here until that person approves it from the Actions run's own
+  # UI - independent of branch protection on main (which needs a paid
+  # plan to enforce on a private repo; environment protection rules do
+  # not). The build job above always runs immediately on every push, so
+  # there's a pass/fail signal before anyone has to decide whether to
+  # approve - but nothing reaches the real latest-debug release, and
+  # nothing is installable, without a human actually approving this
+  # specific job.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Download built APK
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output-apk
+          path: app/build/outputs/apk/debug
+
       # Publishes to a single rolling "latest-debug" GitHub Release instead
-      # of an Actions artifact. Release assets are billed against the
-      # repo's normal storage, not the separate Actions artifact storage
-      # quota - the previous actions/upload-artifact step kept failing with
-      # "Failed to CreateArtifact: Artifact storage quota has been hit"
-      # once enough debug builds (each run's APK) piled up against that
-      # quota, even with a short retention-days set. This sidesteps that
-      # quota entirely rather than continuing to manage around it.
-      #
-      # Uses the `gh` CLI (preinstalled on GitHub-hosted runners, already
+      # of an Actions artifact - see build job's comment for why. Uses the
+      # `gh` CLI (preinstalled on GitHub-hosted runners, already
       # authenticated via GITHUB_TOKEN) directly instead of a third-party
       # release action, matching this workflow's existing preference for
       # official/well-known actions only. One tag/release ("latest-debug")

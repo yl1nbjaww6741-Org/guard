@@ -683,43 +683,55 @@ escalation pass (`maybeRunTiledEscalation()`) - it's an unwired hook, not
 an implementation; don't flip it until tiled inference is actually built
 there.
 
-## 6. Self-commitment: requiring a second reviewer before weakening a gate
+## 6. Self-commitment: requiring a second person's approval before a build ships
 
 This app is deliberately hard to loosen from *inside* itself (no in-app
 off-switch for incognito detection, no way to disable the accessibility
 watchdog from Settings) - but none of that stops someone from just asking
 Claude Code (or editing the Kotlin directly) to loosen a threshold and
-push a new build. `.github/CODEOWNERS` plus branch protection closes that
-gap by requiring a second person's real approval before any change to the
-gate/policy files can merge - not just a social convention, an actual
-GitHub-enforced check that self-approval doesn't satisfy.
+push a new build. The gap is closed at the CI/release level instead:
+nothing reaches the real `latest-debug` release, and nothing becomes
+installable, without a second person's real approval.
 
-**Setup (one-time, via github.com - no API/CLI covers repo admin settings
-like these):**
+**First attempt (superseded)**: `.github/CODEOWNERS` + classic branch
+protection (Settings > Branches, "Require a pull request before merging"
++ "Require review from Code Owners"). This still exists in the repo, but
+**branch protection enforcement on a private repo needs a paid GitHub
+plan** - it showed as configured but not actually enforced on the free
+tier. `.github/CODEOWNERS` is left in place (harmless, currently inert) in
+case this repo ever goes to a paid plan or public, at which point it
+starts enforcing automatically with no further changes needed.
 
-1. **Settings > Collaborators and teams > Add people** - add the trusted
-   second reviewer with **Write** access (not Admin, so they can't change
-   these protection settings themselves).
-2. **Settings > Branches > Add branch protection rule**, branch name
-   `main`:
-   - Enable **"Require a pull request before merging"** - this is what
-     blocks direct pushes to `main` entirely, for everyone (including
-     Claude Code sessions) from this point on.
-   - Enable **"Require review from Code Owners"** - `.github/CODEOWNERS`
-     already names the reviewer for the specific gate/policy paths, so
-     GitHub auto-requests their review only on PRs touching those files,
-     not every change.
+**What's actually live**: `build.yml` is split into two jobs. `build`
+always runs immediately on every push to `main` - compiles the APK, no
+gate, so there's a fast pass/fail signal same as before. `publish`
+(the job that actually creates/updates the `latest-debug` release) targets
+a GitHub *environment* named `release` with a required reviewer - this is
+a deployment protection rule, a different feature from branch protection,
+and is not gated behind a paid plan the way branch protection is on
+private repos. The `publish` job pauses in the Actions run's own UI until
+the named reviewer clicks approve; nothing about pushing to `main` itself
+is blocked, but the push alone doesn't produce a usable build - only an
+approved `publish` job does.
 
-**What changes day to day**: instead of a direct push landing on `main`
-immediately, changes land as a PR; CI (`build.yml`) only builds/publishes
-once that PR is actually merged, not at PR-open time (no `pull_request`
-trigger is configured - only `push: [main]` and manual dispatch), so the
-reviewer would be reviewing a diff without a build/CI signal unless a
-`pull_request` trigger is added separately. GitHub notifies the reviewer
-automatically once a matching PR opens (assuming their own GitHub
-notification settings - email or the mobile app's push - are actually
-on), not on a rejected direct-push attempt, which fails silently with no
-notification to anyone.
+**One-time setup, via github.com** (no API/CLI covers this - repo
+environments aren't exposed by the GitHub MCP tools this project's
+sessions have access to):
+
+1. **Settings > Environments > New environment**, name it exactly
+   `release` (must match `environment: release` in `build.yml`).
+2. Under **"Deployment protection rules"**, enable **"Required
+   reviewers"** and add the trusted second person.
+3. Save.
+
+**What changes day to day**: a push to `main` still lands immediately (no
+PR step, unlike the superseded approach above) and the `build` job runs
+right away, but the workflow run sits at `publish` marked "Waiting" until
+the reviewer opens that run in the Actions tab and approves it - GitHub
+notifies them the same way it would for any requested review, subject to
+their own notification settings actually being on. Only after that
+approval does the APK actually land on the `latest-debug` release URL
+people download from.
 
 ## ColorOS / OPPO Find X9 Pro notes
 
