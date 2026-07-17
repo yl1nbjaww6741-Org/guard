@@ -739,6 +739,8 @@ their own notification settings actually being on. Only after that
 approval does the APK actually land on the `latest-debug` release URL
 people download from.
 
+_Live test (2026-07-17): confirming the required-reviewer gate holds after re-save._
+
 ## ColorOS / OPPO Find X9 Pro notes
 
 See [`docs/COLOROS.md`](docs/COLOROS.md) for battery-optimization exemption,
