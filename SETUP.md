@@ -399,6 +399,30 @@ win, at the cost of up to ~2s (from ~1s) before a fresh capture happens.
 `EventDebouncer.settleWindowMs` (100ms) was left as-is - it wasn't part
 of this specific trade.
 
+### Static recheck now skips entirely while the screen is off
+
+A full code review looking for battery opportunities found that
+`recheckStaticContent()`'s 2-second timer loop had no check for whether
+the screen was even on. `onAccessibilityEvent` is naturally quiet with the
+screen off (no window-state changes occur), but this loop is timer-driven
+and kept firing regardless - and accessibility services aren't Doze-
+throttled the way ordinary apps are, so this ran on schedule 24/7,
+including screen-off stretches (pocket, overnight charging), each tick
+querying `rootInActiveWindow` and, since `rootInActiveWindow` can still
+report the last-foreground app after the screen turns off, often actually
+attempting a real screenshot capture and inference - the two most
+expensive operations in the app - for a screen nobody could be looking at.
+
+Unlike every other capture/interval trade in this section, this one is a
+pure win, not a latency-vs-battery trade: a screen that's off has nothing
+visible to detect, so there's no detection downside to skipping. Fixed
+with a single `PowerManager.isInteractive` check at the top of the loop
+body, before any capture is attempted - `ScreenCapturer`'s own 1800ms
+throttle doesn't cover this case, since it's shorter than this loop's own
+2000ms interval and so wouldn't actually suppress a screen-off capture
+attempt the way it suppresses genuinely redundant same-second ticks while
+the screen is in use.
+
 ### WebView was polluting the crop region in browsers
 
 Real-world testing found explicit content in Chrome consistently scoring

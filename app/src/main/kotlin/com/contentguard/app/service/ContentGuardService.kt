@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.app.ActivityManager
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.PowerManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
@@ -56,6 +57,7 @@ class ContentGuardService : AccessibilityService() {
     private var onGuardedSettingsScreen = false
 
     private val activityManager: ActivityManager by lazy { getSystemService(ActivityManager::class.java) }
+    private val powerManager: PowerManager by lazy { getSystemService(PowerManager::class.java) }
 
     private data class FrameRequest(val packageName: String)
 
@@ -219,9 +221,13 @@ class ContentGuardService : AccessibilityService() {
      * being re-scanned. This periodically re-queues a frame for whatever
      * app is currently foreground, independent of events, so dwelling on
      * static content still gets caught. CONFLATED channel + ScreenCapturer's
-     * own throttle mean redundant ticks are cheap - they just exit at
-     * GATE5_CAPTURE_THROTTLED_OR_FAILED when a real event already
-     * triggered a capture recently.
+     * own throttle mean redundant ticks are cheap while the screen is
+     * genuinely in use - they just exit at GATE5_CAPTURE_THROTTLED_OR_FAILED
+     * when a real event already triggered a capture recently. Skips entirely
+     * while the screen is off (see the isInteractive check below) - that's
+     * the loop's main real battery cost, since it otherwise runs on this
+     * timer 24/7 regardless of whether anything is actually on screen to
+     * protect against.
      *
      * Deliberately queries rootInActiveWindow fresh on every tick instead
      * of reusing lastForegroundPackage - that field is only as reliable as
@@ -237,6 +243,25 @@ class ContentGuardService : AccessibilityService() {
     private suspend fun recheckStaticContent() {
         while (serviceScope.isActive) {
             delay(STATIC_RECHECK_INTERVAL_MS)
+
+            // Unlike onAccessibilityEvent (naturally quiet with the screen
+            // off, since no window-state changes occur), this loop is timer-
+            // driven and previously kept firing every tick regardless -
+            // accessibility services aren't Doze-throttled the way ordinary
+            // apps are, so this ran 24/7 including screen-off stretches
+            // (pocket, overnight charging). isInteractive is false whenever
+            // the display isn't actually on, at which point nothing could be
+            // visible to detect - skipping here is a pure win, not a
+            // detection trade-off the way the interval/threshold tuning
+            // elsewhere in this file is. rootInActiveWindow can also still
+            // report the last-foreground app after the screen turns off, so
+            // this check has to happen before capture is even attempted, not
+            // rely on ScreenCapturer's own throttle to make it cheap - that
+            // throttle (1800ms) is shorter than this loop's own interval
+            // (2000ms), so it wouldn't actually suppress a capture attempt
+            // here the way it does for genuinely redundant same-second ticks.
+            if (!powerManager.isInteractive) continue
+
             val root = rootInActiveWindow
             val pkg = root?.packageName?.toString()
             @Suppress("DEPRECATION")
