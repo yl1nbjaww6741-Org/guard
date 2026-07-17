@@ -124,6 +124,35 @@ Caveats:
 - For the release build (no `.debug` suffix), use
   `com.contentguard.app/com.contentguard.app.service.ContentGuardService`.
 
+### Accessibility watchdog (survives ColorOS "Hide apps")
+
+Confirmed via direct testing: using ColorOS's own "Hide apps" feature on
+ContentGuard silently strips it out of `enabled_accessibility_services`
+(same mechanism, in reverse, as the enable command above) - turning off
+the whole cascade with no warning. `AccessibilityWatchdogService` (see
+`docs/COLOROS.md` section 4 and the class's own doc comment) watches for
+exactly this and restores it automatically, the same way MacroDroid was
+confirmed to survive the identical action on the same device. This needs
+one more one-time grant, same pattern as enabling accessibility itself:
+
+```bash
+adb shell pm grant com.contentguard.app.debug android.permission.WRITE_SECURE_SETTINGS
+```
+
+(drop `.debug` for the release build, same as above). Without this grant,
+the watchdog fails closed - it logs a warning and does nothing, rather
+than crashing - so the rest of the app works normally either way; this
+permission only affects whether "Hide apps" specifically gets undone
+automatically.
+
+Deliberately no way to turn this back off from within the app once
+granted - same reasoning as the password-gated Settings/Accessibility
+screens elsewhere in this project. If you ever need to genuinely disable
+ContentGuard's accessibility (not just hide the app), stop
+`AccessibilityWatchdogService` itself first
+(`adb shell am stopservice com.contentguard.app.debug/com.contentguard.app.service.AccessibilityWatchdogService`),
+or it will just restore the setting again on its next check.
+
 ### Force-stop / uninstall protection (Device Admin)
 
 The Settings screen has an "Enable Protection" button under "Force-stop /

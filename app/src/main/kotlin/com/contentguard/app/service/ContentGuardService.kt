@@ -57,6 +57,12 @@ class ContentGuardService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        // Defensive start - BootReceiver is the main entry point after a
+        // reboot, but this covers the case where the watchdog isn't
+        // already running yet (e.g. right after this feature first ships,
+        // with no reboot in between). See AccessibilityWatchdogService's
+        // doc comment for why it has to be a separate service.
+        AccessibilityWatchdogService.start(applicationContext)
         prefs = PrefsRepository(applicationContext)
         scopePolicy = AppScopePolicy(prefs)
         debouncer = EventDebouncer()

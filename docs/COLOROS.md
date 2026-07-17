@@ -36,11 +36,44 @@ accessibility services are not guaranteed to survive it.
 **Do not assume the service is always alive.** The app is built around
 this: rebinding is just re-toggling accessibility, which is cheap and
 stateless (all persisted state lives in `PrefsRepository`/SharedPreferences,
-not in the service's memory). If you're driving rebinds externally (e.g.
-via MacroDroid watching for the service being off and re-enabling it), the
-same `adb shell settings put secure enabled_accessibility_services ...`
-command from `SETUP.md` is what such automation should invoke - or
-equivalently, toggle Settings > Accessibility > ContentGuard off/on.
+not in the service's memory). This used to require external automation
+(e.g. MacroDroid watching for the service being off and re-enabling it) -
+see section 4 below for why that's now built directly into the app
+instead via `AccessibilityWatchdogService`.
+
+## 4. "Hide apps" also strips the accessibility permission
+
+Confirmed via direct testing: using ColorOS's own "Hide apps" feature on
+ContentGuard doesn't just remove the launcher icon - it also silently
+removes ContentGuardService from
+`Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES`, turning off every gate
+in the cascade with no warning. MacroDroid was confirmed to survive the
+exact same action on the same device - it very likely does so by watching
+for exactly this and writing itself back into the enabled-services list
+(MacroDroid documents needing `WRITE_SECURE_SETTINGS` for this kind of
+self-management, corroborating evidence this is the right mechanism, not
+just a guess).
+
+`AccessibilityWatchdogService` (see its own doc comment in
+`app/src/main/kotlin/com/contentguard/app/service/`) implements the same
+thing directly in ContentGuard: a `ContentObserver` on
+`ENABLED_ACCESSIBILITY_SERVICES` reacts immediately when the OS strips the
+service out, and restores it via `WRITE_SECURE_SETTINGS` (same one-time
+adb grant as documented in `SETUP.md`'s enable instructions -
+`adb shell pm grant <applicationId> android.permission.WRITE_SECURE_SETTINGS`).
+It runs as its own foreground service, deliberately separate from
+ContentGuardService, since the whole point is recovering from
+ContentGuardService itself being torn down - watchdog logic living inside
+that same service would die at the exact moment it's needed.
+
+**Known limitation, not fixable from the app's own code**: if "Hide apps"
+ever kills this watchdog service's own process outright (rather than just
+deregistering the accessibility service while everything else keeps
+running), it can't self-heal - there's no code that can run once its own
+process is gone. Real-device testing is the only way to confirm which
+case this device falls into; MacroDroid persisting is decent evidence it's
+the recoverable case, but that isn't a guarantee ContentGuard's own
+process is treated identically.
 
 ## 3. `takeScreenshot()` capability flag
 
