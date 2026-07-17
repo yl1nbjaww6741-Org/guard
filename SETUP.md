@@ -709,8 +709,14 @@ gate, so there's a fast pass/fail signal same as before. `publish`
 a GitHub *environment* named `release` with a required reviewer - this is
 a deployment protection rule, a different feature from branch protection,
 and is not gated behind a paid plan the way branch protection is on
-private repos. The `publish` job pauses in the Actions run's own UI until
-the named reviewer clicks approve; nothing about pushing to `main` itself
+private repos. `publish` rebuilds from scratch rather than receiving
+`build`'s output via `actions/upload-artifact` - an early version tried
+that hand-off and it hit the same account-wide Actions artifact storage
+quota failure this project had already worked around once for the
+release download itself, so the workflow now avoids touching that quota
+anywhere. The Gradle cache (already configured) makes the second build
+cheap. The `publish` job pauses in the Actions run's own UI until the
+named reviewer clicks approve; nothing about pushing to `main` itself
 is blocked, but the push alone doesn't produce a usable build - only an
 approved `publish` job does.
 

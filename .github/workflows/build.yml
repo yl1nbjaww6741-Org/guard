@@ -12,6 +12,18 @@ permissions:
   contents: write
 
 jobs:
+  # Fast, ungated compile check - always runs immediately on every push,
+  # giving a pass/fail signal before anyone has to decide whether to
+  # approve the publish job below. Deliberately does NOT hand its build
+  # output to publish via actions/upload-artifact - this repo's account
+  # hit a persistent Actions artifact storage quota failure
+  # ("Failed to CreateArtifact: Artifact storage quota has been hit")
+  # that stayed stuck for hours across many attempts, and an early version
+  # of this two-job split re-introduced exactly that dependency for the
+  # inter-job hand-off. publish rebuilds from scratch instead - slightly
+  # redundant, but the Gradle cache (already configured below) makes the
+  # second build cheap, and it means this workflow no longer touches
+  # Actions artifact storage anywhere.
   build:
     runs-on: ubuntu-latest
     steps:
@@ -55,49 +67,64 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
 
-      # Short-lived hand-off to the publish job below only - not meant for
-      # direct download (that's what the GitHub Release in publish is
-      # for), so a short retention keeps this from contributing to the
-      # Actions artifact storage quota problem this project hit before
-      # switching the user-facing download to a Release asset.
-      - name: Stash APK for the publish job
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-output-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          retention-days: 1
-
   # Self-commitment gate: requires a "release" environment configured in
-  # this repo's Settings > Environments with a required reviewer. The job
+  # this repo's Settings > Environments with a required reviewer. This job
   # pauses here until that person approves it from the Actions run's own
-  # UI - independent of branch protection on main (which needs a paid
-  # plan to enforce on a private repo; environment protection rules do
-  # not). The build job above always runs immediately on every push, so
-  # there's a pass/fail signal before anyone has to decide whether to
-  # approve - but nothing reaches the real latest-debug release, and
-  # nothing is installable, without a human actually approving this
-  # specific job.
+  # UI - independent of branch protection on main (which needs a paid plan
+  # to enforce on a private repo; environment protection rules do not).
+  # Nothing reaches the real latest-debug release, and nothing is
+  # installable, without a human actually approving this specific job -
+  # build above running green is a signal to help them decide, not a
+  # requirement gating whether they can approve.
   publish:
     needs: build
     runs-on: ubuntu-latest
     environment: release
     steps:
-      - name: Download built APK
-        uses: actions/download-artifact@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android/sdk/ndk
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          name: build-output-apk
-          path: app/build/outputs/apk/debug
+          lfs: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK platform + build-tools
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace
 
       # Publishes to a single rolling "latest-debug" GitHub Release instead
-      # of an Actions artifact - see build job's comment for why. Uses the
-      # `gh` CLI (preinstalled on GitHub-hosted runners, already
-      # authenticated via GITHUB_TOKEN) directly instead of a third-party
-      # release action, matching this workflow's existing preference for
-      # official/well-known actions only. One tag/release ("latest-debug")
-      # is created once and its asset is replaced (--clobber) on every
-      # run, so there's a single stable URL to bookmark rather than a new
-      # release cluttering the list on every push.
+      # of an Actions artifact. Release assets are billed against the
+      # repo's normal storage, not the separate Actions artifact storage
+      # quota. Uses the `gh` CLI (preinstalled on GitHub-hosted runners,
+      # already authenticated via GITHUB_TOKEN) directly instead of a
+      # third-party release action, matching this workflow's existing
+      # preference for official/well-known actions only. One tag/release
+      # ("latest-debug") is created once and its asset is replaced
+      # (--clobber) on every run, so there's a single stable URL to
+      # bookmark rather than a new release cluttering the list on every
+      # push.
       - name: Publish APK to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
