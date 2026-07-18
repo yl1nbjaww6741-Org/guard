@@ -372,32 +372,33 @@ class ContentGuardService : AccessibilityService() {
         // content-keyword check above is - that restriction exists there
         // because whole-tree text matching is false-positive-prone outside
         // a known, tested set of apps (see IncognitoDetector's doc
-        // comment). This gate only ever looks at isEditable nodes - what
-        // someone is actively typing, not incidental content - so the same
-        // risk doesn't apply, and restricting it to browsers only meant a
-        // search typed into Reddit's own search box, or a Messages compose
-        // field, was never checked at all. (NodeInspector.scan's isEditable
-        // check is also deliberately not gated on isVisibleToUser, for the
-        // same reason - see its own comment for the real-device case that
-        // required it.)
+        // comment). This gate only ever looks at a single focused, editable
+        // node - what someone is actively typing, not incidental content -
+        // so the same risk doesn't apply, and restricting it to browsers
+        // only meant a search typed into Reddit's own search box, or a
+        // Messages compose field, was never checked at all.
         //
-        // Temporary diagnostic (round 2): the isVisibleToUser fix didn't
-        // resolve the real-device Reddit case on its own - this surfaces
-        // every isEditable node's raw text (not just its length) so a
-        // continued non-match is a direct lookup instead of a re-guess.
+        // Root cause of both real-device failures now confirmed via
+        // GATE4B_SCAN_DEBUG logging: (1) isVisibleToUser()==false on the
+        // real EditText - fixed by NodeInspector no longer requiring
+        // visibility; (2) inputFieldText was built from a depth-capped tree
+        // walk that silently truncated before ever reaching Reddit's search
+        // box (Compose UIs commonly nest deeper than the walk's depth cap,
+        // which exists for the unrelated image-node scan) - fixed by
+        // sourcing inputFieldText from findFocus(FOCUS_INPUT) instead, an
+        // OS-level lookup with no depth limit. See NodeInspector's doc
+        // comment on inputFieldText for the full account.
+        //
+        // Diagnostic logging kept one more round, not stripped preemptively
+        // this time, so the fix is confirmed against a real retest before
+        // removal.
         if (scan.editableNodeDebug.isNotEmpty()) {
             val line = "[$pkg] GATE4B_EDITABLE_NODE_DEBUG ${scan.editableNodeDebug.joinToString("; ")}"
             Log.d(TAG, line)
             DebugLogBuffer.add(TAG, line)
         }
-        // Temporary diagnostic (round 3): round 2 found zero editable nodes
-        // at all on a repro that previously found one, so this logs
-        // unconditionally on every frame - not just when an editable node
-        // was found - to tell apart a scan that never reached the field
-        // (nodesVisited/hitLimit) from one where the OS's own focus
-        // tracking (focusedInputDebug) disagrees with our manual walk.
         run {
-            val line = "[$pkg] GATE4B_SCAN_DEBUG nodesVisited=${scan.nodesVisited} hitLimit=${scan.hitLimit} focusedInput=${scan.focusedInputDebug}"
+            val line = "[$pkg] GATE4B_SCAN_DEBUG nodesVisited=${scan.nodesVisited} hitLimit=${scan.hitLimit} focusedInput=${scan.focusedInputDebug} inputFieldText=\"${scan.inputFieldText}\""
             Log.d(TAG, line)
             DebugLogBuffer.add(TAG, line)
         }

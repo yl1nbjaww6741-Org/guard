@@ -776,17 +776,33 @@ WebView's page body is never exposed as an editable node's own text, so
 restricting to `inputFieldText` keeps this to what's actually being
 searched for.
 
-Unlike `visibleText`/`contentDescription` collection, the `isEditable`
-check is deliberately *not* gated on `isVisibleToUser()`. Real-device
-testing (typing a keyword into Reddit's own search box) found this gate
-never firing there - added temporary logging (`GATE4B_INPUT_FIELD_TEXT_DEBUG`,
-`GATE4B_EDITABLE_NODE_DEBUG`, since removed) showed a real `EditText` with
-the typed text (`textLen=6`, matching the keyword) but `isVisibleToUser()
-== false` - apparently a custom search-bar pattern where the actual
-input-handling `EditText` is invisible/transparent while a separately-
-styled view shows the text on screen. Gating `inputFieldText` on
-visibility the way `visibleText` needs to be (see gate 4's history above)
-silently dropped every keyword typed into a field built this way.
+Real-device testing (typing a keyword into Reddit's own search box) found
+this gate still not firing there, across two separate root causes found
+one after the other via diagnostic logging rather than guessed at:
+
+1. The `isEditable` node search was originally gated on `isVisibleToUser()`
+   the same way `visibleText`/`contentDescription` collection is. Temporary
+   logging (`GATE4B_INPUT_FIELD_TEXT_DEBUG`, `GATE4B_EDITABLE_NODE_DEBUG`)
+   found a real `EditText` with the typed text (`textLen=6`, matching the
+   keyword) but `isVisibleToUser() == false` - apparently a custom
+   search-bar pattern where the actual input-handling `EditText` is
+   invisible/transparent while a separately-styled view shows the text on
+   screen. Fixed by not requiring visibility for this check.
+
+2. Even after that fix, the same repro still silently failed. A further
+   diagnostic (`GATE4B_SCAN_DEBUG`, logging `nodesVisited`/`hitLimit`
+   alongside an independent `findFocus(FOCUS_INPUT)` lookup) found
+   `hitLimit=true` at only 16-36 nodes visited - nowhere near the walk's
+   400-node cap, meaning its 12-level *depth* cap (sized for the unrelated
+   image-node scan, not for locating a single focused field) was
+   truncating before ever reaching the field. Reddit's Compose UI commonly
+   nests well past 12 levels. Meanwhile `findFocus(FOCUS_INPUT)` - an
+   OS-level lookup with no depth limit of its own - found the same field
+   and its live-typed text (`"p"` -> `"po"` -> `"por"` as it was typed)
+   every time. Fixed by sourcing `inputFieldText` from `findFocus(FOCUS_INPUT)`
+   directly instead of the depth-capped walk. The walk's own `isEditable`
+   collection is kept only as a diagnostic (`editableNodeDebug`), no longer
+   feeding `inputFieldText`.
 
 `KeywordBlocklist.EXPLICIT_KEYWORDS` favors high-precision terms - known
 adult platform names (`pornhub`, `xvideos`, etc. - unambiguous by

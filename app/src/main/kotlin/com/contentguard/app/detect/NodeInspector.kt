@@ -7,24 +7,27 @@ data class NodeScanResult(
     val hasImages: Boolean,
     val imageBounds: List<Rect>,
     val visibleText: String,
-    // Text from editable nodes only (isEditable, e.g. an address bar or
-    // search box), separate from visibleText - see KeywordBlocklist for why
-    // search-intent matching deliberately doesn't use the whole-page text.
+    // What's currently focused and being typed - see KeywordBlocklist for
+    // why search-intent matching deliberately doesn't use the whole-page
+    // text. Sourced from findFocus(FOCUS_INPUT), NOT a manual isEditable
+    // tree walk: real-device logging (round 3 of the Reddit investigation,
+    // see SETUP.md) found a depth-capped walk truncating before ever
+    // reaching Reddit's search box - a Compose UI commonly nests deeper
+    // than a fixed depth cap suitable for image-node scanning - while
+    // findFocus, an OS-level lookup with no such cap, found the same field
+    // and its live-typed text every time. Gate 4b's own false-positive risk
+    // doesn't change: this is still scoped to a single focused, editable
+    // node, never incidental page content.
     val inputFieldText: String,
-    // Temporary diagnostic (round 2 - the isVisibleToUser fix didn't
-    // resolve the real-device Reddit case, so re-added rather than guess
-    // again): one entry per isEditable node seen - class, tree depth,
-    // isVisibleToUser, and its raw text - collected unconditionally,
-    // independent of every other gate in this function.
+    // Diagnostic kept from the walk-based investigation: one entry per
+    // isEditable node the (depth-capped) walk actually reached - now known
+    // to be an incomplete picture on deeply-nested UIs, kept only as a
+    // point of comparison against focusedInputDebug below.
     val editableNodeDebug: List<String>,
-    // Temporary diagnostic (round 3 - round 2 found NO editable node at
-    // all on a repro that previously found one). Distinguishes "the walk
-    // never reached the field" (nodesVisited/hitLimit) from "the OS's own
-    // focus tracking disagrees with our manual walk" (focusedInputDebug,
-    // via findFocus(FOCUS_INPUT) - independent of the isEditable tree walk
-    // above, so a mismatch between the two pinpoints which side is wrong).
     val nodesVisited: Int,
     val hitLimit: Boolean,
+    // The OS-level findFocus(FOCUS_INPUT) result inputFieldText above is
+    // actually built from - see its own comment.
     val focusedInputDebug: String,
 )
 
@@ -80,26 +83,28 @@ object NodeInspector {
 
         val bounds = mutableListOf<Rect>()
         val text = StringBuilder()
-        val inputText = StringBuilder()
         val editableDebug = mutableListOf<String>()
         var visited = 0
         var hasSubstantialContent = false
         var hitLimit = false
 
-        // Independent of the manual isEditable walk below - this is the OS's
-        // own accessibility-focus tracking, not our own tree traversal. If
-        // this finds a node the walk doesn't (or vice versa), that tells us
-        // which side of the two is actually wrong, rather than guessing.
+        // The actual source of inputFieldText - see its own doc comment for
+        // why this replaced a manual isEditable tree walk. Not subject to
+        // MAX_DEPTH/MAX_NODES: this is a single OS-level lookup, not a walk
+        // we're bounding ourselves, so it isn't at risk of truncating
+        // before it reaches a deeply-nested field the way the walk did.
         val focusedInput = try {
             root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
         } catch (e: Exception) {
             null
         }
-        val focusedInputDebug = if (focusedInput == null) {
-            "none"
+        val (focusedInputDebug, focusedInputText) = if (focusedInput == null) {
+            "none" to ""
         } else {
             try {
-                "class=${focusedInput.className} visible=${focusedInput.isVisibleToUser} editable=${focusedInput.isEditable} text=\"${focusedInput.text}\""
+                val debug = "class=${focusedInput.className} visible=${focusedInput.isVisibleToUser} editable=${focusedInput.isEditable} text=\"${focusedInput.text}\""
+                val fieldText = if (focusedInput.isEditable) focusedInput.text?.toString().orEmpty() else ""
+                debug to fieldText
             } finally {
                 @Suppress("DEPRECATION")
                 focusedInput.recycle()
@@ -138,25 +143,15 @@ object NodeInspector {
                 hasSubstantialContent = true
             }
 
-            // Deliberately NOT gated on isVisibleToUser, unlike visibleText/
-            // contentDescription below - real-device testing (Reddit's
-            // search box) found a real, actively-typed EditText reporting
-            // isVisibleToUser() == false, apparently a custom search-bar
-            // pattern where the input-handling EditText itself is invisible/
-            // transparent while a separately-styled view shows the text -
-            // gating this the same way silently dropped every keyword typed
-            // there. isEditable (not a className check) is the framework-
-            // provided signal for "this is a text input," independent of
-            // whatever concrete widget class a given app uses for its
-            // address/search bar - and a WebView's rendered page body never
-            // sets this on the nodes it exposes, so this stays scoped to
-            // what's actually being typed, not page content, regardless of
-            // whether the field itself happens to be visible.
+            // Kept only as a diagnostic point of comparison against
+            // focusedInputDebug above - no longer the source of
+            // inputFieldText (see that field's doc comment for why: this
+            // walk's own depth cap silently missed deeply-nested fields
+            // that findFocus finds every time).
             if (node.isEditable) {
                 editableDebug.add(
                     "class=$className depth=$depth visible=${node.isVisibleToUser()} text=\"${node.text}\"",
                 )
-                node.text?.let { if (it.isNotBlank()) inputText.append(it).append(' ') }
             }
 
             // isVisibleToUser() gate matters specifically for IncognitoDetector's
@@ -167,8 +162,7 @@ object NodeInspector {
             // (not just what's actually on screen) could false-positive gate 4
             // even though nothing matching is visible to the user. Doesn't
             // affect hasImages/imageBounds above - those are geometry-only and
-            // already require a real size regardless of this filter. Doesn't
-            // apply to the isEditable check above - see its own comment.
+            // already require a real size regardless of this filter.
             if (node.isVisibleToUser()) {
                 node.text?.let { if (it.isNotBlank()) text.append(it).append(' ') }
                 node.contentDescription?.let { if (it.isNotBlank()) text.append(it).append(' ') }
@@ -191,7 +185,7 @@ object NodeInspector {
             hasImages = bounds.isNotEmpty() || hasSubstantialContent,
             imageBounds = bounds,
             visibleText = text.toString().trim(),
-            inputFieldText = inputText.toString().trim(),
+            inputFieldText = focusedInputText.trim(),
             editableNodeDebug = editableDebug,
             nodesVisited = visited,
             hitLimit = hitLimit,
