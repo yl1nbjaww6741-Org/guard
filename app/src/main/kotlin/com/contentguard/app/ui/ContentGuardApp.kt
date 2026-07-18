@@ -97,20 +97,36 @@ fun ContentGuardApp(prefs: PrefsRepository) {
         }
     }
 
-    var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
-    var deviceAdminActive by remember { mutableStateOf(isDeviceAdminActive(context)) }
+    // The seal (Home) and the safeguard cards (Security) must never show
+    // conflicting answers for the same instant, so both read from this one
+    // object rather than each computing/holding their own copies of the
+    // three checks.
+    var safeguards by remember {
+        mutableStateOf(
+            SafeguardState(
+                accessibilityEnabled = isAccessibilityServiceEnabled(context),
+                deviceAdminActive = isDeviceAdminActive(context),
+                batteryOptimizationIgnored = isBatteryOptimizationIgnored(context),
+            ),
+        )
+    }
     var hasPassword by remember { mutableStateOf(prefs.hasPassword()) }
 
-    // Re-check accessibility-enabled/device-admin state whenever we come
-    // back to the foreground - e.g. after the user toggles either in
-    // system Settings.
+    fun refreshSafeguards() {
+        safeguards = SafeguardState(
+            accessibilityEnabled = isAccessibilityServiceEnabled(context),
+            deviceAdminActive = isDeviceAdminActive(context),
+            batteryOptimizationIgnored = isBatteryOptimizationIgnored(context),
+        )
+    }
+
+    // Re-check all three whenever we come back to the foreground - e.g.
+    // after the user toggles accessibility/device-admin/battery exemption
+    // in system Settings.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                serviceEnabled = isAccessibilityServiceEnabled(context)
-                deviceAdminActive = isDeviceAdminActive(context)
-            }
+            if (event == Lifecycle.Event.ON_RESUME) refreshSafeguards()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -119,20 +135,19 @@ fun ContentGuardApp(prefs: PrefsRepository) {
     val deviceAdminLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
     ) {
-        deviceAdminActive = isDeviceAdminActive(context)
+        refreshSafeguards()
     }
 
     Box(modifier = Modifier.fillMaxSize().background(CGColor.Bg)) {
         Crossfade(targetState = selected, label = "tab") { tab ->
             when (tab) {
-                CGTab.HOME -> HomeTab(prefs)
+                CGTab.HOME -> HomeTab(prefs, safeguards)
                 CGTab.RULES -> RulesTab(prefs, applyOrChallenge = ::applyOrChallenge)
                 CGTab.APPS -> AppsTab(prefs, applyOrChallenge = ::applyOrChallenge)
                 CGTab.ACTIVITY -> ActivityTab(prefs)
                 CGTab.SECURITY -> SecurityTab(
                     prefs = prefs,
-                    serviceEnabled = serviceEnabled,
-                    deviceAdminActive = deviceAdminActive,
+                    safeguards = safeguards,
                     hasPassword = hasPassword,
                     onHasPasswordChange = { hasPassword = it },
                     onOpenAccessibilitySettings = {
@@ -250,4 +265,9 @@ private fun requestIgnoreBatteryOptimizations(context: Context) {
         data = Uri.parse("package:${context.packageName}")
     }
     context.startActivity(intent)
+}
+
+private fun isBatteryOptimizationIgnored(context: Context): Boolean {
+    val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    return powerManager.isIgnoringBatteryOptimizations(context.packageName)
 }

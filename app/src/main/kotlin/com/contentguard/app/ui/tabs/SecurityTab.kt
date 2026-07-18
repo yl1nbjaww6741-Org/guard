@@ -32,14 +32,14 @@ import com.contentguard.app.ui.CGLabel
 import com.contentguard.app.ui.CGPageTitle
 import com.contentguard.app.ui.CGSub
 import com.contentguard.app.ui.CGToggle
+import com.contentguard.app.ui.SafeguardState
 import com.contentguard.app.ui.theme.CGColor
 
-/** The safeguards that keep ContentGuard running, and the password that guards them - restyled to the redesign's token system (step 3), same live state and gating as step 2. */
+/** The safeguards that keep ContentGuard running, and the password that guards them - live pillar state (step 4) shared with the Home seal via one SafeguardState object. */
 @Composable
 fun SecurityTab(
     prefs: PrefsRepository,
-    serviceEnabled: Boolean,
-    deviceAdminActive: Boolean,
+    safeguards: SafeguardState,
     hasPassword: Boolean,
     onHasPasswordChange: (Boolean) -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
@@ -60,7 +60,7 @@ fun SecurityTab(
 
         item {
             CGCard {
-                SafeguardRow(label = "Screen watching", on = serviceEnabled)
+                SafeguardRow(label = "Screen watching", on = safeguards.accessibilityEnabled)
                 CGHint("ContentGuard reads screen content only while a monitored app is open. Nothing works without this.")
                 CGButton(
                     "Open accessibility settings",
@@ -74,11 +74,11 @@ fun SecurityTab(
 
         item {
             CGCard {
-                SafeguardRow(label = "Uninstall lock", on = deviceAdminActive)
+                SafeguardRow(label = "Uninstall lock", on = safeguards.deviceAdminActive)
                 CGHint("Can't be force-stopped or uninstalled until this is turned off in Settings → Security → Device admin.")
                 CGButton(
-                    if (deviceAdminActive) "Manage device admin" else "Enable device admin",
-                    onClick = if (deviceAdminActive) onOpenSecuritySettings else onEnableDeviceAdmin,
+                    if (safeguards.deviceAdminActive) "Manage device admin" else "Enable device admin",
+                    onClick = if (safeguards.deviceAdminActive) onOpenSecuritySettings else onEnableDeviceAdmin,
                     ghost = true,
                     small = true,
                     modifier = Modifier.padding(top = 12.dp),
@@ -88,11 +88,7 @@ fun SecurityTab(
 
         item {
             CGCard {
-                // No live on/off check plumbed in for this one yet (unlike
-                // the two above) - that's step 4's "single state object"
-                // work, alongside the seal. Just the label/hint/button for
-                // now, matching what the pre-restyle card actually offered.
-                CGLabel("Always running")
+                SafeguardRow(label = "Always running", on = safeguards.batteryOptimizationIgnored)
                 CGHint("Exempt from battery optimisation so the service can't be quietly killed.")
                 CGButton(
                     "Ignore battery optimizations",

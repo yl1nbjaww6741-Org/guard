@@ -278,13 +278,19 @@ fun RowScope.CGMetric(number: String, unit: String?, kicker: String, quiet: Bool
     }
 }
 
-/** `.metrics` grid wrapper - 1px hairline gutters between cells, clipped to the same radius as a card. */
+/**
+ * `.metrics` grid wrapper - 1px hairline gutters between cells. `shape`
+ * defaults to all four corners rounded (a single-row grid); pass a
+ * corner-specific shape (e.g. top-only for the first of several stacked
+ * rows) so a multi-row grid clips as one continuous card instead of a
+ * stack of individually-rounded rows.
+ */
 @Composable
-fun CGMetricsRow(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
+fun CGMetricsRow(modifier: Modifier = Modifier, shape: Shape = RoundedCornerShape(14.dp), content: @Composable RowScope.() -> Unit) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(shape)
             .background(CGColor.Line),
         horizontalArrangement = Arrangement.spacedBy(1.dp),
         content = content,
