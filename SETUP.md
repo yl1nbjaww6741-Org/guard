@@ -241,6 +241,22 @@ The Settings screen has an "App password" card. Once set, it gates:
 No password set means both are open exactly as before - this is opt-in.
 Stored as a salted SHA-256 hash in `PrefsRepository`, never the raw text.
 
+**Third guarded screen, found via real-device testing**: ColorOS's own
+per-app battery-management page (Settings > Battery > ContentGuard,
+reached via a different path than the standard "App info" screen) has its
+own "Force stop" button - and Device Admin's force-stop protection only
+greys out the button on the standard AOSP App info page, not on this
+separate OEM screen, so it was a live, unguarded way to kill the app.
+Added `"contentguard"` (the app's own display label, which is this
+screen's window title) to `GUARDED_SETTINGS_TITLE_MARKERS` - doubles as a
+catch-all for any Settings screen titled after the app, not just this one
+specific ColorOS page, on the same reasoning as the other two markers.
+Assumes this screen is still hosted inside `com.android.settings` like
+"Device admin apps"/"Accessibility" are - if a ColorOS build routes it
+through a separate OEM battery-manager package instead, this guard won't
+trigger at all, since the check is gated on `packageName == SETTINGS_PACKAGE`
+first. Not verified beyond the one screenshot that surfaced this.
+
 ### Gate 3 (image detection) also catches Compose-rendered content
 
 `NodeInspector` originally only flagged a node as "image-like" by className

@@ -537,7 +537,21 @@ class ContentGuardService : AccessibilityService() {
         private const val SETTINGS_PACKAGE = "com.android.settings"
 
         // Matched against the window's own title, not screen content - see
-        // the comment at the call site.
-        private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "accessibility")
+        // the comment at the call site. "contentguard" added after
+        // real-device testing found ColorOS's own battery-management page
+        // for this app (Settings > Battery > ContentGuard, distinct from
+        // the standard AOSP "App info" screen) has its own "Force stop"
+        // button that Device Admin's force-stop protection doesn't reach -
+        // that protection only greys out the button on the standard App
+        // info page, not on every OEM screen that happens to offer the
+        // same action. The app's own display label ("ContentGuard") is
+        // this screen's window title, and doubles as a robust catch-all:
+        // any Settings screen titled "ContentGuard" is inherently a
+        // management surface for this app specifically (App info, this
+        // battery page, permissions, whatever else ColorOS nests under
+        // it), so guarding on the title rather than enumerating every
+        // OEM-specific screen by its own wording covers this and similar
+        // screens at once.
+        private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "accessibility", "contentguard")
     }
 }
