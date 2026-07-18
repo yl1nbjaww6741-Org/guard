@@ -86,12 +86,14 @@ object IncognitoDetector {
         "com.sec.android.app.sbrowser",
         "com.opera.browser",
         "com.opera.mini.native",
+        "com.opera.touch",
         "com.brave.browser",
         "com.vivaldi.browser",
         "com.duckduckgo.mobile.android",
         "com.kiwibrowser.browser",
         "com.UCMobile.intl",
         "com.mi.globalbrowser",
+        "com.yandex.browser",
     )
 
     fun isBrowserPackage(packageName: String): Boolean = packageName in BROWSER_PACKAGES
