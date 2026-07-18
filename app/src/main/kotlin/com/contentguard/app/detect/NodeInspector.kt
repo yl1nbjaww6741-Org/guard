@@ -11,13 +11,6 @@ data class NodeScanResult(
     // search box), separate from visibleText - see KeywordBlocklist for why
     // search-intent matching deliberately doesn't use the whole-page text.
     val inputFieldText: String,
-    // Temporary diagnostic: one entry per isEditable node seen during the
-    // walk, regardless of isVisibleToUser or whether it has text - see
-    // ContentGuardService's GATE4B_INPUT_FIELD_TEXT_DEBUG log line. Lets a
-    // real-device test tell apart "no editable node found at all" from
-    // "found one, but isVisibleToUser was false" from "found one, visible,
-    // but node.text was empty" - each points to a different fix.
-    val editableNodeDebug: List<String>,
 )
 
 /** Gate 3 of the cascade: is there even image-shaped content on screen? */
@@ -58,13 +51,12 @@ object NodeInspector {
     /** Does not recycle [root] - the caller owns that node's lifecycle. */
     fun scan(root: AccessibilityNodeInfo?): NodeScanResult {
         if (root == null) {
-            return NodeScanResult(hasImages = false, imageBounds = emptyList(), visibleText = "", inputFieldText = "", editableNodeDebug = emptyList())
+            return NodeScanResult(hasImages = false, imageBounds = emptyList(), visibleText = "", inputFieldText = "")
         }
 
         val bounds = mutableListOf<Rect>()
         val text = StringBuilder()
         val inputText = StringBuilder()
-        val editableDebug = mutableListOf<String>()
         var visited = 0
         var hasSubstantialContent = false
 
@@ -97,14 +89,22 @@ object NodeInspector {
                 hasSubstantialContent = true
             }
 
-            // Temporary diagnostic, deliberately outside the isVisibleToUser
-            // gate below - if Reddit's search field is isEditable but
-            // isVisibleToUser is false for some reason, the debug line
-            // below would never fire, hiding that as the actual cause.
+            // Deliberately NOT gated on isVisibleToUser, unlike visibleText/
+            // contentDescription below - real-device testing (Reddit's
+            // search box) found a real, actively-typed EditText reporting
+            // isVisibleToUser() == false, apparently a custom search-bar
+            // pattern where the input-handling EditText itself is invisible/
+            // transparent while a separately-styled view shows the text -
+            // gating this the same way silently dropped every keyword typed
+            // there. isEditable (not a className check) is the framework-
+            // provided signal for "this is a text input," independent of
+            // whatever concrete widget class a given app uses for its
+            // address/search bar - and a WebView's rendered page body never
+            // sets this on the nodes it exposes, so this stays scoped to
+            // what's actually being typed, not page content, regardless of
+            // whether the field itself happens to be visible.
             if (node.isEditable) {
-                editableDebug.add(
-                    "class=$className visible=${node.isVisibleToUser()} textLen=${node.text?.length ?: -1}",
-                )
+                node.text?.let { if (it.isNotBlank()) inputText.append(it).append(' ') }
             }
 
             // isVisibleToUser() gate matters specifically for IncognitoDetector's
@@ -115,20 +115,11 @@ object NodeInspector {
             // (not just what's actually on screen) could false-positive gate 4
             // even though nothing matching is visible to the user. Doesn't
             // affect hasImages/imageBounds above - those are geometry-only and
-            // already require a real size regardless of this filter.
+            // already require a real size regardless of this filter. Doesn't
+            // apply to the isEditable check above - see its own comment.
             if (node.isVisibleToUser()) {
                 node.text?.let { if (it.isNotBlank()) text.append(it).append(' ') }
                 node.contentDescription?.let { if (it.isNotBlank()) text.append(it).append(' ') }
-
-                // isEditable (not a className check) is the framework-provided
-                // signal for "this is a text input," independent of whatever
-                // concrete widget class each browser actually uses for its
-                // address/search bar - and a WebView's rendered page body
-                // never sets this on the nodes it exposes, so this stays
-                // scoped to what's actually being typed, not page content.
-                if (node.isEditable) {
-                    node.text?.let { if (it.isNotBlank()) inputText.append(it).append(' ') }
-                }
             }
 
             for (i in 0 until node.childCount) {
@@ -149,7 +140,6 @@ object NodeInspector {
             imageBounds = bounds,
             visibleText = text.toString().trim(),
             inputFieldText = inputText.toString().trim(),
-            editableNodeDebug = editableDebug,
         )
     }
 }

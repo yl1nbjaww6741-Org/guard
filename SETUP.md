@@ -776,6 +776,18 @@ WebView's page body is never exposed as an editable node's own text, so
 restricting to `inputFieldText` keeps this to what's actually being
 searched for.
 
+Unlike `visibleText`/`contentDescription` collection, the `isEditable`
+check is deliberately *not* gated on `isVisibleToUser()`. Real-device
+testing (typing a keyword into Reddit's own search box) found this gate
+never firing there - added temporary logging (`GATE4B_INPUT_FIELD_TEXT_DEBUG`,
+`GATE4B_EDITABLE_NODE_DEBUG`, since removed) showed a real `EditText` with
+the typed text (`textLen=6`, matching the keyword) but `isVisibleToUser()
+== false` - apparently a custom search-bar pattern where the actual
+input-handling `EditText` is invisible/transparent while a separately-
+styled view shows the text on screen. Gating `inputFieldText` on
+visibility the way `visibleText` needs to be (see gate 4's history above)
+silently dropped every keyword typed into a field built this way.
+
 `KeywordBlocklist.EXPLICIT_KEYWORDS` favors high-precision terms - known
 adult platform names (`pornhub`, `xvideos`, etc. - unambiguous by
 themselves) and explicit-content genre phrases (`"xxx video"`, `"nude

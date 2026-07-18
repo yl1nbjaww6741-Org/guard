@@ -376,25 +376,10 @@ class ContentGuardService : AccessibilityService() {
         // someone is actively typing, not incidental content - so the same
         // risk doesn't apply, and restricting it to browsers only meant a
         // search typed into Reddit's own search box, or a Messages compose
-        // field, was never checked at all.
-        //
-        // Temporary diagnostic: real-device testing found gate 4b never
-        // firing in Reddit despite typing a listed keyword into its search
-        // box, with no clue why from the existing logs alone - this surfaces
-        // exactly what NodeInspector thinks the current isEditable text is,
-        // so a non-match is a direct lookup (empty? wrong text? truncated?)
-        // instead of another blind guess at why a specific app's input
-        // field isn't being read correctly.
-        if (scan.inputFieldText.isNotBlank()) {
-            val line = "[$pkg] GATE4B_INPUT_FIELD_TEXT_DEBUG text=\"${scan.inputFieldText}\""
-            Log.d(TAG, line)
-            DebugLogBuffer.add(TAG, line)
-        }
-        if (scan.editableNodeDebug.isNotEmpty()) {
-            val line = "[$pkg] GATE4B_EDITABLE_NODE_DEBUG ${scan.editableNodeDebug.joinToString("; ")}"
-            Log.d(TAG, line)
-            DebugLogBuffer.add(TAG, line)
-        }
+        // field, was never checked at all. (NodeInspector.scan's isEditable
+        // check is also deliberately not gated on isVisibleToUser, for the
+        // same reason - see its own comment for the real-device case that
+        // required it.)
         val matchedExplicitKeyword = KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
         if (matchedExplicitKeyword != null) {
             if (!overlay.isVisible()) {
