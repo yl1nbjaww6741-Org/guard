@@ -380,6 +380,16 @@ class ContentGuardService : AccessibilityService() {
         // check is also deliberately not gated on isVisibleToUser, for the
         // same reason - see its own comment for the real-device case that
         // required it.)
+        //
+        // Temporary diagnostic (round 2): the isVisibleToUser fix didn't
+        // resolve the real-device Reddit case on its own - this surfaces
+        // every isEditable node's raw text (not just its length) so a
+        // continued non-match is a direct lookup instead of a re-guess.
+        if (scan.editableNodeDebug.isNotEmpty()) {
+            val line = "[$pkg] GATE4B_EDITABLE_NODE_DEBUG ${scan.editableNodeDebug.joinToString("; ")}"
+            Log.d(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+        }
         val matchedExplicitKeyword = KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
         if (matchedExplicitKeyword != null) {
             if (!overlay.isVisible()) {

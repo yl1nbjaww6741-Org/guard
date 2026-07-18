@@ -11,6 +11,12 @@ data class NodeScanResult(
     // search box), separate from visibleText - see KeywordBlocklist for why
     // search-intent matching deliberately doesn't use the whole-page text.
     val inputFieldText: String,
+    // Temporary diagnostic (round 2 - the isVisibleToUser fix didn't
+    // resolve the real-device Reddit case, so re-added rather than guess
+    // again): one entry per isEditable node seen - class, tree depth,
+    // isVisibleToUser, and its raw text - collected unconditionally,
+    // independent of every other gate in this function.
+    val editableNodeDebug: List<String>,
 )
 
 /** Gate 3 of the cascade: is there even image-shaped content on screen? */
@@ -51,12 +57,13 @@ object NodeInspector {
     /** Does not recycle [root] - the caller owns that node's lifecycle. */
     fun scan(root: AccessibilityNodeInfo?): NodeScanResult {
         if (root == null) {
-            return NodeScanResult(hasImages = false, imageBounds = emptyList(), visibleText = "", inputFieldText = "")
+            return NodeScanResult(hasImages = false, imageBounds = emptyList(), visibleText = "", inputFieldText = "", editableNodeDebug = emptyList())
         }
 
         val bounds = mutableListOf<Rect>()
         val text = StringBuilder()
         val inputText = StringBuilder()
+        val editableDebug = mutableListOf<String>()
         var visited = 0
         var hasSubstantialContent = false
 
@@ -104,6 +111,9 @@ object NodeInspector {
             // what's actually being typed, not page content, regardless of
             // whether the field itself happens to be visible.
             if (node.isEditable) {
+                editableDebug.add(
+                    "class=$className depth=$depth visible=${node.isVisibleToUser()} text=\"${node.text}\"",
+                )
                 node.text?.let { if (it.isNotBlank()) inputText.append(it).append(' ') }
             }
 
@@ -140,6 +150,7 @@ object NodeInspector {
             imageBounds = bounds,
             visibleText = text.toString().trim(),
             inputFieldText = inputText.toString().trim(),
+            editableNodeDebug = editableDebug,
         )
     }
 }
