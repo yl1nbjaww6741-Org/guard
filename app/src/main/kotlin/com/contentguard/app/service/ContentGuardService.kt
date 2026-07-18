@@ -112,28 +112,13 @@ class ContentGuardService : AccessibilityService() {
             return
         }
 
-        // Temporary: the "contentguard" title marker (added to guard
-        // ColorOS's per-app battery page) didn't take effect on real-device
-        // retesting - this logs every real window-state-change's package
-        // and title so we can see directly whether that screen (1) isn't
-        // actually hosted in SETTINGS_PACKAGE, (2) never fires
-        // TYPE_WINDOW_STATE_CHANGED at all (e.g. an in-place fragment swap
-        // within the same window), or (3) reports different title text
-        // than expected - rather than guessing a third time. Remove once
-        // diagnosed.
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val debugLine = "[$packageName] GATE_SETTINGS_GUARD_DEBUG title=\"${event.text.joinToString(" ")}\""
-            Log.i(TAG, debugLine)
-            DebugLogBuffer.add(TAG, debugLine)
-        }
-
         val isRealAppSwitch = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             packageName != lastForegroundPackage &&
             !scopePolicy.isHardExcluded(packageName)
 
         if (isRealAppSwitch) {
             lastForegroundPackage = packageName
-            if (packageName != SETTINGS_PACKAGE) {
+            if (packageName != SETTINGS_PACKAGE && packageName != OPLUS_BATTERY_PACKAGE) {
                 settingsGuardUnlocked = false
                 onGuardedSettingsScreen = false
             }
@@ -152,7 +137,26 @@ class ContentGuardService : AccessibilityService() {
             onGuardedSettingsScreen = GUARDED_SETTINGS_TITLE_MARKERS.any { screenTitle.contains(it) }
         }
 
-        if (packageName == SETTINGS_PACKAGE && onGuardedSettingsScreen && prefs.hasPassword() && !settingsGuardUnlocked) {
+        // OPLUS_BATTERY_PACKAGE can't use the title check above - real-
+        // device logging (GATE_SETTINGS_GUARD_DEBUG, added specifically to
+        // check this rather than guess again) found this screen's own
+        // window title is just the generic "Battery", shared by every
+        // app's battery page, not distinctive text like "Device admin
+        // apps" or "ContentGuard". Falls back to scanning the screen's
+        // actual visible content for the app's own name instead, the same
+        // way gate 4's content check works when a title alone isn't enough
+        // to tell screens apart.
+        if (packageName == OPLUS_BATTERY_PACKAGE && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val root = rootInActiveWindow
+            val screenText = NodeInspector.scan(root).visibleText.lowercase()
+            @Suppress("DEPRECATION")
+            root?.recycle()
+            onGuardedSettingsScreen = screenText.contains("contentguard")
+        }
+
+        if ((packageName == SETTINGS_PACKAGE || packageName == OPLUS_BATTERY_PACKAGE) &&
+            onGuardedSettingsScreen && prefs.hasPassword() && !settingsGuardUnlocked
+        ) {
             if (!passwordGuardOverlay.isVisible()) {
                 val line = "[$packageName] exit@GATE_SETTINGS_GUARD"
                 Log.i(TAG, line)
@@ -552,21 +556,24 @@ class ContentGuardService : AccessibilityService() {
         private const val SETTINGS_PACKAGE = "com.android.settings"
 
         // Matched against the window's own title, not screen content - see
-        // the comment at the call site. "contentguard" added after
-        // real-device testing found ColorOS's own battery-management page
-        // for this app (Settings > Battery > ContentGuard, distinct from
-        // the standard AOSP "App info" screen) has its own "Force stop"
-        // button that Device Admin's force-stop protection doesn't reach -
-        // that protection only greys out the button on the standard App
-        // info page, not on every OEM screen that happens to offer the
-        // same action. The app's own display label ("ContentGuard") is
-        // this screen's window title, and doubles as a robust catch-all:
-        // any Settings screen titled "ContentGuard" is inherently a
-        // management surface for this app specifically (App info, this
-        // battery page, permissions, whatever else ColorOS nests under
-        // it), so guarding on the title rather than enumerating every
-        // OEM-specific screen by its own wording covers this and similar
-        // screens at once.
+        // the comment at the call site. "contentguard" covers the standard
+        // AOSP "App info" screen (Settings > Apps > ContentGuard), whose
+        // title really is the app's own display label - unlike ColorOS's
+        // separate per-app battery page, which needed a different fix
+        // entirely (see OPLUS_BATTERY_PACKAGE below).
         private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "accessibility", "contentguard")
+
+        // Discovered via real-device logging (GATE_SETTINGS_GUARD_DEBUG,
+        // since removed) that ColorOS's per-app battery-management page
+        // (Settings > Battery > ContentGuard - the screen with its own
+        // "Force stop" button Device Admin's protection doesn't reach) is
+        // hosted in this entirely separate package, never SETTINGS_PACKAGE -
+        // the original "contentguard" title marker could never have
+        // matched here regardless of wording, since the check never even
+        // ran against this package. Its title is also just the generic
+        // "Battery", shared by every app's battery page - so unlike
+        // SETTINGS_PACKAGE this can't be told apart by title at all; see
+        // the content-based check at the call site instead.
+        private const val OPLUS_BATTERY_PACKAGE = "com.oplus.battery"
     }
 }

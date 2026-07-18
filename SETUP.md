@@ -248,27 +248,34 @@ reached via a different path than the standard "App info" screen) has its
 own "Force stop" button - and Device Admin's force-stop protection only
 greys out the button on the standard AOSP App info page, not on this
 separate OEM screen, so it was a live, unguarded way to kill the app.
-Added `"contentguard"` (the app's own display label, which is this
-screen's window title) to `GUARDED_SETTINGS_TITLE_MARKERS` - doubles as a
-catch-all for any Settings screen titled after the app, not just this one
-specific ColorOS page, on the same reasoning as the other two markers.
-Assumes this screen is still hosted inside `com.android.settings` like
-"Device admin apps"/"Accessibility" are - if a ColorOS build routes it
-through a separate OEM battery-manager package instead, this guard won't
-trigger at all, since the check is gated on `packageName == SETTINGS_PACKAGE`
-first.
 
-**Confirmed not working on real-device retesting** - the "contentguard"
-marker didn't guard the screen. Rather than guess a third time (the
-Chrome incognito saga earlier in this project is exactly the cautionary
-tale for that), added a temporary `GATE_SETTINGS_GUARD_DEBUG title="..."`
-log line in `onAccessibilityEvent`, firing on *every* real
-`TYPE_WINDOW_STATE_CHANGED` event regardless of package - this will show
-directly whether the battery page (1) isn't actually hosted in
-`com.android.settings`, (2) never fires a window-state-change at all (an
-in-place fragment swap within the same window wouldn't), or (3) reports
-different title text than assumed. Remove this log line once the real
-cause is found and fixed.
+First attempt added `"contentguard"` to `GUARDED_SETTINGS_TITLE_MARKERS`,
+assuming the screen was hosted in `com.android.settings` like "Device
+admin apps"/"Accessibility" are, with its own display label as the window
+title. **Confirmed not working on real-device retesting.** Rather than
+guess a third time (the Chrome incognito saga earlier in this project is
+exactly the cautionary tale for that), added a temporary
+`GATE_SETTINGS_GUARD_DEBUG title="..."` log line firing on every real
+`TYPE_WINDOW_STATE_CHANGED` event regardless of package, and had the user
+navigate to the screen with it running.
+
+**Root cause, confirmed from that log**: both assumptions were wrong at
+once. The screen is hosted in `com.oplus.battery` - a completely separate
+package from `com.android.settings`, so the guard's package check could
+never have matched regardless of title wording. And its window title is
+just the generic `"Battery"`, shared by every app's battery page, not a
+distinctive per-app string the way "Device admin apps"/"Accessibility"/
+"ContentGuard" (the App info screen's title) are.
+
+Fixed with two changes, since a title check can't distinguish "whose"
+battery page this is: (1) `OPLUS_BATTERY_PACKAGE` added as a second
+guarded package alongside `SETTINGS_PACKAGE` throughout
+`onAccessibilityEvent` (the unlock-reset condition, and the guard-trigger
+condition), and (2) for that package specifically, falls back to scanning
+the screen's actual visible content (`NodeInspector.scan().visibleText`)
+for the app's own name, the same way gate 4's content check works when a
+title alone isn't enough to tell screens apart. The diagnostic log line
+has been removed now that the real cause is fixed.
 
 ### Asymmetric protection: harden freely, weaken needs the password
 
