@@ -176,6 +176,30 @@ fun CGButton(
     }
 }
 
+/** The (weakening, onCancelled, apply) shape of the app's one asymmetric password gate - see ContentGuardApp.applyOrChallenge. */
+typealias GateChallenge = (weakening: Boolean, onCancelled: () -> Unit, apply: () -> Unit) -> Unit
+
+/**
+ * A CGButton wired straight into the app's one password gate - the
+ * redesign's "lock rule": password required to weaken protection or reach
+ * a system Accessibility/Device-admin screen, never to tighten or view.
+ * Every gated button in the app is always the weakening direction when
+ * tapped (there's no "tightening" button-press, only slider/toggle moves
+ * for those), so this just saves each call site repeating
+ * `onClick = { applyOrChallenge(true, {}, action) }`.
+ */
+@Composable
+fun CGGatedButton(
+    text: String,
+    applyOrChallenge: GateChallenge,
+    onConfirmed: () -> Unit,
+    modifier: Modifier = Modifier,
+    ghost: Boolean = false,
+    small: Boolean = false,
+) {
+    CGButton(text, onClick = { applyOrChallenge(true, {}, onConfirmed) }, modifier = modifier, ghost = ghost, small = small)
+}
+
 /** `.tog` - the pill switch, standing in for M3's Switch to match the prototype's track/thumb sizing exactly. */
 @Composable
 fun CGToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {

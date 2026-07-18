@@ -50,6 +50,7 @@ import com.contentguard.app.ui.CGPageTitle
 import com.contentguard.app.ui.CGSegmented
 import com.contentguard.app.ui.CGSub
 import com.contentguard.app.ui.CGToggle
+import com.contentguard.app.ui.GateChallenge
 import com.contentguard.app.ui.theme.CGColor
 import com.contentguard.app.ui.theme.JetBrainsMono
 import kotlinx.coroutines.Dispatchers
@@ -74,7 +75,7 @@ private enum class AppsFilter { ALL, MONITORED, ALLOWED, SYSTEM }
 
 /** How ContentGuard scopes what it watches - restyled to the redesign's token system (step 3), same PrefsRepository state and gating as step 2. */
 @Composable
-fun AppsTab(prefs: PrefsRepository, applyOrChallenge: (weakening: Boolean, onCancelled: () -> Unit, apply: () -> Unit) -> Unit) {
+fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
     val context = LocalContext.current
 
     var mode by remember { mutableStateOf(prefs.mode) }

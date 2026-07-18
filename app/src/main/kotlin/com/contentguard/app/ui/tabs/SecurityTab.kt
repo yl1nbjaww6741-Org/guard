@@ -27,11 +27,13 @@ import com.contentguard.app.ui.CGBottomNavClearance
 import com.contentguard.app.ui.CGButton
 import com.contentguard.app.ui.CGCard
 import com.contentguard.app.ui.CGEyebrow
+import com.contentguard.app.ui.CGGatedButton
 import com.contentguard.app.ui.CGHint
 import com.contentguard.app.ui.CGLabel
 import com.contentguard.app.ui.CGPageTitle
 import com.contentguard.app.ui.CGSub
 import com.contentguard.app.ui.CGToggle
+import com.contentguard.app.ui.GateChallenge
 import com.contentguard.app.ui.SafeguardState
 import com.contentguard.app.ui.theme.CGColor
 
@@ -46,7 +48,7 @@ fun SecurityTab(
     onIgnoreBatteryOptimizations: () -> Unit,
     onEnableDeviceAdmin: () -> Unit,
     onOpenSecuritySettings: () -> Unit,
-    applyOrChallenge: (weakening: Boolean, onCancelled: () -> Unit, apply: () -> Unit) -> Unit,
+    applyOrChallenge: GateChallenge,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -62,9 +64,13 @@ fun SecurityTab(
             CGCard {
                 SafeguardRow(label = "Screen watching", on = safeguards.accessibilityEnabled)
                 CGHint("ContentGuard reads screen content only while a monitored app is open. Nothing works without this.")
-                CGButton(
+                // Reaching this screen at all is gated - it's where
+                // accessibility would actually get turned off, regardless
+                // of whether it's currently on or off.
+                CGGatedButton(
                     "Open accessibility settings",
-                    onClick = onOpenAccessibilitySettings,
+                    applyOrChallenge = applyOrChallenge,
+                    onConfirmed = onOpenAccessibilitySettings,
                     ghost = true,
                     small = true,
                     modifier = Modifier.padding(top = 12.dp),
@@ -76,13 +82,29 @@ fun SecurityTab(
             CGCard {
                 SafeguardRow(label = "Uninstall lock", on = safeguards.deviceAdminActive)
                 CGHint("Can't be force-stopped or uninstalled until this is turned off in Settings → Security → Device admin.")
-                CGButton(
-                    if (safeguards.deviceAdminActive) "Manage device admin" else "Enable device admin",
-                    onClick = if (safeguards.deviceAdminActive) onOpenSecuritySettings else onEnableDeviceAdmin,
-                    ghost = true,
-                    small = true,
-                    modifier = Modifier.padding(top = 12.dp),
-                )
+                if (safeguards.deviceAdminActive) {
+                    // Reaching the device-admin apps list is gated - it's
+                    // where this would actually get turned off.
+                    CGGatedButton(
+                        "Manage device admin",
+                        applyOrChallenge = applyOrChallenge,
+                        onConfirmed = onOpenSecuritySettings,
+                        ghost = true,
+                        small = true,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                } else {
+                    // Bootstrapping device admin is hardening (adding a
+                    // protection that wasn't there) - free, like setting a
+                    // password for the first time.
+                    CGButton(
+                        "Enable device admin",
+                        onClick = onEnableDeviceAdmin,
+                        ghost = true,
+                        small = true,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                }
             }
         }
 

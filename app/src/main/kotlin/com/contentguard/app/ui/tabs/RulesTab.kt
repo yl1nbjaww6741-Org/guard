@@ -43,12 +43,13 @@ import com.contentguard.app.ui.CGPageTitle
 import com.contentguard.app.ui.CGSub
 import com.contentguard.app.ui.CGToggle
 import com.contentguard.app.ui.CGVal
+import com.contentguard.app.ui.GateChallenge
 import com.contentguard.app.ui.theme.CGColor
 import com.contentguard.app.ui.theme.JetBrainsMono
 
 /** How hard ContentGuard blocks, and what it blocks on sight - restyled to the redesign's token system (step 3), same PrefsRepository state and gating as step 2. */
 @Composable
-fun RulesTab(prefs: PrefsRepository, applyOrChallenge: (weakening: Boolean, onCancelled: () -> Unit, apply: () -> Unit) -> Unit) {
+fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
     var threshold by remember { mutableFloatStateOf(prefs.nsfwThreshold) }
     var dismissOnBlock by remember { mutableStateOf(prefs.dismissOnBlock) }
     var captureThrottleMs by remember { mutableStateOf(prefs.captureThrottleMs) }
