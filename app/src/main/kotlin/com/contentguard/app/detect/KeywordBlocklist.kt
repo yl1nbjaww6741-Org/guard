@@ -53,6 +53,12 @@ object KeywordBlocklist {
         "pornhub", "xvideos", "xnxx", "xhamster", "redtube", "youporn",
         "brazzers", "spankbang", "onlyfans", "chaturbate", "livejasmin",
         "stripchat", "bongacams", "myfreecams",
+
+        // Magnet links/.torrent files - a common way explicit content gets
+        // downloaded rather than streamed. High-precision the same way the
+        // platform names above are: neither string has an ordinary,
+        // non-file-sharing meaning that would show up in typed text.
+        "magnet:", ".torrent",
     )
 
     /** [keywords] defaults to the built-in list; callers pass PrefsRepository's stored set instead when available. */
