@@ -29,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.contentguard.app.detect.KeywordBlocklist
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.ui.CGAppTitleRow
