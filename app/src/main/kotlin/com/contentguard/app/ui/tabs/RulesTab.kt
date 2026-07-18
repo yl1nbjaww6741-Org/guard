@@ -31,7 +31,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.contentguard.app.detect.KeywordBlocklist
 import com.contentguard.app.scope.PrefsRepository
-import com.contentguard.app.ui.CGAppTitleRow
 import com.contentguard.app.ui.CGBottomNavClearance
 import com.contentguard.app.ui.CGButton
 import com.contentguard.app.ui.CGCard
@@ -63,7 +62,6 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
         contentPadding = CGBottomNavClearance,
     ) {
-        item { CGAppTitleRow() }
         item { CGPageTitle("Rules") }
         item { CGSub("How hard ContentGuard blocks, and what it blocks on sight.") }
 

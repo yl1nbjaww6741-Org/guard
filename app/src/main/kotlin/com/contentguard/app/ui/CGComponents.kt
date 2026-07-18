@@ -43,7 +43,13 @@ import com.contentguard.app.ui.theme.JetBrainsMono
 
 val CGCardShape: Shape = RoundedCornerShape(18.dp)
 
-/** `.card` - the ~18px-radius surface every settings group sits in. */
+/**
+ * `.card` - the ~18px-radius surface every settings group sits in.
+ * Carries its own `margin-bottom:14px` (as trailing space the background
+ * doesn't fill, applied before the background/border so it doesn't get
+ * painted over) so consecutive cards in a LazyColumn aren't left touching
+ * with nothing but their own 1dp border between them.
+ */
 @Composable
 fun CGCard(
     modifier: Modifier = Modifier,
@@ -53,6 +59,7 @@ fun CGCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .padding(bottom = 14.dp)
             .background(CGColor.Surface, CGCardShape)
             .border(1.dp, CGColor.Line, CGCardShape)
             .padding(padding),

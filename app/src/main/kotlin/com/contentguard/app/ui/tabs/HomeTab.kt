@@ -38,7 +38,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.contentguard.app.scope.PrefsRepository
-import com.contentguard.app.ui.CGAppTitleRow
 import com.contentguard.app.ui.CGBottomNavClearance
 import com.contentguard.app.ui.CGCardShape
 import com.contentguard.app.ui.CGCardTightPadding
@@ -64,8 +63,6 @@ fun HomeTab(prefs: PrefsRepository, safeguards: SafeguardState) {
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
         contentPadding = CGBottomNavClearance,
     ) {
-        item { CGAppTitleRow() }
-
         if (!safeguards.allActive) {
             item { AttentionBanner(safeguards) }
         }

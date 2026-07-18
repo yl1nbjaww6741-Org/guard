@@ -45,7 +45,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.scope.ScopeMode
-import com.contentguard.app.ui.CGAppTitleRow
 import com.contentguard.app.ui.CGBottomNavClearance
 import com.contentguard.app.ui.CGCardShape
 import com.contentguard.app.ui.CGChip
@@ -140,7 +139,6 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
         contentPadding = CGBottomNavClearance,
     ) {
-        item { CGAppTitleRow() }
         item { CGPageTitle("Apps") }
         item {
             CGSub(

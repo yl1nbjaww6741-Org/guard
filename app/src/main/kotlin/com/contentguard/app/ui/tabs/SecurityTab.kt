@@ -22,7 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.contentguard.app.scope.PrefsRepository
-import com.contentguard.app.ui.CGAppTitleRow
 import com.contentguard.app.ui.CGBottomNavClearance
 import com.contentguard.app.ui.CGButton
 import com.contentguard.app.ui.CGCard
@@ -54,7 +53,6 @@ fun SecurityTab(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
         contentPadding = CGBottomNavClearance,
     ) {
-        item { CGAppTitleRow() }
         item { CGPageTitle("Security") }
         item { CGSub("The safeguards that keep ContentGuard running — and the password that guards them.") }
 

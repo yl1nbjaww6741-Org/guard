@@ -31,7 +31,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.contentguard.app.scope.PrefsRepository
-import com.contentguard.app.ui.CGAppTitleRow
 import com.contentguard.app.ui.CGBottomNavClearance
 import com.contentguard.app.ui.CGButton
 import com.contentguard.app.ui.CGEyebrow
@@ -54,7 +53,6 @@ fun ActivityTab(prefs: PrefsRepository) {
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
         contentPadding = CGBottomNavClearance,
     ) {
-        item { CGAppTitleRow() }
         item { CGPageTitle("Activity") }
         item {
             CGSub(

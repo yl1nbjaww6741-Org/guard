@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.Icon
@@ -152,6 +153,11 @@ fun ContentGuardApp(prefs: PrefsRepository) {
             targetState = selected,
             animationSpec = if (animationsEnabled) tween(300) else snap(),
             label = "tab",
+            // The status bar sits over this content otherwise - each tab's
+            // first item (a page title, or Home's seal) needs to clear it
+            // now that there's no "ContentGuard" header row soaking up
+            // that space at the top.
+            modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
         ) { tab ->
             when (tab) {
                 CGTab.HOME -> HomeTab(prefs, safeguards)
