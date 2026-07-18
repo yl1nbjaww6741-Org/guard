@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -110,17 +111,30 @@ private data class AppEntry(
 
 @Composable
 private fun SettingsScreen(prefs: PrefsRepository) {
-    var unlocked by remember { mutableStateOf(!prefs.hasPassword()) }
-    if (!unlocked) {
-        PasswordUnlockScreen(onUnlock = { entered ->
-            val ok = prefs.verifyPassword(entered)
-            if (ok) unlocked = true
-            ok
-        })
-        return
-    }
-
     val context = LocalContext.current
+
+    // Asymmetric protection: tightening a setting (lower threshold, faster
+    // capture, add a keyword, remove an app from the whitelist, etc.) needs
+    // no password - there's no self-commitment reason to add friction to
+    // making the app stricter. Only loosening a setting - the direction
+    // that would actually let someone weaken their own protection - prompts
+    // for the password, inline at the point of that specific change,
+    // rather than gating the whole screen behind one upfront unlock the
+    // way it used to. Viewing Settings (including the debug log/usage
+    // stats) is unrestricted either way; only mutations that loosen
+    // protection are challenged. See applyOrChallenge below and each call
+    // site for how "weakening" is decided per setting.
+    var pendingWeakenAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var pendingWeakenCancel by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    fun applyOrChallenge(weakening: Boolean, onCancelled: () -> Unit = {}, apply: () -> Unit) {
+        if (weakening && prefs.hasPassword()) {
+            pendingWeakenAction = apply
+            pendingWeakenCancel = onCancelled
+        } else {
+            apply()
+        }
+    }
 
     var mode by remember { mutableStateOf(prefs.mode) }
     var threshold by remember { mutableFloatStateOf(prefs.nsfwThreshold) }
@@ -184,15 +198,20 @@ private fun SettingsScreen(prefs: PrefsRepository) {
     }
 
     fun setMonitored(pkg: String, monitor: Boolean) {
-        when (mode) {
-            ScopeMode.MONITOR_ALL_EXCEPT_WHITELIST -> {
-                // "Monitor" off means "add to whitelist" (trusted).
-                prefs.setWhitelisted(pkg, !monitor)
-                whitelist = prefs.getWhitelist()
-            }
-            ScopeMode.MONITOR_ONLY_LISTED -> {
-                prefs.setMonitored(pkg, monitor)
-                monitored = prefs.getMonitoredSet()
+        // Turning monitoring OFF for an app is the weakening direction
+        // regardless of scope mode (it always means "watch this app
+        // less"); turning it ON is hardening and applies immediately.
+        applyOrChallenge(weakening = !monitor) {
+            when (mode) {
+                ScopeMode.MONITOR_ALL_EXCEPT_WHITELIST -> {
+                    // "Monitor" off means "add to whitelist" (trusted).
+                    prefs.setWhitelisted(pkg, !monitor)
+                    whitelist = prefs.getWhitelist()
+                }
+                ScopeMode.MONITOR_ONLY_LISTED -> {
+                    prefs.setMonitored(pkg, monitor)
+                    monitored = prefs.getMonitoredSet()
+                }
             }
         }
     }
@@ -229,20 +248,57 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                 PasswordSection(
                     hasPassword = hasPassword,
                     onSetPassword = { newPassword ->
-                        prefs.setPassword(newPassword)
-                        hasPassword = true
+                        // Changing an *existing* password always needs the
+                        // current one first, regardless of the harden/weaken
+                        // classification everything else uses - otherwise
+                        // anyone could set their own known password and use
+                        // it to unlock every other weakening action from
+                        // then on. Setting a password where none exists yet
+                        // is the bootstrap case - that's hardening (adding a
+                        // protection that wasn't there), so it's free.
+                        applyOrChallenge(weakening = hasPassword) {
+                            prefs.setPassword(newPassword)
+                            hasPassword = true
+                        }
                     },
                 )
             }
 
-            item { ScopeModeSection(mode = mode, onModeChange = { mode = it; prefs.mode = it }) }
+            item {
+                ScopeModeSection(
+                    mode = mode,
+                    onModeChange = { newMode ->
+                        // MONITOR_ONLY_LISTED is the weakening direction -
+                        // it defaults to *not* watching anything unless
+                        // explicitly listed, versus MONITOR_ALL_EXCEPT_WHITELIST's
+                        // broader default coverage.
+                        applyOrChallenge(weakening = newMode == ScopeMode.MONITOR_ONLY_LISTED) {
+                            mode = newMode
+                            prefs.mode = newMode
+                        }
+                    },
+                )
+            }
 
             item {
                 ThresholdSection(
                     threshold = threshold,
                     onThresholdChange = { threshold = it },
-                    onThresholdChangeFinished = { prefs.nsfwThreshold = threshold },
+                    onThresholdChangeFinished = {
+                        val newValue = threshold
+                        val oldValue = prefs.nsfwThreshold
+                        // Lower threshold blocks more (score < threshold
+                        // passes as safe) - raising it is the weakening move.
+                        applyOrChallenge(
+                            weakening = newValue > oldValue,
+                            onCancelled = { threshold = oldValue },
+                        ) {
+                            prefs.nsfwThreshold = newValue
+                        }
+                    },
                     dismissOnBlock = dismissOnBlock,
+                    // Not a strictness lever - doesn't change what gets
+                    // blocked, only the UX after a block already happened.
                     onDismissOnBlockChange = { dismissOnBlock = it; prefs.dismissOnBlock = it },
                 )
             }
@@ -251,7 +307,17 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                 CaptureCadenceSection(
                     throttleMs = captureThrottleMs,
                     onThrottleChange = { captureThrottleMs = it },
-                    onThrottleChangeFinished = { prefs.captureThrottleMs = captureThrottleMs },
+                    onThrottleChangeFinished = {
+                        val newValue = captureThrottleMs
+                        val oldValue = prefs.captureThrottleMs
+                        // Lower cadence = faster/more frequent capture = stricter.
+                        applyOrChallenge(
+                            weakening = newValue > oldValue,
+                            onCancelled = { captureThrottleMs = oldValue },
+                        ) {
+                            prefs.captureThrottleMs = newValue
+                        }
+                    },
                 )
             }
 
@@ -260,19 +326,28 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                     keywords = explicitKeywords,
                     customized = explicitKeywordsCustomized,
                     onAdd = { keyword ->
+                        // Adding a keyword is hardening - more terms blocked.
                         prefs.addExplicitKeyword(keyword)
                         explicitKeywords = prefs.getExplicitKeywords()
                         explicitKeywordsCustomized = prefs.explicitKeywordsAreCustomized()
                     },
                     onRemove = { keyword ->
-                        prefs.removeExplicitKeyword(keyword)
-                        explicitKeywords = prefs.getExplicitKeywords()
-                        explicitKeywordsCustomized = prefs.explicitKeywordsAreCustomized()
+                        // Removing one is weakening - fewer terms blocked.
+                        applyOrChallenge(weakening = true) {
+                            prefs.removeExplicitKeyword(keyword)
+                            explicitKeywords = prefs.getExplicitKeywords()
+                            explicitKeywordsCustomized = prefs.explicitKeywordsAreCustomized()
+                        }
                     },
                     onResetToDefault = {
-                        prefs.resetExplicitKeywordsToDefault()
-                        explicitKeywords = prefs.getExplicitKeywords()
-                        explicitKeywordsCustomized = prefs.explicitKeywordsAreCustomized()
+                        // Could go either direction depending on how the
+                        // list was customized - treated as weakening since
+                        // that's the safer default assumption.
+                        applyOrChallenge(weakening = true) {
+                            prefs.resetExplicitKeywordsToDefault()
+                            explicitKeywords = prefs.getExplicitKeywords()
+                            explicitKeywordsCustomized = prefs.explicitKeywordsAreCustomized()
+                        }
                     },
                 )
             }
@@ -281,10 +356,32 @@ private fun SettingsScreen(prefs: PrefsRepository) {
                 LockoutSection(
                     durationMinutes = lockoutDurationMinutes,
                     onDurationChange = { lockoutDurationMinutes = it },
-                    onDurationChangeFinished = { prefs.lockoutDurationMinutes = lockoutDurationMinutes },
+                    onDurationChangeFinished = {
+                        val newValue = lockoutDurationMinutes
+                        val oldValue = prefs.lockoutDurationMinutes
+                        // Longer lockout is stricter - shortening it is the
+                        // weakening move.
+                        applyOrChallenge(
+                            weakening = newValue < oldValue,
+                            onCancelled = { lockoutDurationMinutes = oldValue },
+                        ) {
+                            prefs.lockoutDurationMinutes = newValue
+                        }
+                    },
                     strikesToLockout = strikesToLockout,
                     onStrikesChange = { strikesToLockout = it },
-                    onStrikesChangeFinished = { prefs.strikesToLockout = strikesToLockout },
+                    onStrikesChangeFinished = {
+                        val newValue = strikesToLockout
+                        val oldValue = prefs.strikesToLockout
+                        // Fewer strikes needed locks out sooner - stricter.
+                        // Raising the count is the weakening move.
+                        applyOrChallenge(
+                            weakening = newValue > oldValue,
+                            onCancelled = { strikesToLockout = oldValue },
+                        ) {
+                            prefs.strikesToLockout = newValue
+                        }
+                    },
                     activeLockouts = activeLockouts,
                     onRefresh = { activeLockouts = prefs.getActiveLockouts() },
                 )
@@ -356,6 +453,66 @@ private fun SettingsScreen(prefs: PrefsRepository) {
             item { DebugLogSection() }
         }
     }
+
+    pendingWeakenAction?.let { action ->
+        WeakenConfirmDialog(
+            onVerify = { entered -> prefs.verifyPassword(entered) },
+            onConfirmed = {
+                action()
+                pendingWeakenAction = null
+                pendingWeakenCancel = null
+            },
+            onDismiss = {
+                pendingWeakenCancel?.invoke()
+                pendingWeakenAction = null
+                pendingWeakenCancel = null
+            },
+        )
+    }
+}
+
+/**
+ * Inline password challenge for a single weakening action - deliberately a
+ * dialog over the current screen, not a full-screen block the way the
+ * old upfront Settings gate was, so only the specific change in question
+ * is held up rather than the whole screen. See applyOrChallenge in
+ * SettingsScreen for what triggers this.
+ */
+@Composable
+private fun WeakenConfirmDialog(onVerify: (String) -> Boolean, onConfirmed: () -> Unit, onDismiss: () -> Unit) {
+    var input by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Password required") },
+        text = {
+            Column {
+                Text("This change weakens ContentGuard's protection. Enter your password to confirm.")
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it; error = false },
+                    label = { Text("Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (error) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Incorrect password", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (onVerify(input)) onConfirmed() else error = true
+            }) { Text("Confirm") }
+        },
+        dismissButton = {
+            Button(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable
@@ -512,36 +669,6 @@ private fun LockoutSection(
 }
 
 @Composable
-private fun PasswordUnlockScreen(onUnlock: (String) -> Boolean) {
-    var input by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text("Enter password", style = MaterialTheme.typography.titleLarge)
-        Spacer(modifier = Modifier.height(16.dp))
-        OutlinedTextField(
-            value = input,
-            onValueChange = { input = it; error = false },
-            label = { Text("Password") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (error) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text("Incorrect password", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = { if (!onUnlock(input)) error = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("Unlock")
-        }
-    }
-}
-
-@Composable
 private fun PasswordSection(hasPassword: Boolean, onSetPassword: (String) -> Unit) {
     var newPassword by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
@@ -556,9 +683,11 @@ private fun PasswordSection(hasPassword: Boolean, onSetPassword: (String) -> Uni
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "Required to open this Settings screen, and to reach the Accessibility or " +
-                    "Device admin apps screens in system Settings - without it, any of those " +
-                    "could be used to undo ContentGuard's protections.",
+                "Required to reach the Accessibility or Device admin apps screens in system " +
+                    "Settings, and to make any change here that weakens protection (raising " +
+                    "the NSFW threshold, whitelisting an app, removing a keyword, etc.) - " +
+                    "tightening a setting never needs it. Viewing this screen doesn't need it " +
+                    "either.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(modifier = Modifier.height(12.dp))

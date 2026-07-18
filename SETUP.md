@@ -220,8 +220,9 @@ block still just shows the overlay on dismissal, same as before.
 
 The Settings screen has an "App password" card. Once set, it gates:
 
-1. **ContentGuard's own Settings screen** - reopening it prompts for the
-   password before showing anything (`SettingsActivity`'s `PasswordUnlockScreen`).
+1. **Weakening changes within ContentGuard's own Settings screen** - see
+   "Asymmetric protection" below; this replaced an earlier design where the
+   whole screen was gated behind one upfront unlock.
 2. **The system "Accessibility" and "Device admin apps" screens** -
    `ContentGuardService` checks the *window title* (from the
    `TYPE_WINDOW_STATE_CHANGED` event's own `text`, not a scan of all
@@ -256,6 +257,55 @@ Assumes this screen is still hosted inside `com.android.settings` like
 through a separate OEM battery-manager package instead, this guard won't
 trigger at all, since the check is gated on `packageName == SETTINGS_PACKAGE`
 first. Not verified beyond the one screenshot that surfaced this.
+
+### Asymmetric protection: harden freely, weaken needs the password
+
+The original design gated the *entire* Settings screen behind one upfront
+password unlock (`PasswordUnlockScreen`) - reopening Settings at all meant
+entering the password first, regardless of what you actually wanted to do
+in there. Replaced on explicit request: there's no self-commitment reason
+to add friction to making the app *stricter* - only loosening a setting is
+the direction that matters to gate.
+
+`SettingsScreen` now has no upfront gate at all - the screen (including the
+debug log and usage stats) is always viewable. Each individual mutating
+action is wrapped in `applyOrChallenge(weakening, onCancelled, apply)`:
+if the change is classified as weakening *and* a password is set, it queues
+the change and shows an inline `WeakenConfirmDialog` (a dialog over the
+current screen, not a full-screen block) instead of applying it
+immediately; hardening and neutral changes apply with no prompt at all.
+Cancelling reverts any local slider state that had already moved ahead of
+the persisted value (`onCancelled`), so the UI doesn't show an unsaved
+value as if it had taken effect. No password set means everything is
+open exactly as before - opt-in.
+
+Per-setting classification:
+
+| Setting | Hardening (free) | Weakening (needs password) |
+|---|---|---|
+| Scope mode | Monitor all except whitelist | Monitor only listed |
+| Per-app monitoring toggle | Turning monitoring ON | Turning monitoring OFF |
+| NSFW threshold | Lowering it | Raising it |
+| Capture cadence | Lowering it (faster) | Raising it (slower) |
+| Explicit keywords | Adding a keyword | Removing one / reset to default |
+| Lockout duration | Raising it | Lowering it |
+| Strikes to lockout | Lowering it | Raising it |
+| Auto-dismiss on block | Either direction - not a strictness lever, doesn't change what gets blocked |
+| App password | Setting one where none exists (bootstrap) | Changing an *existing* one |
+
+That last row needed special handling: reusing the harden/weaken
+classification for password changes would mean anyone could set their own
+known password with zero friction once one already existed, then use it to
+freely approve every other weakening action from then on - the one
+self-defeating case this whole feature has to avoid. So changing an
+already-set password always requires the current one first, independent
+of the general classification scheme; only the bootstrap case (no
+password yet) is unconditionally free.
+
+The system-Settings guards above (Accessibility/Device admin/this app's
+own OEM screens) are unaffected by this change - visiting those has no
+"hardening" variant, so they stay gated exactly as before regardless of
+whether a password is set.
 
 ### Gate 3 (image detection) also catches Compose-rendered content
 
