@@ -142,8 +142,8 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                     CGGateChip("removing")
                 }
                 CGHint(
-                    "A browser is blocked the instant one of these is typed, before any page loads. " +
-                        "Adding is free; removing needs your password.",
+                    "Blocked the instant one of these is typed anywhere - an address bar, a search " +
+                        "box, any text field - before any page loads. Adding is free; removing needs your password.",
                 )
                 KeywordManager(
                     keywords = explicitKeywords,

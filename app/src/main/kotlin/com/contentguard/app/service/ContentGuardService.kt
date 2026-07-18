@@ -359,18 +359,25 @@ class ContentGuardService : AccessibilityService() {
         }
 
         // Blocks on explicit search intent - what's typed into an address
-        // bar or search box - before any page/image ever loads. Matches
-        // against scan.inputFieldText specifically (editable nodes only),
-        // not the whole-page visibleText above, so this doesn't inherit
-        // gate 4's false-positive history from matching ordinary page
-        // content. See KeywordBlocklist's doc comment. Checked before
-        // GATE3 for the same reason as the incognito checks above - this
-        // blocks outright regardless of whether an image is on screen.
-        val matchedExplicitKeyword = if (IncognitoDetector.isBrowserPackage(pkg)) {
-            KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
-        } else {
-            null
-        }
+        // bar, search box, or any other text field - before any page/image
+        // ever loads. Matches against scan.inputFieldText specifically
+        // (editable nodes only), not the whole-page visibleText above, so
+        // this doesn't inherit gate 4's false-positive history from
+        // matching ordinary page content. See KeywordBlocklist's doc
+        // comment. Checked before GATE3 for the same reason as the
+        // incognito checks above - this blocks outright regardless of
+        // whether an image is on screen.
+        //
+        // Not restricted to IncognitoDetector.BROWSER_PACKAGES the way the
+        // content-keyword check above is - that restriction exists there
+        // because whole-tree text matching is false-positive-prone outside
+        // a known, tested set of apps (see IncognitoDetector's doc
+        // comment). This gate only ever looks at isEditable nodes - what
+        // someone is actively typing, not incidental content - so the same
+        // risk doesn't apply, and restricting it to browsers only meant a
+        // search typed into Reddit's own search box, or a Messages compose
+        // field, was never checked at all.
+        val matchedExplicitKeyword = KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
         if (matchedExplicitKeyword != null) {
             if (!overlay.isVisible()) {
                 val line = "[$pkg] exit@GATE4B_KEYWORD_BLOCKED keyword=\"$matchedExplicitKeyword\""

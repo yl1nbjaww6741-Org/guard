@@ -754,11 +754,12 @@ explicit-content strike.
 
 ### Gate 4b: keyword-based search blocking, on search intent not page content
 
-`KeywordBlocklist.kt` blocks a browser outright the moment an explicit
-search term is typed into an address bar or search box, before any page
-or image ever loads - same placement in `processFrame` as gate 4 above,
-checked before GATE3's image-content check, for the same reason: this
-should block regardless of whether an image is even on screen yet.
+`KeywordBlocklist.kt` blocks an app outright the moment an explicit search
+term is typed into an address bar, search box, or any other text field,
+before any page or image ever loads - same placement in `processFrame` as
+gate 4 above, checked before GATE3's image-content check, for the same
+reason: this should block regardless of whether an image is even on
+screen yet.
 
 Deliberately matches against a *new*, narrower text source -
 `NodeScanResult.inputFieldText` - rather than reusing gate 4's
@@ -785,7 +786,20 @@ actually type to search for adult content, easy to extend later based on
 real `GATE4B_KEYWORD_BLOCKED keyword="..."` log activity, the same
 diagnose-from-logs pattern gate 4 now follows.
 
-Restricted to `IncognitoDetector.BROWSER_PACKAGES` (same set gate 4 uses).
+Unlike gate 4's content-keyword check, *not* restricted to
+`IncognitoDetector.BROWSER_PACKAGES` - it runs for every monitored app.
+That restriction exists for gate 4 because matching whole-tree text is
+false-positive-prone outside a known, tested set of browsers (see gate
+4's section above); this gate only ever looks at `isEditable` nodes -
+what's actively being typed, not incidental content - so the same risk
+doesn't apply, and restricting it to browsers only meant a search typed
+into, say, Reddit's own search box or a Messages compose field was never
+checked at all. (It *was* browser-restricted originally, reusing gate 4's
+package check for convenience since the original use case was address
+bars - loosened once it became clear the restriction wasn't actually
+load-bearing for this gate's own anti-false-positive design, unlike gate
+4's.)
+
 No dedicated on/off Settings toggle, same reasoning as gate 4 - but unlike
 gate 4, the keyword list itself is editable: `PrefsRepository.getExplicitKeywords()`
 starts from `KeywordBlocklist.EXPLICIT_KEYWORDS` until customized, at which
