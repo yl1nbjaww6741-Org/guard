@@ -390,6 +390,17 @@ class ContentGuardService : AccessibilityService() {
             Log.d(TAG, line)
             DebugLogBuffer.add(TAG, line)
         }
+        // Temporary diagnostic (round 3): round 2 found zero editable nodes
+        // at all on a repro that previously found one, so this logs
+        // unconditionally on every frame - not just when an editable node
+        // was found - to tell apart a scan that never reached the field
+        // (nodesVisited/hitLimit) from one where the OS's own focus
+        // tracking (focusedInputDebug) disagrees with our manual walk.
+        run {
+            val line = "[$pkg] GATE4B_SCAN_DEBUG nodesVisited=${scan.nodesVisited} hitLimit=${scan.hitLimit} focusedInput=${scan.focusedInputDebug}"
+            Log.d(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+        }
         val matchedExplicitKeyword = KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
         if (matchedExplicitKeyword != null) {
             if (!overlay.isVisible()) {

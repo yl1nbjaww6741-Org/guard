@@ -17,6 +17,15 @@ data class NodeScanResult(
     // isVisibleToUser, and its raw text - collected unconditionally,
     // independent of every other gate in this function.
     val editableNodeDebug: List<String>,
+    // Temporary diagnostic (round 3 - round 2 found NO editable node at
+    // all on a repro that previously found one). Distinguishes "the walk
+    // never reached the field" (nodesVisited/hitLimit) from "the OS's own
+    // focus tracking disagrees with our manual walk" (focusedInputDebug,
+    // via findFocus(FOCUS_INPUT) - independent of the isEditable tree walk
+    // above, so a mismatch between the two pinpoints which side is wrong).
+    val nodesVisited: Int,
+    val hitLimit: Boolean,
+    val focusedInputDebug: String,
 )
 
 /** Gate 3 of the cascade: is there even image-shaped content on screen? */
@@ -57,7 +66,16 @@ object NodeInspector {
     /** Does not recycle [root] - the caller owns that node's lifecycle. */
     fun scan(root: AccessibilityNodeInfo?): NodeScanResult {
         if (root == null) {
-            return NodeScanResult(hasImages = false, imageBounds = emptyList(), visibleText = "", inputFieldText = "", editableNodeDebug = emptyList())
+            return NodeScanResult(
+                hasImages = false,
+                imageBounds = emptyList(),
+                visibleText = "",
+                inputFieldText = "",
+                editableNodeDebug = emptyList(),
+                nodesVisited = 0,
+                hitLimit = false,
+                focusedInputDebug = "root=null",
+            )
         }
 
         val bounds = mutableListOf<Rect>()
@@ -66,9 +84,33 @@ object NodeInspector {
         val editableDebug = mutableListOf<String>()
         var visited = 0
         var hasSubstantialContent = false
+        var hitLimit = false
+
+        // Independent of the manual isEditable walk below - this is the OS's
+        // own accessibility-focus tracking, not our own tree traversal. If
+        // this finds a node the walk doesn't (or vice versa), that tells us
+        // which side of the two is actually wrong, rather than guessing.
+        val focusedInput = try {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        } catch (e: Exception) {
+            null
+        }
+        val focusedInputDebug = if (focusedInput == null) {
+            "none"
+        } else {
+            try {
+                "class=${focusedInput.className} visible=${focusedInput.isVisibleToUser} editable=${focusedInput.isEditable} text=\"${focusedInput.text}\""
+            } finally {
+                @Suppress("DEPRECATION")
+                focusedInput.recycle()
+            }
+        }
 
         fun walk(node: AccessibilityNodeInfo, depth: Int) {
-            if (depth > MAX_DEPTH || visited >= MAX_NODES) return
+            if (depth > MAX_DEPTH || visited >= MAX_NODES) {
+                hitLimit = true
+                return
+            }
             visited++
 
             val className = node.className?.toString().orEmpty()
@@ -151,6 +193,9 @@ object NodeInspector {
             visibleText = text.toString().trim(),
             inputFieldText = inputText.toString().trim(),
             editableNodeDebug = editableDebug,
+            nodesVisited = visited,
+            hitLimit = hitLimit,
+            focusedInputDebug = focusedInputDebug,
         )
     }
 }
