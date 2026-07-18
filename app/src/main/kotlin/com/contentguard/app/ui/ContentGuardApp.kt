@@ -1,5 +1,6 @@
 package com.contentguard.app.ui
 
+import android.animation.ValueAnimator
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
@@ -11,8 +12,9 @@ import android.text.TextUtils
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -38,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -138,8 +142,17 @@ fun ContentGuardApp(prefs: PrefsRepository) {
         refreshSafeguards()
     }
 
+    // Respects the system "remove animations" accessibility setting -
+    // ValueAnimator.areAnimatorsEnabled() reflects it directly, unlike
+    // trying to read the animator-duration-scale setting by hand.
+    val animationsEnabled = remember { ValueAnimator.areAnimatorsEnabled() }
+
     Box(modifier = Modifier.fillMaxSize().background(CGColor.Bg)) {
-        Crossfade(targetState = selected, label = "tab") { tab ->
+        Crossfade(
+            targetState = selected,
+            animationSpec = if (animationsEnabled) tween(300) else snap(),
+            label = "tab",
+        ) { tab ->
             when (tab) {
                 CGTab.HOME -> HomeTab(prefs, safeguards)
                 CGTab.RULES -> RulesTab(prefs, applyOrChallenge = ::applyOrChallenge)
@@ -214,12 +227,19 @@ private fun CGBottomNav(selected: CGTab, onSelect: (CGTab) -> Unit, modifier: Mo
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { onSelect(tab) }
+                        // selectable, not plain clickable, so TalkBack
+                        // announces this as a tab and reads which one is
+                        // currently selected.
+                        .selectable(selected = isOn, onClick = { onSelect(tab) }, role = Role.Tab)
                         .padding(vertical = 6.dp),
                 ) {
                     Icon(
                         imageVector = tab.icon,
-                        contentDescription = tab.label,
+                        // null, not tab.label - the selectable() below
+                        // merges this with the visible Text label right
+                        // after it, so a contentDescription here would
+                        // just make TalkBack read the tab's name twice.
+                        contentDescription = null,
                         tint = if (isOn) CGColor.Guard else CGColor.Faint,
                         modifier = Modifier.size(23.dp),
                     )

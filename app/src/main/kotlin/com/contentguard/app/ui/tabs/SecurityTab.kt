@@ -56,7 +56,7 @@ fun SecurityTab(
     ) {
         item { CGAppTitleRow() }
         item { CGPageTitle("Security") }
-        item { CGSub("The safeguards that keep ContentGuard running - and the password that guards them.") }
+        item { CGSub("The safeguards that keep ContentGuard running — and the password that guards them.") }
 
         item { CGEyebrow("Safeguards") }
 
@@ -171,7 +171,7 @@ private fun PasswordCard(hasPassword: Boolean, onSetPassword: (String) -> Unit) 
     var mismatch by remember { mutableStateOf(false) }
 
     CGCard {
-        CGLabel("Your password guards weakening - nothing else.")
+        CGLabel("Your password guards weakening — nothing else.")
         CGHint(
             "It's asked before raising the threshold, allowing an app, removing a keyword, or " +
                 "opening the accessibility and device-admin screens. Tightening protection never " +

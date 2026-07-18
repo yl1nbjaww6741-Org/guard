@@ -58,7 +58,7 @@ fun ActivityTab(prefs: PrefsRepository) {
         item { CGPageTitle("Activity") }
         item {
             CGSub(
-                "A load proxy, not a battery reading - Android hides that from apps. " +
+                "A load proxy, not a battery reading — Android hides that from apps. " +
                     "These are the two operations that actually cost power.",
             )
         }

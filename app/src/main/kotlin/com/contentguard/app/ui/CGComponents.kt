@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -21,6 +23,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -75,6 +79,18 @@ fun CGPageTitle(text: String) {
 /** `.sub` - the one-line explainer under a page title. */
 @Composable
 fun CGSub(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        color = CGColor.Dim,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
+        modifier = modifier.padding(start = 2.dp, end = 2.dp, top = 2.dp, bottom = 16.dp),
+    )
+}
+
+/** `.sub` variant for callers that need part of the line emphasized (e.g. Apps' bold `<b>` lead-in), same type/spacing otherwise. */
+@Composable
+fun CGSub(text: AnnotatedString, modifier: Modifier = Modifier) {
     Text(
         text,
         color = CGColor.Dim,
@@ -210,7 +226,9 @@ fun CGToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Mod
             .clip(shape)
             .background(if (checked) CGColor.Guard else CGColor.Raise)
             .let { if (!checked) it.border(1.dp, CGColor.Line, shape) else it }
-            .clickable { onCheckedChange(!checked) }
+            // toggleable (not plain clickable) so TalkBack gets a real
+            // Switch role and announces the on/off state itself.
+            .toggleable(value = checked, onValueChange = onCheckedChange, role = Role.Switch)
             .padding(2.dp),
     ) {
         Box(
@@ -239,7 +257,9 @@ fun CGSegmented(options: List<String>, selectedIndex: Int, onSelect: (Int) -> Un
                     .weight(1f)
                     .clip(RoundedCornerShape(10.dp))
                     .background(if (isOn) CGColor.Guard else CGColor.Bg.copy(alpha = 0f))
-                    .clickable { onSelect(index) }
+                    // selectable, not plain clickable, so TalkBack
+                    // announces which option is currently selected.
+                    .selectable(selected = isOn, onClick = { onSelect(index) }, role = Role.Tab)
                     .padding(vertical = 10.dp, horizontal = 8.dp),
             ) {
                 Text(
@@ -264,7 +284,7 @@ fun CGChip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modif
             .clip(shape)
             .background(if (selected) CGColor.GuardSoft else CGColor.Surface)
             .let { if (!selected) it.border(1.dp, CGColor.Line, shape) else it }
-            .clickable(onClick = onClick)
+            .selectable(selected = selected, onClick = onClick, role = Role.Tab)
             .padding(horizontal = 13.dp, vertical = 7.dp),
     ) {
         Text(

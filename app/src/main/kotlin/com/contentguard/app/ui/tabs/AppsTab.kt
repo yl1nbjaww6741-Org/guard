@@ -35,8 +35,11 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
@@ -141,9 +144,11 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
         item { CGPageTitle("Apps") }
         item {
             CGSub(
-                buildString {
-                    append("Monitoring $monitoredCount of ${apps.size} apps. ")
-                    append("Allowing an app stops all checks inside it.")
+                buildAnnotatedString {
+                    withStyle(SpanStyle(color = CGColor.Ink, fontWeight = FontWeight.Bold)) {
+                        append("Monitoring $monitoredCount of ${apps.size} apps.")
+                    }
+                    append(" Allowing an app stops all checks inside it.")
                 },
             )
         }
