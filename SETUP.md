@@ -256,7 +256,19 @@ Assumes this screen is still hosted inside `com.android.settings` like
 "Device admin apps"/"Accessibility" are - if a ColorOS build routes it
 through a separate OEM battery-manager package instead, this guard won't
 trigger at all, since the check is gated on `packageName == SETTINGS_PACKAGE`
-first. Not verified beyond the one screenshot that surfaced this.
+first.
+
+**Confirmed not working on real-device retesting** - the "contentguard"
+marker didn't guard the screen. Rather than guess a third time (the
+Chrome incognito saga earlier in this project is exactly the cautionary
+tale for that), added a temporary `GATE_SETTINGS_GUARD_DEBUG title="..."`
+log line in `onAccessibilityEvent`, firing on *every* real
+`TYPE_WINDOW_STATE_CHANGED` event regardless of package - this will show
+directly whether the battery page (1) isn't actually hosted in
+`com.android.settings`, (2) never fires a window-state-change at all (an
+in-place fragment swap within the same window wouldn't), or (3) reports
+different title text than assumed. Remove this log line once the real
+cause is found and fixed.
 
 ### Asymmetric protection: harden freely, weaken needs the password
 

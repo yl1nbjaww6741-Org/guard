@@ -112,6 +112,21 @@ class ContentGuardService : AccessibilityService() {
             return
         }
 
+        // Temporary: the "contentguard" title marker (added to guard
+        // ColorOS's per-app battery page) didn't take effect on real-device
+        // retesting - this logs every real window-state-change's package
+        // and title so we can see directly whether that screen (1) isn't
+        // actually hosted in SETTINGS_PACKAGE, (2) never fires
+        // TYPE_WINDOW_STATE_CHANGED at all (e.g. an in-place fragment swap
+        // within the same window), or (3) reports different title text
+        // than expected - rather than guessing a third time. Remove once
+        // diagnosed.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val debugLine = "[$packageName] GATE_SETTINGS_GUARD_DEBUG title=\"${event.text.joinToString(" ")}\""
+            Log.i(TAG, debugLine)
+            DebugLogBuffer.add(TAG, debugLine)
+        }
+
         val isRealAppSwitch = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             packageName != lastForegroundPackage &&
             !scopePolicy.isHardExcluded(packageName)
