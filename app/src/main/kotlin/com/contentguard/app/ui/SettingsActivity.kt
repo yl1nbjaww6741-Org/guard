@@ -87,7 +87,13 @@ class SettingsActivity : ComponentActivity() {
         setContent {
             ContentGuardTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
-                    SettingsScreen(prefs)
+                    // Step 1 of the redesign: five-tab nav replaces the old
+                    // single long-scroll SettingsScreen below. SettingsScreen
+                    // and its helper composables (ThresholdSection,
+                    // KeywordBlocklistSection, etc.) are left in place,
+                    // unreferenced, until step 2 migrates their content into
+                    // ui/tabs/*Tab.kt.
+                    ContentGuardApp(prefs)
                 }
             }
         }
