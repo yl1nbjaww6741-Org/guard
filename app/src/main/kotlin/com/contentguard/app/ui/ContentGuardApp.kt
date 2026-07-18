@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -212,6 +213,7 @@ private fun CGBottomNav(selected: CGTab, onSelect: (CGTab) -> Unit, modifier: Mo
                         color = if (isOn) CGColor.Guard else CGColor.Faint,
                         fontSize = 10.sp,
                         fontWeight = MaterialTheme.typography.labelSmall.fontWeight,
+                        letterSpacing = 0.01.em,
                     )
                 }
             }
