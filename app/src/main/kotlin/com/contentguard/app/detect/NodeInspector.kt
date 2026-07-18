@@ -11,6 +11,13 @@ data class NodeScanResult(
     // search box), separate from visibleText - see KeywordBlocklist for why
     // search-intent matching deliberately doesn't use the whole-page text.
     val inputFieldText: String,
+    // Temporary diagnostic: one entry per isEditable node seen during the
+    // walk, regardless of isVisibleToUser or whether it has text - see
+    // ContentGuardService's GATE4B_INPUT_FIELD_TEXT_DEBUG log line. Lets a
+    // real-device test tell apart "no editable node found at all" from
+    // "found one, but isVisibleToUser was false" from "found one, visible,
+    // but node.text was empty" - each points to a different fix.
+    val editableNodeDebug: List<String>,
 )
 
 /** Gate 3 of the cascade: is there even image-shaped content on screen? */
@@ -51,12 +58,13 @@ object NodeInspector {
     /** Does not recycle [root] - the caller owns that node's lifecycle. */
     fun scan(root: AccessibilityNodeInfo?): NodeScanResult {
         if (root == null) {
-            return NodeScanResult(hasImages = false, imageBounds = emptyList(), visibleText = "", inputFieldText = "")
+            return NodeScanResult(hasImages = false, imageBounds = emptyList(), visibleText = "", inputFieldText = "", editableNodeDebug = emptyList())
         }
 
         val bounds = mutableListOf<Rect>()
         val text = StringBuilder()
         val inputText = StringBuilder()
+        val editableDebug = mutableListOf<String>()
         var visited = 0
         var hasSubstantialContent = false
 
@@ -87,6 +95,16 @@ object NodeInspector {
 
             if (rect.width() >= SUBSTANTIAL_CONTENT_SIZE_PX && rect.height() >= SUBSTANTIAL_CONTENT_SIZE_PX) {
                 hasSubstantialContent = true
+            }
+
+            // Temporary diagnostic, deliberately outside the isVisibleToUser
+            // gate below - if Reddit's search field is isEditable but
+            // isVisibleToUser is false for some reason, the debug line
+            // below would never fire, hiding that as the actual cause.
+            if (node.isEditable) {
+                editableDebug.add(
+                    "class=$className visible=${node.isVisibleToUser()} textLen=${node.text?.length ?: -1}",
+                )
             }
 
             // isVisibleToUser() gate matters specifically for IncognitoDetector's
@@ -131,6 +149,7 @@ object NodeInspector {
             imageBounds = bounds,
             visibleText = text.toString().trim(),
             inputFieldText = inputText.toString().trim(),
+            editableNodeDebug = editableDebug,
         )
     }
 }

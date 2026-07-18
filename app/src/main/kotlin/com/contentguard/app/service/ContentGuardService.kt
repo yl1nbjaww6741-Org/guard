@@ -390,6 +390,11 @@ class ContentGuardService : AccessibilityService() {
             Log.d(TAG, line)
             DebugLogBuffer.add(TAG, line)
         }
+        if (scan.editableNodeDebug.isNotEmpty()) {
+            val line = "[$pkg] GATE4B_EDITABLE_NODE_DEBUG ${scan.editableNodeDebug.joinToString("; ")}"
+            Log.d(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+        }
         val matchedExplicitKeyword = KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
         if (matchedExplicitKeyword != null) {
             if (!overlay.isVisible()) {
