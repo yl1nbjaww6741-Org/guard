@@ -128,6 +128,24 @@ class PrefsRepository(context: Context) {
         val avgInferenceMs: Double get() = if (inferenceCount == 0) 0.0 else totalInferenceMs.toDouble() / inferenceCount
     }
 
+    /**
+     * Off by default: routine gate-exit logging (GATE1/GATE2/GATE5/GATE6/
+     * GATE7/GATE_NO_ROOT/GATE3 - the ones that fire on nearly every frame
+     * with nothing to report) costs a DebugLogBuffer write - timestamp
+     * formatting plus a synchronized deque insert - every single time,
+     * regardless of whether anyone's watching the Debug log. Meaningful
+     * events (blocks, incognito/keyword detection, lockouts, the Settings
+     * guard) always log regardless of this flag, since those are rare and
+     * worth keeping visible unconditionally. Turn this on only while
+     * actively diagnosing something - same Debug log card in the Activity
+     * tab, just opt-in for the noisy part.
+     */
+    var verboseLogging: Boolean
+        get() = prefs.getBoolean(KEY_VERBOSE_LOGGING, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_VERBOSE_LOGGING, value).apply()
+        }
+
     fun getUsageStats(): UsageStats = UsageStats(
         screenshotCount = prefs.getInt(KEY_SCREENSHOT_COUNT, 0),
         inferenceCount = prefs.getInt(KEY_INFERENCE_COUNT, 0),
@@ -264,6 +282,7 @@ class PrefsRepository(context: Context) {
         private const val KEY_LOCKOUT_PREFIX = "lockout_until_"
         private const val KEY_PASSWORD_HASH = "password_hash"
         private const val KEY_CAPTURE_THROTTLE_MS = "capture_throttle_ms"
+        private const val KEY_VERBOSE_LOGGING = "verbose_logging"
         private const val PASSWORD_SALT = "contentguard-v1-"
         const val DEFAULT_THRESHOLD = 0.80f
         const val DEFAULT_LOCKOUT_MINUTES = 1

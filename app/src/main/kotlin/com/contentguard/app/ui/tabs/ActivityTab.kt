@@ -10,10 +10,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
@@ -33,11 +36,15 @@ import androidx.compose.ui.unit.sp
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.ui.CGBottomNavClearance
 import com.contentguard.app.ui.CGButton
+import com.contentguard.app.ui.CGCard
 import com.contentguard.app.ui.CGEyebrow
+import com.contentguard.app.ui.CGHint
+import com.contentguard.app.ui.CGLabel
 import com.contentguard.app.ui.CGMetric
 import com.contentguard.app.ui.CGMetricsRow
 import com.contentguard.app.ui.CGPageTitle
 import com.contentguard.app.ui.CGSub
+import com.contentguard.app.ui.CGToggle
 import com.contentguard.app.ui.theme.CGColor
 import com.contentguard.app.ui.theme.JetBrainsMono
 import com.contentguard.app.util.DebugLogBuffer
@@ -102,6 +109,28 @@ fun ActivityTab(prefs: PrefsRepository) {
 
         item { CGEyebrow("Debug log") }
         item { CGSub("Gate exits and classifier scores, mirrored from logcat. No ADB needed.") }
+
+        item {
+            var verboseLogging by remember { mutableStateOf(prefs.verboseLogging) }
+            CGCard {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        CGLabel("Verbose gate logging")
+                        CGHint(
+                            "Off saves a little battery: routine gate exits (no image, no skin, below " +
+                                "threshold, throttled) stop writing to this log. Blocks and detections " +
+                                "always show either way. Turn on only while diagnosing something.",
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    CGToggle(
+                        checked = verboseLogging,
+                        onCheckedChange = { verboseLogging = it; prefs.verboseLogging = it },
+                    )
+                }
+            }
+        }
 
         item { DebugLogSection() }
     }

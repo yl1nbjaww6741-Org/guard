@@ -185,7 +185,7 @@ class ContentGuardService : AccessibilityService() {
         }
 
         if (!scopePolicy.shouldMonitor(packageName)) {
-            Log.d(TAG, "[$packageName] exit@GATE1_WHITELIST")
+            if (prefs.verboseLogging) Log.d(TAG, "[$packageName] exit@GATE1_WHITELIST")
             return
         }
 
@@ -214,7 +214,7 @@ class ContentGuardService : AccessibilityService() {
         }
 
         if (!debouncer.shouldProcess(event)) {
-            Log.d(TAG, "[$packageName] exit@GATE2_DEBOUNCE")
+            if (prefs.verboseLogging) Log.d(TAG, "[$packageName] exit@GATE2_DEBOUNCE")
             return
         }
 
@@ -400,9 +400,11 @@ class ContentGuardService : AccessibilityService() {
         val bitmap = screenCapturer.captureDownscaled(cropRegion = cropRegion)
         val captureMs = (System.nanoTime() - captureStartNanos) / 1_000_000
         if (bitmap == null) {
-            val line = "[$pkg] exit@GATE5_CAPTURE_THROTTLED_OR_FAILED"
-            Log.d(TAG, line)
-            DebugLogBuffer.add(TAG, line)
+            if (prefs.verboseLogging) {
+                val line = "[$pkg] exit@GATE5_CAPTURE_THROTTLED_OR_FAILED"
+                Log.d(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+            }
             return
         }
         prefs.recordScreenshot()
@@ -429,7 +431,7 @@ class ContentGuardService : AccessibilityService() {
             val inferenceStartNanos = System.nanoTime()
             val score = nsfwClassifier.scoreNsfw(analysisBitmap, pkg)
             prefs.recordInference((System.nanoTime() - inferenceStartNanos) / 1_000_000)
-            DebugLogBuffer.add(TAG, "[$pkg] captureMs=$captureMs")
+            if (prefs.verboseLogging) DebugLogBuffer.add(TAG, "[$pkg] captureMs=$captureMs")
 
             if (score < prefs.nsfwThreshold) {
                 exitSafe(pkg, "GATE7_BELOW_THRESHOLD score=$score")
@@ -526,8 +528,17 @@ class ContentGuardService : AccessibilityService() {
      * an ad rotating, infinite scroll loading fresh content) as "safe".
      * That was a real bug: the block could silently vanish with no user
      * action at all.
+     *
+     * Gated on prefs.verboseLogging: every one of this function's callers
+     * is a routine, nothing-to-report exit that fires on most processed
+     * frames (GATE_NO_ROOT/GATE3/GATE6/GATE7) - unlike an actual block or
+     * detection, there's no rare, meaningful event here to justify paying
+     * a DebugLogBuffer write (timestamp formatting + a synchronized deque
+     * insert) unconditionally, all the time, whether or not the Debug log
+     * is even being watched.
      */
     private fun exitSafe(pkg: String, gate: String) {
+        if (!prefs.verboseLogging) return
         val line = "[$pkg] exit@$gate"
         Log.d(TAG, line)
         DebugLogBuffer.add(TAG, line)
