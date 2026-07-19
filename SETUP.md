@@ -776,34 +776,6 @@ WebView's page body is never exposed as an editable node's own text, so
 restricting to `inputFieldText` keeps this to what's actually being
 searched for.
 
-Real-device testing (typing a keyword into Reddit's own search box) found
-this gate still not firing there, across two separate root causes found
-one after the other via diagnostic logging rather than guessed at:
-
-1. The `isEditable` node search was originally gated on `isVisibleToUser()`
-   the same way `visibleText`/`contentDescription` collection is. Temporary
-   logging (`GATE4B_INPUT_FIELD_TEXT_DEBUG`, `GATE4B_EDITABLE_NODE_DEBUG`)
-   found a real `EditText` with the typed text (`textLen=6`, matching the
-   keyword) but `isVisibleToUser() == false` - apparently a custom
-   search-bar pattern where the actual input-handling `EditText` is
-   invisible/transparent while a separately-styled view shows the text on
-   screen. Fixed by not requiring visibility for this check.
-
-2. Even after that fix, the same repro still silently failed. A further
-   diagnostic (`GATE4B_SCAN_DEBUG`, logging `nodesVisited`/`hitLimit`
-   alongside an independent `findFocus(FOCUS_INPUT)` lookup) found
-   `hitLimit=true` at only 16-36 nodes visited - nowhere near the walk's
-   400-node cap, meaning its 12-level *depth* cap (sized for the unrelated
-   image-node scan, not for locating a single focused field) was
-   truncating before ever reaching the field. Reddit's Compose UI commonly
-   nests well past 12 levels. Meanwhile `findFocus(FOCUS_INPUT)` - an
-   OS-level lookup with no depth limit of its own - found the same field
-   and its live-typed text (`"p"` -> `"po"` -> `"por"` as it was typed)
-   every time. Fixed by sourcing `inputFieldText` from `findFocus(FOCUS_INPUT)`
-   directly instead of the depth-capped walk. The walk's own `isEditable`
-   collection is kept only as a diagnostic (`editableNodeDebug`), no longer
-   feeding `inputFieldText`.
-
 `KeywordBlocklist.EXPLICIT_KEYWORDS` favors high-precision terms - known
 adult platform names (`pornhub`, `xvideos`, etc. - unambiguous by
 themselves) and explicit-content genre phrases (`"xxx video"`, `"nude
@@ -814,20 +786,7 @@ actually type to search for adult content, easy to extend later based on
 real `GATE4B_KEYWORD_BLOCKED keyword="..."` log activity, the same
 diagnose-from-logs pattern gate 4 now follows.
 
-Unlike gate 4's content-keyword check, *not* restricted to
-`IncognitoDetector.BROWSER_PACKAGES` - it runs for every monitored app.
-That restriction exists for gate 4 because matching whole-tree text is
-false-positive-prone outside a known, tested set of browsers (see gate
-4's section above); this gate only ever looks at `isEditable` nodes -
-what's actively being typed, not incidental content - so the same risk
-doesn't apply, and restricting it to browsers only meant a search typed
-into, say, Reddit's own search box or a Messages compose field was never
-checked at all. (It *was* browser-restricted originally, reusing gate 4's
-package check for convenience since the original use case was address
-bars - loosened once it became clear the restriction wasn't actually
-load-bearing for this gate's own anti-false-positive design, unlike gate
-4's.)
-
+Restricted to `IncognitoDetector.BROWSER_PACKAGES` (same set gate 4 uses).
 No dedicated on/off Settings toggle, same reasoning as gate 4 - but unlike
 gate 4, the keyword list itself is editable: `PrefsRepository.getExplicitKeywords()`
 starts from `KeywordBlocklist.EXPLICIT_KEYWORDS` until customized, at which

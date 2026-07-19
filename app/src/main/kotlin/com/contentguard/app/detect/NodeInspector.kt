@@ -7,28 +7,10 @@ data class NodeScanResult(
     val hasImages: Boolean,
     val imageBounds: List<Rect>,
     val visibleText: String,
-    // What's currently focused and being typed - see KeywordBlocklist for
-    // why search-intent matching deliberately doesn't use the whole-page
-    // text. Sourced from findFocus(FOCUS_INPUT), NOT a manual isEditable
-    // tree walk: real-device logging (round 3 of the Reddit investigation,
-    // see SETUP.md) found a depth-capped walk truncating before ever
-    // reaching Reddit's search box - a Compose UI commonly nests deeper
-    // than a fixed depth cap suitable for image-node scanning - while
-    // findFocus, an OS-level lookup with no such cap, found the same field
-    // and its live-typed text every time. Gate 4b's own false-positive risk
-    // doesn't change: this is still scoped to a single focused, editable
-    // node, never incidental page content.
+    // Text from editable nodes only (isEditable, e.g. an address bar or
+    // search box), separate from visibleText - see KeywordBlocklist for why
+    // search-intent matching deliberately doesn't use the whole-page text.
     val inputFieldText: String,
-    // Diagnostic kept from the walk-based investigation: one entry per
-    // isEditable node the (depth-capped) walk actually reached - now known
-    // to be an incomplete picture on deeply-nested UIs, kept only as a
-    // point of comparison against focusedInputDebug below.
-    val editableNodeDebug: List<String>,
-    val nodesVisited: Int,
-    val hitLimit: Boolean,
-    // The OS-level findFocus(FOCUS_INPUT) result inputFieldText above is
-    // actually built from - see its own comment.
-    val focusedInputDebug: String,
 )
 
 /** Gate 3 of the cascade: is there even image-shaped content on screen? */
@@ -69,53 +51,17 @@ object NodeInspector {
     /** Does not recycle [root] - the caller owns that node's lifecycle. */
     fun scan(root: AccessibilityNodeInfo?): NodeScanResult {
         if (root == null) {
-            return NodeScanResult(
-                hasImages = false,
-                imageBounds = emptyList(),
-                visibleText = "",
-                inputFieldText = "",
-                editableNodeDebug = emptyList(),
-                nodesVisited = 0,
-                hitLimit = false,
-                focusedInputDebug = "root=null",
-            )
+            return NodeScanResult(hasImages = false, imageBounds = emptyList(), visibleText = "", inputFieldText = "")
         }
 
         val bounds = mutableListOf<Rect>()
         val text = StringBuilder()
-        val editableDebug = mutableListOf<String>()
+        val inputText = StringBuilder()
         var visited = 0
         var hasSubstantialContent = false
-        var hitLimit = false
-
-        // The actual source of inputFieldText - see its own doc comment for
-        // why this replaced a manual isEditable tree walk. Not subject to
-        // MAX_DEPTH/MAX_NODES: this is a single OS-level lookup, not a walk
-        // we're bounding ourselves, so it isn't at risk of truncating
-        // before it reaches a deeply-nested field the way the walk did.
-        val focusedInput = try {
-            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        } catch (e: Exception) {
-            null
-        }
-        val (focusedInputDebug, focusedInputText) = if (focusedInput == null) {
-            "none" to ""
-        } else {
-            try {
-                val debug = "class=${focusedInput.className} visible=${focusedInput.isVisibleToUser} editable=${focusedInput.isEditable} text=\"${focusedInput.text}\""
-                val fieldText = if (focusedInput.isEditable) focusedInput.text?.toString().orEmpty() else ""
-                debug to fieldText
-            } finally {
-                @Suppress("DEPRECATION")
-                focusedInput.recycle()
-            }
-        }
 
         fun walk(node: AccessibilityNodeInfo, depth: Int) {
-            if (depth > MAX_DEPTH || visited >= MAX_NODES) {
-                hitLimit = true
-                return
-            }
+            if (depth > MAX_DEPTH || visited >= MAX_NODES) return
             visited++
 
             val className = node.className?.toString().orEmpty()
@@ -143,17 +89,6 @@ object NodeInspector {
                 hasSubstantialContent = true
             }
 
-            // Kept only as a diagnostic point of comparison against
-            // focusedInputDebug above - no longer the source of
-            // inputFieldText (see that field's doc comment for why: this
-            // walk's own depth cap silently missed deeply-nested fields
-            // that findFocus finds every time).
-            if (node.isEditable) {
-                editableDebug.add(
-                    "class=$className depth=$depth visible=${node.isVisibleToUser()} text=\"${node.text}\"",
-                )
-            }
-
             // isVisibleToUser() gate matters specifically for IncognitoDetector's
             // content-based check (the only consumer of visibleText) - without
             // it, a node scrolled off-screen or sitting in a collapsed/hidden
@@ -166,6 +101,16 @@ object NodeInspector {
             if (node.isVisibleToUser()) {
                 node.text?.let { if (it.isNotBlank()) text.append(it).append(' ') }
                 node.contentDescription?.let { if (it.isNotBlank()) text.append(it).append(' ') }
+
+                // isEditable (not a className check) is the framework-provided
+                // signal for "this is a text input," independent of whatever
+                // concrete widget class each browser actually uses for its
+                // address/search bar - and a WebView's rendered page body
+                // never sets this on the nodes it exposes, so this stays
+                // scoped to what's actually being typed, not page content.
+                if (node.isEditable) {
+                    node.text?.let { if (it.isNotBlank()) inputText.append(it).append(' ') }
+                }
             }
 
             for (i in 0 until node.childCount) {
@@ -185,11 +130,7 @@ object NodeInspector {
             hasImages = bounds.isNotEmpty() || hasSubstantialContent,
             imageBounds = bounds,
             visibleText = text.toString().trim(),
-            inputFieldText = focusedInputText.trim(),
-            editableNodeDebug = editableDebug,
-            nodesVisited = visited,
-            hitLimit = hitLimit,
-            focusedInputDebug = focusedInputDebug,
+            inputFieldText = inputText.toString().trim(),
         )
     }
 }
