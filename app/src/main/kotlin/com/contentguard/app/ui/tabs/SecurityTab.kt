@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -225,7 +226,9 @@ private fun DelayBeforeUnlockCard(prefs: PrefsRepository, applyOrChallenge: Gate
                 CGLabel("Delay before unlock")
                 CGHint(
                     "An anti-impulse cooldown: after entering the correct password, protection stays " +
-                        "full-strength for the delay below before the change actually takes effect.",
+                        "full-strength for the delay below before the change actually takes effect. Also " +
+                        "covers reaching Accessibility settings, Device admin, and the battery page's " +
+                        "Force-stop button - correct password starts the wait, it doesn't skip it.",
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }

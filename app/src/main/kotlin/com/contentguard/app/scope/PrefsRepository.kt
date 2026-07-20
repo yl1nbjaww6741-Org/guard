@@ -315,6 +315,31 @@ class PrefsRepository(context: Context) {
         }
 
     /**
+     * Anti-impulse cooldown for the OS-level guarded screens - Accessibility
+     * settings, Device admin apps, and the ColorOS per-app battery page
+     * with its own Force-stop button (see ContentGuardService's
+     * GATE_SETTINGS_GUARD). Deliberately separate from [PendingWeakenAction]:
+     * there's no in-app setting to defer here, since the actual weakening
+     * (deactivating accessibility/admin, tapping Force stop) happens
+     * entirely on that external OS screen, outside this app's control, the
+     * moment it becomes reachable. So this defers *reaching the screen*
+     * itself - a correct password starts the cooldown; ContentGuardService
+     * only actually grants access once it elapses. 0 means no cooldown is
+     * running. Persisted (not just an in-memory flag) specifically because
+     * force-stopping the app or rebooting must not let someone skip the
+     * wait by restarting the process partway through it.
+     */
+    var settingsGuardCooldownEligibleAtMillis: Long
+        get() = prefs.getLong(KEY_SETTINGS_GUARD_COOLDOWN_ELIGIBLE_AT, 0L)
+        set(value) {
+            prefs.edit().putLong(KEY_SETTINGS_GUARD_COOLDOWN_ELIGIBLE_AT, value).apply()
+        }
+
+    fun clearSettingsGuardCooldown() {
+        prefs.edit().remove(KEY_SETTINGS_GUARD_COOLDOWN_ELIGIBLE_AT).apply()
+    }
+
+    /**
      * A weakening action whose password challenge has already been passed,
      * but which [delayBeforeUnlockEnabled] defers rather than applying
      * immediately. Deliberately a small, serializable descriptor - not the
@@ -513,6 +538,7 @@ class PrefsRepository(context: Context) {
         private const val KEY_PENDING_ACTION_TYPE = "pending_weaken_action_type"
         private const val KEY_PENDING_ACTION_PARAM = "pending_weaken_action_param"
         private const val KEY_PENDING_ELIGIBLE_AT = "pending_weaken_eligible_at"
+        private const val KEY_SETTINGS_GUARD_COOLDOWN_ELIGIBLE_AT = "settings_guard_cooldown_eligible_at"
         private const val PASSWORD_SALT = "contentguard-v1-"
         const val DEFAULT_THRESHOLD = 0.80f
         const val DEFAULT_LOCKOUT_MINUTES = 1

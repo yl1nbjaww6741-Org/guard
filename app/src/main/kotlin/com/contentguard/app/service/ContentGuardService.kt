@@ -90,7 +90,33 @@ class ContentGuardService : AccessibilityService() {
         passwordGuardOverlay = PasswordGuardOverlayController(
             service = this,
             onVerify = { entered -> prefs.verifyPassword(entered) },
-            onUnlocked = { settingsGuardUnlocked = true },
+            // A correct password doesn't always mean "grant access now" -
+            // see settingsGuardCooldownMessageIfPending's doc comment for
+            // why reaching Accessibility/Device admin/the ColorOS battery
+            // page needs the same anti-impulse cooldown as everything else
+            // delay-before-unlock covers, and why it can't be modeled as a
+            // deferred PendingWeakenAction the way in-app settings are.
+            onUnlocked = {
+                if (!prefs.delayBeforeUnlockEnabled) {
+                    settingsGuardUnlocked = true
+                } else {
+                    val now = System.currentTimeMillis()
+                    var eligibleAt = prefs.settingsGuardCooldownEligibleAtMillis
+                    if (eligibleAt == 0L) {
+                        eligibleAt = now + prefs.delayBeforeUnlockMinutes * 60_000L
+                        prefs.settingsGuardCooldownEligibleAtMillis = eligibleAt
+                        val line = "SETTINGS_GUARD_COOLDOWN_STARTED eligibleAt=$eligibleAt"
+                        Log.i(TAG, line)
+                        DebugLogBuffer.add(TAG, line)
+                    }
+                    if (now >= eligibleAt) {
+                        prefs.clearSettingsGuardCooldown()
+                        settingsGuardUnlocked = true
+                    } else {
+                        passwordGuardOverlay.showCooldown(formatCooldownRemaining(eligibleAt - now))
+                    }
+                }
+            },
             onCancelled = { performGlobalAction(GLOBAL_ACTION_HOME) },
         )
 
@@ -112,6 +138,63 @@ class ContentGuardService : AccessibilityService() {
         val line = "PENDING_UNLOCK_APPLIED action=$applied"
         Log.i(TAG, line)
         DebugLogBuffer.add(TAG, line)
+    }
+
+    /**
+     * Is the guarded-Settings screen (Accessibility, Device admin, the
+     * ColorOS battery/Force-stop page) actually reachable right now? True
+     * once a password has been verified this visit (settingsGuardUnlocked),
+     * or - the delay-before-unlock case - once a cooldown that was already
+     * started by an earlier correct password has now elapsed, in which case
+     * this auto-consumes it (clears the cooldown, sets settingsGuardUnlocked)
+     * so nothing further is needed from the user.
+     */
+    private fun settingsGuardEffectivelyUnlocked(): Boolean {
+        if (settingsGuardUnlocked) return true
+        // A stale cooldown from before the feature was turned off must not
+        // keep gating access once it's disabled - otherwise turning delay-
+        // before-unlock off wouldn't actually restore today's instant
+        // behavior until whatever cooldown happened to be running finished.
+        if (!prefs.delayBeforeUnlockEnabled) return false
+        val eligibleAt = prefs.settingsGuardCooldownEligibleAtMillis
+        if (eligibleAt != 0L && System.currentTimeMillis() >= eligibleAt) {
+            prefs.clearSettingsGuardCooldown()
+            settingsGuardUnlocked = true
+            val line = "SETTINGS_GUARD_COOLDOWN_ELAPSED - screen unlocked"
+            Log.i(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Non-null only when a cooldown from an earlier correct password is
+     * already running and hasn't elapsed - lets the guard trigger skip
+     * straight to the "still waiting" message instead of asking for the
+     * password again just to reach the same answer. Read-only: unlike
+     * settingsGuardEffectivelyUnlocked(), this never starts or consumes the
+     * cooldown itself.
+     */
+    private fun settingsGuardCooldownMessageIfPending(): String? {
+        if (!prefs.delayBeforeUnlockEnabled) return null
+        val eligibleAt = prefs.settingsGuardCooldownEligibleAtMillis
+        if (eligibleAt == 0L) return null
+        val remaining = eligibleAt - System.currentTimeMillis()
+        return if (remaining > 0) formatCooldownRemaining(remaining) else null
+    }
+
+    private fun formatCooldownRemaining(ms: Long): String {
+        val totalSeconds = ms / 1000
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        val remainingLabel = when {
+            hours > 0 -> "%dh %02dm".format(hours, minutes)
+            minutes > 0 -> "%dm %02ds".format(minutes, seconds)
+            else -> "%ds".format(seconds)
+        }
+        return "Correct - this screen unlocks in $remainingLabel."
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -172,13 +255,18 @@ class ContentGuardService : AccessibilityService() {
         }
 
         if ((packageName == SETTINGS_PACKAGE || packageName == OPLUS_BATTERY_PACKAGE) &&
-            onGuardedSettingsScreen && prefs.hasPassword() && !settingsGuardUnlocked
+            onGuardedSettingsScreen && prefs.hasPassword() && !settingsGuardEffectivelyUnlocked()
         ) {
             if (!passwordGuardOverlay.isVisible()) {
                 val line = "[$packageName] exit@GATE_SETTINGS_GUARD"
                 Log.i(TAG, line)
                 DebugLogBuffer.add(TAG, line)
-                serviceScope.launch(Dispatchers.Main) { passwordGuardOverlay.show() }
+                // If a cooldown from an earlier correct password is already
+                // running, go straight to that message - it's already been
+                // proven correct once; no need to ask again just to show
+                // the same "not yet" answer.
+                val cooldownMessage = settingsGuardCooldownMessageIfPending()
+                serviceScope.launch(Dispatchers.Main) { passwordGuardOverlay.show(cooldownMessage) }
             }
             return
         }

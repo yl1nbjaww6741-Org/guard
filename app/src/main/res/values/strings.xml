@@ -10,4 +10,6 @@
     <string name="password_guard_wrong">Incorrect password</string>
     <string name="password_guard_unlock">Unlock</string>
     <string name="password_guard_cancel">Cancel</string>
+    <string name="password_guard_cooldown_title">Correct password</string>
+    <string name="password_guard_cooldown_dismiss">Go back</string>
 </resources>
