@@ -12,4 +12,5 @@
     <string name="password_guard_cancel">Cancel</string>
     <string name="password_guard_cooldown_title">Correct password</string>
     <string name="password_guard_cooldown_dismiss">Go back</string>
+    <string name="password_guard_cooldown_cancel">Cancel unlock</string>
 </resources>

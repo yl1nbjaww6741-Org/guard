@@ -39,6 +39,13 @@ class PasswordGuardOverlayController(
     private val onVerify: (String) -> Boolean,
     private val onUnlocked: () -> Unit,
     private val onCancelled: () -> Unit,
+    // Distinct from onCancelled: that one just dismisses (the cooldown, if
+    // any, keeps running in the background - same "leaving doesn't cancel
+    // it" rule PendingWeakenAction's own Cancel button follows). This one
+    // is only offered while the cooldown message is showing, and actually
+    // discards the pending unlock - for "I entered the password but changed
+    // my mind, I don't want this to unlock later either."
+    private val onCancelCooldown: () -> Unit = {},
 ) {
 
     private val windowManager: WindowManager =
@@ -231,18 +238,33 @@ class PasswordGuardOverlayController(
         }
         cooldownGroup.addView(cooldownText, wrapContentParams().apply { topMargin = dp(8) })
 
-        val dismissButton = TextView(service).apply {
-            text = service.getString(R.string.password_guard_cooldown_dismiss)
+        val cooldownButtonRow = LinearLayout(service).apply { orientation = LinearLayout.HORIZONTAL }
+        // Discards the pending unlock outright - the safe direction, so
+        // this is never itself password-gated, same as
+        // PendingWeakenAction's own Cancel button in the Security tab.
+        val cancelUnlockButton = TextView(service).apply {
+            text = service.getString(R.string.password_guard_cooldown_cancel)
             setTextColor(Color.parseColor("#757575"))
             textSize = 14f
             setPadding(dp(12), dp(20), dp(12), dp(4))
             isClickable = true
             isFocusable = true
+            setOnClickListener { hide(); onCancelCooldown() }
+        }
+        val dismissButton = TextView(service).apply {
+            text = service.getString(R.string.password_guard_cooldown_dismiss)
+            setTextColor(Color.parseColor("#0088CC"))
+            textSize = 14f
+            setPadding(dp(12), dp(20), dp(0), dp(4))
+            isClickable = true
+            isFocusable = true
             setOnClickListener { hide(); onCancelled() }
         }
+        cooldownButtonRow.addView(cancelUnlockButton)
+        cooldownButtonRow.addView(dismissButton)
         cooldownGroup.addView(
             FrameLayout(service).apply {
-                addView(dismissButton, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END))
+                addView(cooldownButtonRow, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.END))
             },
             wrapContentParams().apply { topMargin = dp(4) },
         )

@@ -118,6 +118,18 @@ class ContentGuardService : AccessibilityService() {
                 }
             },
             onCancelled = { performGlobalAction(GLOBAL_ACTION_HOME) },
+            // "I entered the password but changed my mind" - discards the
+            // running cooldown outright rather than leaving it to keep
+            // ticking in the background. Never itself password-gated: like
+            // every other Cancel in this app, giving up on a change is
+            // always the safe direction.
+            onCancelCooldown = {
+                prefs.clearSettingsGuardCooldown()
+                val line = "SETTINGS_GUARD_COOLDOWN_CANCELLED"
+                Log.i(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            },
         )
 
         // Re-evaluates a delay-before-unlock pending action every time the
