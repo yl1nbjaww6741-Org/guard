@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.ui.theme.CGColor
 import com.contentguard.app.ui.theme.JetBrainsMono
 
@@ -199,8 +200,20 @@ fun CGButton(
     }
 }
 
-/** The (weakening, onCancelled, apply) shape of the app's one asymmetric password gate - see ContentGuardApp.applyOrChallenge. */
-typealias GateChallenge = (weakening: Boolean, onCancelled: () -> Unit, apply: () -> Unit) -> Unit
+/**
+ * The (weakening, onCancelled, pendingAction, apply) shape of the app's one
+ * asymmetric password gate - see ContentGuardApp.applyOrChallenge.
+ * [pendingAction] is a serializable descriptor of what [apply] actually
+ * does, used only when delay-before-unlock is on (see
+ * PrefsRepository.PendingWeakenAction) - null for actions that have nothing
+ * persistable to defer, like the two OS-navigation gates below.
+ */
+typealias GateChallenge = (
+    weakening: Boolean,
+    onCancelled: () -> Unit,
+    pendingAction: PrefsRepository.PendingWeakenAction?,
+    apply: () -> Unit,
+) -> Unit
 
 /**
  * A CGButton wired straight into the app's one password gate - the
@@ -209,7 +222,13 @@ typealias GateChallenge = (weakening: Boolean, onCancelled: () -> Unit, apply: (
  * Every gated button in the app is always the weakening direction when
  * tapped (there's no "tightening" button-press, only slider/toggle moves
  * for those), so this just saves each call site repeating
- * `onClick = { applyOrChallenge(true, {}, action) }`.
+ * `onClick = { applyOrChallenge(true, {}, null, action) }`.
+ *
+ * Always passes pendingAction = null: both call sites (opening the
+ * accessibility/device-admin settings screens) launch an OS screen rather
+ * than change any of ContentGuard's own state, so delay-before-unlock has
+ * nothing to defer here - these stay instant-on-password regardless of
+ * that setting.
  */
 @Composable
 fun CGGatedButton(
@@ -220,7 +239,7 @@ fun CGGatedButton(
     ghost: Boolean = false,
     small: Boolean = false,
 ) {
-    CGButton(text, onClick = { applyOrChallenge(true, {}, onConfirmed) }, modifier = modifier, ghost = ghost, small = small)
+    CGButton(text, onClick = { applyOrChallenge(true, {}, null, onConfirmed) }, modifier = modifier, ghost = ghost, small = small)
 }
 
 /** `.tog` - the pill switch, standing in for M3's Switch to match the prototype's track/thumb sizing exactly. */

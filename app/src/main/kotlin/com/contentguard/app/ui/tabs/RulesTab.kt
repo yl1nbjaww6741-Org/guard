@@ -57,6 +57,10 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
     var lockoutDurationMinutes by remember { mutableStateOf(prefs.lockoutDurationMinutes) }
     var strikesToLockout by remember { mutableStateOf(prefs.strikesToLockout) }
     var activeLockouts by remember { mutableStateOf(prefs.getActiveLockouts()) }
+    var frameDiffEnabled by remember { mutableStateOf(prefs.frameDiffGateEnabled) }
+    var frameDiffHamming by remember { mutableStateOf(prefs.frameDiffHammingThreshold) }
+    var frameDiffMaxSkipCount by remember { mutableStateOf(prefs.frameDiffMaxSkipCount) }
+    var frameDiffMaxSkipAgeMs by remember { mutableStateOf(prefs.frameDiffMaxSkipAgeMs) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -82,7 +86,7 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                         val oldValue = prefs.nsfwThreshold
                         // Lower threshold blocks more (score < threshold passes
                         // as safe) - raising it is the weakening move.
-                        applyOrChallenge(newValue > oldValue, { threshold = oldValue }) {
+                        applyOrChallenge(newValue > oldValue, { threshold = oldValue }, PrefsRepository.PendingWeakenAction.SetThreshold(newValue)) {
                             prefs.nsfwThreshold = newValue
                         }
                     },
@@ -114,7 +118,7 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                         val newValue = captureThrottleMs
                         val oldValue = prefs.captureThrottleMs
                         // Lower cadence = faster/more frequent capture = stricter.
-                        applyOrChallenge(newValue > oldValue, { captureThrottleMs = oldValue }) {
+                        applyOrChallenge(newValue > oldValue, { captureThrottleMs = oldValue }, PrefsRepository.PendingWeakenAction.SetCaptureThrottleMs(newValue)) {
                             prefs.captureThrottleMs = newValue
                         }
                     },
@@ -125,6 +129,66 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     EndLabel("Faster detection")
                     EndLabel("Better battery")
+                }
+            }
+        }
+
+        item {
+            CGCard {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        CGLabel("Skip repeated frames")
+                        CGHint(
+                            "Reuses the last verdict instead of re-running the classifier when the screen " +
+                                "looks unchanged. Only ever skips a frame that was already blocked - a clear " +
+                                "verdict always re-checks - so this can't let new content through unscored. " +
+                                "Free to toggle: it doesn't change what gets blocked, only how often an " +
+                                "unchanged screen gets re-checked.",
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    CGToggle(
+                        checked = frameDiffEnabled,
+                        onCheckedChange = { frameDiffEnabled = it; prefs.frameDiffGateEnabled = it },
+                    )
+                }
+                if (frameDiffEnabled) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Similarity threshold (Hamming)", color = CGColor.Dim, fontSize = 13.sp, lineHeight = 19.sp)
+                        CGVal("$frameDiffHamming")
+                    }
+                    Slider(
+                        value = frameDiffHamming.toFloat(),
+                        onValueChange = { frameDiffHamming = it.toInt() },
+                        onValueChangeFinished = { prefs.frameDiffHammingThreshold = frameDiffHamming },
+                        valueRange = 0f..64f,
+                        steps = 63,
+                        colors = SliderDefaults.colors(thumbColor = CGColor.Guard, activeTrackColor = CGColor.Guard, inactiveTrackColor = CGColor.Raise),
+                    )
+                    Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Forced re-check after", color = CGColor.Dim, fontSize = 13.sp, lineHeight = 19.sp)
+                        CGVal("$frameDiffMaxSkipCount skips")
+                    }
+                    Slider(
+                        value = frameDiffMaxSkipCount.toFloat(),
+                        onValueChange = { frameDiffMaxSkipCount = it.toInt() },
+                        onValueChangeFinished = { prefs.frameDiffMaxSkipCount = frameDiffMaxSkipCount },
+                        valueRange = 1f..30f,
+                        steps = 28,
+                        colors = SliderDefaults.colors(thumbColor = CGColor.Guard, activeTrackColor = CGColor.Guard, inactiveTrackColor = CGColor.Raise),
+                    )
+                    Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("...or after", color = CGColor.Dim, fontSize = 13.sp, lineHeight = 19.sp)
+                        CGVal("${frameDiffMaxSkipAgeMs / 1000} s")
+                    }
+                    Slider(
+                        value = frameDiffMaxSkipAgeMs.toFloat(),
+                        onValueChange = { frameDiffMaxSkipAgeMs = it.toLong() },
+                        onValueChangeFinished = { prefs.frameDiffMaxSkipAgeMs = frameDiffMaxSkipAgeMs },
+                        valueRange = 1000f..120000f,
+                        colors = SliderDefaults.colors(thumbColor = CGColor.Guard, activeTrackColor = CGColor.Guard, inactiveTrackColor = CGColor.Raise),
+                    )
                 }
             }
         }
@@ -156,7 +220,7 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                     },
                     onRemove = { keyword ->
                         // Removing one is weakening - fewer terms blocked.
-                        applyOrChallenge(true, {}) {
+                        applyOrChallenge(true, {}, PrefsRepository.PendingWeakenAction.RemoveKeyword(keyword)) {
                             prefs.removeExplicitKeyword(keyword)
                             explicitKeywords = prefs.getExplicitKeywords()
                             explicitKeywordsCustomized = prefs.explicitKeywordsAreCustomized()
@@ -166,7 +230,7 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                         // Could go either direction depending on how the list
                         // was customized - treated as weakening since that's
                         // the safer default assumption.
-                        applyOrChallenge(true, {}) {
+                        applyOrChallenge(true, {}, PrefsRepository.PendingWeakenAction.ResetKeywordsToDefault) {
                             prefs.resetExplicitKeywordsToDefault()
                             explicitKeywords = prefs.getExplicitKeywords()
                             explicitKeywordsCustomized = prefs.explicitKeywordsAreCustomized()
@@ -210,7 +274,7 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                         val oldValue = prefs.strikesToLockout
                         // Fewer strikes needed locks out sooner - stricter.
                         // Raising the count is the weakening move.
-                        applyOrChallenge(newValue > oldValue, { strikesToLockout = oldValue }) {
+                        applyOrChallenge(newValue > oldValue, { strikesToLockout = oldValue }, PrefsRepository.PendingWeakenAction.SetStrikesToLockout(newValue)) {
                             prefs.strikesToLockout = newValue
                         }
                     },
@@ -230,7 +294,7 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                         val oldValue = prefs.lockoutDurationMinutes
                         // Longer lockout is stricter - shortening it is the
                         // weakening move.
-                        applyOrChallenge(newValue < oldValue, { lockoutDurationMinutes = oldValue }) {
+                        applyOrChallenge(newValue < oldValue, { lockoutDurationMinutes = oldValue }, PrefsRepository.PendingWeakenAction.SetLockoutDurationMinutes(newValue)) {
                             prefs.lockoutDurationMinutes = newValue
                         }
                     },

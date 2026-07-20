@@ -61,6 +61,38 @@ class PrefsRepository(context: Context) {
     val staticRecheckIntervalMs: Long
         get() = captureThrottleMs + STATIC_RECHECK_MARGIN_MS
 
+    /**
+     * FrameDiffGate's own on/off switch - off by default, preserving
+     * today's "gate 7 always runs" behavior until explicitly opted into.
+     * See FrameDiffGate's class doc for the asymmetric skip design.
+     */
+    var frameDiffGateEnabled: Boolean
+        get() = prefs.getBoolean(KEY_FRAME_DIFF_ENABLED, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_FRAME_DIFF_ENABLED, value).apply()
+        }
+
+    /** Max dHash Hamming distance (0-64 bits) for two frames to count as "the same picture." */
+    var frameDiffHammingThreshold: Int
+        get() = prefs.getInt(KEY_FRAME_DIFF_HAMMING, DEFAULT_FRAME_DIFF_HAMMING)
+        set(value) {
+            prefs.edit().putInt(KEY_FRAME_DIFF_HAMMING, value.coerceIn(0, 64)).apply()
+        }
+
+    /** Forced-refresh ceiling (count side): a cached BLOCKED verdict can only ride this many consecutive skips before a real inference runs again regardless of similarity. */
+    var frameDiffMaxSkipCount: Int
+        get() = prefs.getInt(KEY_FRAME_DIFF_MAX_SKIP_COUNT, DEFAULT_FRAME_DIFF_MAX_SKIP_COUNT)
+        set(value) {
+            prefs.edit().putInt(KEY_FRAME_DIFF_MAX_SKIP_COUNT, value.coerceIn(1, 100)).apply()
+        }
+
+    /** Forced-refresh ceiling (time side): ...or this many milliseconds since the last real inference, whichever comes first. */
+    var frameDiffMaxSkipAgeMs: Long
+        get() = prefs.getLong(KEY_FRAME_DIFF_MAX_SKIP_AGE_MS, DEFAULT_FRAME_DIFF_MAX_SKIP_AGE_MS)
+        set(value) {
+            prefs.edit().putLong(KEY_FRAME_DIFF_MAX_SKIP_AGE_MS, value.coerceIn(1000L, 120_000L)).apply()
+        }
+
     fun getWhitelist(): Set<String> = prefs.getStringSet(KEY_WHITELIST, null)?.toSet() ?: emptySet()
 
     fun setWhitelisted(packageName: String, whitelisted: Boolean) {
@@ -263,6 +295,195 @@ class PrefsRepository(context: Context) {
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
+    /**
+     * Anti-impulse cooldown: when on, a correct password doesn't weaken
+     * protection immediately - see [PendingWeakenAction] and
+     * [applyPendingWeakenActionIfEligible]. Off by default, preserving
+     * today's instant-apply-on-correct-password behavior exactly.
+     */
+    var delayBeforeUnlockEnabled: Boolean
+        get() = prefs.getBoolean(KEY_DELAY_BEFORE_UNLOCK_ENABLED, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_DELAY_BEFORE_UNLOCK_ENABLED, value).apply()
+        }
+
+    /** One of the preset delay options (minutes) - see SecurityTab's picker. */
+    var delayBeforeUnlockMinutes: Int
+        get() = prefs.getInt(KEY_DELAY_BEFORE_UNLOCK_MINUTES, DEFAULT_DELAY_BEFORE_UNLOCK_MINUTES)
+        set(value) {
+            prefs.edit().putInt(KEY_DELAY_BEFORE_UNLOCK_MINUTES, value).apply()
+        }
+
+    /**
+     * A weakening action whose password challenge has already been passed,
+     * but which [delayBeforeUnlockEnabled] defers rather than applying
+     * immediately. Deliberately a small, serializable descriptor - not the
+     * raw Compose closure the UI call site actually built (see
+     * ContentGuardApp.applyOrChallenge) - because this has to survive app
+     * restart, force-stop, and reboot: a closure can't be written to
+     * SharedPreferences and reconstructed by a cold process, but "which
+     * setting, what value" can.
+     *
+     * [SetPasswordHash] stores the new password's hash, never the raw
+     * password - computed once at challenge time via [hashPasswordForPending],
+     * so no plaintext secret ever sits in persisted state even transiently.
+     *
+     * Deliberately excludes the two OS-navigation gates (opening the
+     * accessibility/device-admin settings screens, gated via
+     * CGGatedButton) - those launch an external screen rather than change
+     * any of ContentGuard's own state, so there's nothing here to defer or
+     * persist; they stay instant-on-password as before.
+     */
+    sealed class PendingWeakenAction {
+        data class SetThreshold(val value: Float) : PendingWeakenAction()
+        data class SetCaptureThrottleMs(val value: Long) : PendingWeakenAction()
+        data class RemoveKeyword(val keyword: String) : PendingWeakenAction()
+        object ResetKeywordsToDefault : PendingWeakenAction()
+        data class SetStrikesToLockout(val value: Int) : PendingWeakenAction()
+        data class SetLockoutDurationMinutes(val value: Int) : PendingWeakenAction()
+        data class SetWhitelisted(val packageName: String, val whitelisted: Boolean) : PendingWeakenAction()
+        data class SetMonitored(val packageName: String, val monitored: Boolean) : PendingWeakenAction()
+        data class SetScopeMode(val mode: ScopeMode) : PendingWeakenAction()
+        data class SetPasswordHash(val hash: String) : PendingWeakenAction()
+
+        // These two exist so the cooldown can't be trivially bypassed by
+        // just turning itself off first: disabling delay-before-unlock, or
+        // shortening its delay, is itself the weakening move for this
+        // feature (see SecurityTab's toggle/picker) and goes through the
+        // exact same password + deferral path as everything else it
+        // protects. Enabling it, or lengthening the delay, stays free/
+        // instant, same asymmetry as every other setting in this file.
+        data class SetDelayBeforeUnlockEnabled(val enabled: Boolean) : PendingWeakenAction()
+        data class SetDelayBeforeUnlockMinutes(val minutes: Int) : PendingWeakenAction()
+    }
+
+    /** A pending unlock as actually persisted: the action plus when it becomes eligible. */
+    data class PendingUnlock(val action: PendingWeakenAction, val eligibleAtMillis: Long)
+
+    /** Precomputes a password's hash for [PendingWeakenAction.SetPasswordHash] - the same hash [setPassword] would store, just without writing it yet. */
+    fun hashPasswordForPending(raw: String): String = hash(raw)
+
+    /**
+     * Persists [action] as the one pending unlock, replacing any existing
+     * one - only a single slot is kept (see class doc on
+     * [PendingWeakenAction]): a new weakening request made while one is
+     * already pending overwrites it with a fresh eligible-at, rather than
+     * queuing both.
+     */
+    fun setPendingWeakenAction(action: PendingWeakenAction, eligibleAtMillis: Long) {
+        prefs.edit()
+            .putString(KEY_PENDING_ACTION_TYPE, action.typeTag())
+            .putString(KEY_PENDING_ACTION_PARAM, action.paramValue())
+            .putLong(KEY_PENDING_ELIGIBLE_AT, eligibleAtMillis)
+            .apply()
+    }
+
+    fun getPendingUnlock(): PendingUnlock? {
+        val type = prefs.getString(KEY_PENDING_ACTION_TYPE, null) ?: return null
+        val param = prefs.getString(KEY_PENDING_ACTION_PARAM, "").orEmpty()
+        val eligibleAt = prefs.getLong(KEY_PENDING_ELIGIBLE_AT, 0L)
+        val action = decodePendingAction(type, param) ?: return null
+        return PendingUnlock(action, eligibleAt)
+    }
+
+    /** Discards a pending unlock outright - the safe direction, always allowed with no challenge. */
+    fun clearPendingWeakenAction() {
+        prefs.edit()
+            .remove(KEY_PENDING_ACTION_TYPE)
+            .remove(KEY_PENDING_ACTION_PARAM)
+            .remove(KEY_PENDING_ELIGIBLE_AT)
+            .apply()
+    }
+
+    /**
+     * Applies the pending action for real if [PendingUnlock.eligibleAtMillis]
+     * has passed, then clears it. No-ops (returns null) if there's nothing
+     * pending or it isn't eligible yet. Called from ContentGuardService on
+     * service (re)connect and its periodic recheck loop - both already
+     * running whenever the app is alive at all, so this needs no new
+     * background infrastructure (no AlarmManager/WorkManager), and
+     * re-evaluates correctly after restart, force-stop, or reboot purely
+     * because it's driven off this persisted state, not an in-memory timer.
+     */
+    fun applyPendingWeakenActionIfEligible(): PendingWeakenAction? {
+        val pending = getPendingUnlock() ?: return null
+        if (System.currentTimeMillis() < pending.eligibleAtMillis) return null
+        when (val action = pending.action) {
+            is PendingWeakenAction.SetThreshold -> nsfwThreshold = action.value
+            is PendingWeakenAction.SetCaptureThrottleMs -> captureThrottleMs = action.value
+            is PendingWeakenAction.RemoveKeyword -> removeExplicitKeyword(action.keyword)
+            is PendingWeakenAction.ResetKeywordsToDefault -> resetExplicitKeywordsToDefault()
+            is PendingWeakenAction.SetStrikesToLockout -> strikesToLockout = action.value
+            is PendingWeakenAction.SetLockoutDurationMinutes -> lockoutDurationMinutes = action.value
+            is PendingWeakenAction.SetWhitelisted -> setWhitelisted(action.packageName, action.whitelisted)
+            is PendingWeakenAction.SetMonitored -> setMonitored(action.packageName, action.monitored)
+            is PendingWeakenAction.SetScopeMode -> mode = action.mode
+            is PendingWeakenAction.SetPasswordHash -> prefs.edit().putString(KEY_PASSWORD_HASH, action.hash).apply()
+            is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> delayBeforeUnlockEnabled = action.enabled
+            is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> delayBeforeUnlockMinutes = action.minutes
+        }
+        clearPendingWeakenAction()
+        return pending.action
+    }
+
+    private fun PendingWeakenAction.typeTag(): String = when (this) {
+        is PendingWeakenAction.SetThreshold -> "SetThreshold"
+        is PendingWeakenAction.SetCaptureThrottleMs -> "SetCaptureThrottleMs"
+        is PendingWeakenAction.RemoveKeyword -> "RemoveKeyword"
+        PendingWeakenAction.ResetKeywordsToDefault -> "ResetKeywordsToDefault"
+        is PendingWeakenAction.SetStrikesToLockout -> "SetStrikesToLockout"
+        is PendingWeakenAction.SetLockoutDurationMinutes -> "SetLockoutDurationMinutes"
+        is PendingWeakenAction.SetWhitelisted -> "SetWhitelisted"
+        is PendingWeakenAction.SetMonitored -> "SetMonitored"
+        is PendingWeakenAction.SetScopeMode -> "SetScopeMode"
+        is PendingWeakenAction.SetPasswordHash -> "SetPasswordHash"
+        is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> "SetDelayBeforeUnlockEnabled"
+        is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "SetDelayBeforeUnlockMinutes"
+    }
+
+    // Encodes each action's params as a single delimited string - deliberately
+    // not JSON/a serialization library: one row, few fields, no nesting, and
+    // this file already has no such dependency (PrefsRepository is plain
+    // SharedPreferences throughout).
+    private fun PendingWeakenAction.paramValue(): String = when (this) {
+        is PendingWeakenAction.SetThreshold -> value.toString()
+        is PendingWeakenAction.SetCaptureThrottleMs -> value.toString()
+        is PendingWeakenAction.RemoveKeyword -> keyword
+        PendingWeakenAction.ResetKeywordsToDefault -> ""
+        is PendingWeakenAction.SetStrikesToLockout -> value.toString()
+        is PendingWeakenAction.SetLockoutDurationMinutes -> value.toString()
+        is PendingWeakenAction.SetWhitelisted -> "$packageName|$whitelisted"
+        is PendingWeakenAction.SetMonitored -> "$packageName|$monitored"
+        is PendingWeakenAction.SetScopeMode -> mode.name
+        is PendingWeakenAction.SetPasswordHash -> hash
+        is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> enabled.toString()
+        is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> minutes.toString()
+    }
+
+    private fun decodePendingAction(type: String, param: String): PendingWeakenAction? = runCatching {
+        when (type) {
+            "SetThreshold" -> PendingWeakenAction.SetThreshold(param.toFloat())
+            "SetCaptureThrottleMs" -> PendingWeakenAction.SetCaptureThrottleMs(param.toLong())
+            "RemoveKeyword" -> PendingWeakenAction.RemoveKeyword(param)
+            "ResetKeywordsToDefault" -> PendingWeakenAction.ResetKeywordsToDefault
+            "SetStrikesToLockout" -> PendingWeakenAction.SetStrikesToLockout(param.toInt())
+            "SetLockoutDurationMinutes" -> PendingWeakenAction.SetLockoutDurationMinutes(param.toInt())
+            "SetWhitelisted" -> {
+                val (pkg, flag) = param.split("|", limit = 2)
+                PendingWeakenAction.SetWhitelisted(pkg, flag.toBoolean())
+            }
+            "SetMonitored" -> {
+                val (pkg, flag) = param.split("|", limit = 2)
+                PendingWeakenAction.SetMonitored(pkg, flag.toBoolean())
+            }
+            "SetScopeMode" -> PendingWeakenAction.SetScopeMode(ScopeMode.valueOf(param))
+            "SetPasswordHash" -> PendingWeakenAction.SetPasswordHash(param)
+            "SetDelayBeforeUnlockEnabled" -> PendingWeakenAction.SetDelayBeforeUnlockEnabled(param.toBoolean())
+            "SetDelayBeforeUnlockMinutes" -> PendingWeakenAction.SetDelayBeforeUnlockMinutes(param.toInt())
+            else -> null
+        }
+    }.getOrNull()
+
     companion object {
         private const val PREFS_NAME = "content_guard_prefs"
         private const val KEY_MODE = "scope_mode"
@@ -283,6 +504,15 @@ class PrefsRepository(context: Context) {
         private const val KEY_PASSWORD_HASH = "password_hash"
         private const val KEY_CAPTURE_THROTTLE_MS = "capture_throttle_ms"
         private const val KEY_VERBOSE_LOGGING = "verbose_logging"
+        private const val KEY_FRAME_DIFF_ENABLED = "frame_diff_gate_enabled"
+        private const val KEY_FRAME_DIFF_HAMMING = "frame_diff_hamming_threshold"
+        private const val KEY_FRAME_DIFF_MAX_SKIP_COUNT = "frame_diff_max_skip_count"
+        private const val KEY_FRAME_DIFF_MAX_SKIP_AGE_MS = "frame_diff_max_skip_age_ms"
+        private const val KEY_DELAY_BEFORE_UNLOCK_ENABLED = "delay_before_unlock_enabled"
+        private const val KEY_DELAY_BEFORE_UNLOCK_MINUTES = "delay_before_unlock_minutes"
+        private const val KEY_PENDING_ACTION_TYPE = "pending_weaken_action_type"
+        private const val KEY_PENDING_ACTION_PARAM = "pending_weaken_action_param"
+        private const val KEY_PENDING_ELIGIBLE_AT = "pending_weaken_eligible_at"
         private const val PASSWORD_SALT = "contentguard-v1-"
         const val DEFAULT_THRESHOLD = 0.80f
         const val DEFAULT_LOCKOUT_MINUTES = 1
@@ -303,5 +533,19 @@ class PrefsRepository(context: Context) {
         // this directly so its description text can't drift from the
         // actual margin staticRecheckIntervalMs applies.
         const val STATIC_RECHECK_MARGIN_MS = 200L
+
+        // FrameDiffGate defaults - see FrameDiffGate's own class doc for
+        // why these three specifically (similarity threshold, and the two
+        // forced-refresh ceilings).
+        const val DEFAULT_FRAME_DIFF_HAMMING = 5
+        const val DEFAULT_FRAME_DIFF_MAX_SKIP_COUNT = 8
+        const val DEFAULT_FRAME_DIFF_MAX_SKIP_AGE_MS = 20_000L
+
+        // Presets shown in SecurityTab's delay picker (minutes) - not user's
+        // own custom value, deliberately: a fixed set of sensible cooldowns
+        // rather than a free-typed number, so this can't be set to
+        // something with no meaningful cooldown value.
+        val DELAY_BEFORE_UNLOCK_PRESETS_MINUTES = listOf(1, 5, 15, 30, 60, 240, 720, 1440)
+        const val DEFAULT_DELAY_BEFORE_UNLOCK_MINUTES = 5
     }
 }

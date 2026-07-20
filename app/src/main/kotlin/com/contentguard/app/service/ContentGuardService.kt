@@ -10,6 +10,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.core.content.ContextCompat
 import com.contentguard.app.capture.ScreenCapturer
+import com.contentguard.app.detect.FrameDiffGate
 import com.contentguard.app.detect.IncognitoDetector
 import com.contentguard.app.detect.KeywordBlocklist
 import com.contentguard.app.detect.NodeInspector
@@ -48,6 +49,7 @@ class ContentGuardService : AccessibilityService() {
     private lateinit var nsfwClassifier: NsfwClassifier
     private lateinit var overlay: BlurOverlayController
     private lateinit var passwordGuardOverlay: PasswordGuardOverlayController
+    private val frameDiffGate = FrameDiffGate()
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val frameChannel = Channel<FrameRequest>(Channel.CONFLATED)
@@ -92,9 +94,24 @@ class ContentGuardService : AccessibilityService() {
             onCancelled = { performGlobalAction(GLOBAL_ACTION_HOME) },
         )
 
+        // Re-evaluates a delay-before-unlock pending action every time the
+        // service (re)connects - after a reboot, after being force-stopped
+        // and relaunched, or just the OS rebinding it - so a cooldown that
+        // finished while the process was dead still takes effect promptly,
+        // without needing any new background scheduler. See
+        // PrefsRepository.applyPendingWeakenActionIfEligible's doc comment.
+        applyPendingWeakenActionIfDue()
+
         serviceScope.launch { consumeFrames() }
         serviceScope.launch { recheckStaticContent() }
         Log.i(TAG, "connected: mode=${prefs.mode} threshold=${prefs.nsfwThreshold}")
+    }
+
+    private fun applyPendingWeakenActionIfDue() {
+        val applied = prefs.applyPendingWeakenActionIfEligible() ?: return
+        val line = "PENDING_UNLOCK_APPLIED action=$applied"
+        Log.i(TAG, line)
+        DebugLogBuffer.add(TAG, line)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -272,6 +289,12 @@ class ContentGuardService : AccessibilityService() {
         while (serviceScope.isActive) {
             delay(prefs.staticRecheckIntervalMs)
 
+            // Checked every tick regardless of screen-on state below (unlike
+            // the image-detection work this loop mainly exists for) - a
+            // delay-before-unlock cooldown should resolve on its own clock,
+            // not wait for the screen to turn back on first.
+            applyPendingWeakenActionIfDue()
+
             // Unlike onAccessibilityEvent (naturally quiet with the screen
             // off, since no window-state changes occur), this loop is timer-
             // driven and previously kept firing every tick regardless -
@@ -428,50 +451,97 @@ class ContentGuardService : AccessibilityService() {
         val analysisBitmap = skinAnalysis.region?.let { cropToRegion(bitmap, it) } ?: bitmap
 
         try {
+            // Inference-optimization gate, inserted after region capture and
+            // before the classifier per its own design brief - see
+            // FrameDiffGate's class doc for the asymmetric skip logic. Only
+            // ever skips by reusing an already-BLOCKED verdict on a frame
+            // that still looks the same; a CLEAR verdict never skips, and
+            // any failure here (hash exception, bad bitmap) falls through
+            // to a real classifier run below.
+            val diffOutcome = if (prefs.frameDiffGateEnabled) {
+                frameDiffGate.evaluate(
+                    pkg = pkg,
+                    bitmap = analysisBitmap,
+                    hammingThreshold = prefs.frameDiffHammingThreshold,
+                    maxSkipCount = prefs.frameDiffMaxSkipCount,
+                    maxSkipAgeMs = prefs.frameDiffMaxSkipAgeMs,
+                )
+            } else {
+                null
+            }
+
+            if (diffOutcome?.skip == true) {
+                if (prefs.verboseLogging) {
+                    val line = "[$pkg] FRAME_DIFF_SKIP hamming=${diffOutcome.hammingDistance} verdict=blocked skipCount=${diffOutcome.skipCount}"
+                    Log.d(TAG, line)
+                    DebugLogBuffer.add(TAG, line)
+                }
+                handleBlock(pkg, "score=cached(skip)")
+                return
+            }
+
             val inferenceStartNanos = System.nanoTime()
             val score = nsfwClassifier.scoreNsfw(analysisBitmap, pkg)
             prefs.recordInference((System.nanoTime() - inferenceStartNanos) / 1_000_000)
             if (prefs.verboseLogging) DebugLogBuffer.add(TAG, "[$pkg] captureMs=$captureMs")
 
-            if (score < prefs.nsfwThreshold) {
+            val blocked = score >= prefs.nsfwThreshold
+            // Only a real inference ever updates the cache - a skip must
+            // never be recorded as if it were a fresh observation, or a
+            // stale hash could compound across cycles.
+            if (prefs.frameDiffGateEnabled) {
+                frameDiffGate.recordRealResult(pkg, analysisBitmap, blocked)
+            }
+
+            if (!blocked) {
                 exitSafe(pkg, "GATE7_BELOW_THRESHOLD score=$score")
                 return
             }
 
-            val blockLine = "[$pkg] exit@GATE8_BLOCK score=$score"
-            Log.i(TAG, blockLine)
-            DebugLogBuffer.add(TAG, blockLine)
-            prefs.recordBlock()
-            if (prefs.recordExplicitStrike(pkg)) {
-                val lockLine = "[$pkg] LOCKOUT_TRIGGERED durationMin=${prefs.lockoutDurationMinutes}"
-                Log.i(TAG, lockLine)
-                DebugLogBuffer.add(TAG, lockLine)
-
-                // Stronger than the plain GLOBAL_ACTION_HOME every block
-                // already does on dismissal - on the strike that actually
-                // trips the lockout, back out of the app immediately
-                // (rather than waiting for the user to tap through the
-                // fake-crash dialog first) and ask the OS to kill its
-                // background process, so switching back via Recents finds
-                // a cold start instead of resuming exactly where they left
-                // off. killBackgroundProcesses() only needs the normal
-                // KILL_BACKGROUND_PROCESSES permission (no root/adb), but
-                // it's a hint the OS can decline, not a guaranteed kill
-                // the way Settings' own "Force Stop" button is - that API
-                // is signature-protected and unavailable to third-party
-                // apps even with Shizuku's shell-level access.
-                withContext(Dispatchers.Main) { performGlobalAction(GLOBAL_ACTION_HOME) }
-                delay(500)
-                activityManager.killBackgroundProcesses(pkg)
-                val killLine = "[$pkg] KILL_BACKGROUND_PROCESSES requested after lockout"
-                Log.i(TAG, killLine)
-                DebugLogBuffer.add(TAG, killLine)
-            }
-            withContext(Dispatchers.Main) { overlay.show(pkg) }
+            handleBlock(pkg, "score=$score")
         } finally {
             if (analysisBitmap !== bitmap) analysisBitmap.recycle()
             bitmap.recycle()
         }
+    }
+
+    /**
+     * Gate 8: the actual block, plus strike/lockout bookkeeping - shared by
+     * both a real classifier verdict and a FrameDiffGate skip that reused a
+     * cached BLOCKED verdict, so the two paths can never drift apart on
+     * what "blocked" actually does.
+     */
+    private suspend fun handleBlock(pkg: String, detail: String) {
+        val blockLine = "[$pkg] exit@GATE8_BLOCK $detail"
+        Log.i(TAG, blockLine)
+        DebugLogBuffer.add(TAG, blockLine)
+        prefs.recordBlock()
+        if (prefs.recordExplicitStrike(pkg)) {
+            val lockLine = "[$pkg] LOCKOUT_TRIGGERED durationMin=${prefs.lockoutDurationMinutes}"
+            Log.i(TAG, lockLine)
+            DebugLogBuffer.add(TAG, lockLine)
+
+            // Stronger than the plain GLOBAL_ACTION_HOME every block
+            // already does on dismissal - on the strike that actually
+            // trips the lockout, back out of the app immediately
+            // (rather than waiting for the user to tap through the
+            // fake-crash dialog first) and ask the OS to kill its
+            // background process, so switching back via Recents finds
+            // a cold start instead of resuming exactly where they left
+            // off. killBackgroundProcesses() only needs the normal
+            // KILL_BACKGROUND_PROCESSES permission (no root/adb), but
+            // it's a hint the OS can decline, not a guaranteed kill
+            // the way Settings' own "Force Stop" button is - that API
+            // is signature-protected and unavailable to third-party
+            // apps even with Shizuku's shell-level access.
+            withContext(Dispatchers.Main) { performGlobalAction(GLOBAL_ACTION_HOME) }
+            delay(500)
+            activityManager.killBackgroundProcesses(pkg)
+            val killLine = "[$pkg] KILL_BACKGROUND_PROCESSES requested after lockout"
+            Log.i(TAG, killLine)
+            DebugLogBuffer.add(TAG, killLine)
+        }
+        withContext(Dispatchers.Main) { overlay.show(pkg) }
     }
 
     private fun cropToRegion(bitmap: Bitmap, region: Rect): Bitmap {

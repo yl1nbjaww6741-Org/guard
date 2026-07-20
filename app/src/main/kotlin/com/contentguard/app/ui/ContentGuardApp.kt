@@ -92,11 +92,22 @@ fun ContentGuardApp(prefs: PrefsRepository) {
     // decided per setting.
     var pendingWeakenAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var pendingWeakenCancel by remember { mutableStateOf<(() -> Unit)?>(null) }
+    // The serializable twin of pendingWeakenAction, used only if
+    // delay-before-unlock is on - see PendingWeakenAction's doc comment for
+    // why a raw closure can't be the thing that actually gets deferred.
+    var pendingWeakenDescriptor by remember { mutableStateOf<PrefsRepository.PendingWeakenAction?>(null) }
+    var activePendingUnlock by remember { mutableStateOf(prefs.getPendingUnlock()) }
 
-    fun applyOrChallenge(weakening: Boolean, onCancelled: () -> Unit = {}, apply: () -> Unit) {
+    fun applyOrChallenge(
+        weakening: Boolean,
+        onCancelled: () -> Unit = {},
+        pendingAction: PrefsRepository.PendingWeakenAction?,
+        apply: () -> Unit,
+    ) {
         if (weakening && prefs.hasPassword()) {
             pendingWeakenAction = apply
             pendingWeakenCancel = onCancelled
+            pendingWeakenDescriptor = pendingAction
         } else {
             apply()
         }
@@ -127,11 +138,17 @@ fun ContentGuardApp(prefs: PrefsRepository) {
 
     // Re-check all three whenever we come back to the foreground - e.g.
     // after the user toggles accessibility/device-admin/battery exemption
-    // in system Settings.
+    // in system Settings. Also re-evaluates a pending delay-before-unlock
+    // action - it may have become eligible and already been applied by
+    // ContentGuardService while this screen was backgrounded.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) refreshSafeguards()
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshSafeguards()
+                prefs.applyPendingWeakenActionIfEligible()
+                activePendingUnlock = prefs.getPendingUnlock()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -188,6 +205,19 @@ fun ContentGuardApp(prefs: PrefsRepository) {
                         context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
                     },
                     applyOrChallenge = ::applyOrChallenge,
+                    pendingUnlock = activePendingUnlock,
+                    onCancelPendingUnlock = {
+                        prefs.clearPendingWeakenAction()
+                        activePendingUnlock = null
+                    },
+                    onPendingUnlockTick = {
+                        // Called on the SecurityTab's own once-a-second
+                        // ticker while a pending unlock is showing, so it
+                        // resolves live if eligibleAt passes while this
+                        // screen is open, not just next time the app resumes.
+                        prefs.applyPendingWeakenActionIfEligible()
+                        activePendingUnlock = prefs.getPendingUnlock()
+                    },
                 )
             }
         }
@@ -203,14 +233,28 @@ fun ContentGuardApp(prefs: PrefsRepository) {
         WeakenConfirmDialog(
             onVerify = { entered -> prefs.verifyPassword(entered) },
             onConfirmed = {
-                action()
+                val descriptor = pendingWeakenDescriptor
+                if (prefs.delayBeforeUnlockEnabled && descriptor != null) {
+                    // Correct password, but the delay-before-unlock cooldown
+                    // means the change doesn't take effect yet - persisted
+                    // so it survives restart/force-stop/reboot; actually
+                    // applied later by ContentGuardService once eligible
+                    // (see PrefsRepository.applyPendingWeakenActionIfEligible).
+                    val eligibleAt = System.currentTimeMillis() + prefs.delayBeforeUnlockMinutes * 60_000L
+                    prefs.setPendingWeakenAction(descriptor, eligibleAt)
+                    activePendingUnlock = prefs.getPendingUnlock()
+                } else {
+                    action()
+                }
                 pendingWeakenAction = null
                 pendingWeakenCancel = null
+                pendingWeakenDescriptor = null
             },
             onDismiss = {
                 pendingWeakenCancel?.invoke()
                 pendingWeakenAction = null
                 pendingWeakenCancel = null
+                pendingWeakenDescriptor = null
             },
         )
     }

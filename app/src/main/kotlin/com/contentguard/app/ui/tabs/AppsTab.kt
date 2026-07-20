@@ -104,7 +104,15 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
         // Turning monitoring OFF for an app is the weakening direction
         // regardless of scope mode (it always means "watch this app
         // less"); turning it ON is hardening and applies immediately.
-        applyOrChallenge(!monitor, {}) {
+        // Descriptor picked from the *current* mode, same as the apply
+        // lambda below would - if the mode changes before this becomes
+        // eligible (delay-before-unlock case), it still does what was
+        // actually asked for at the moment of the request.
+        val descriptor = when (mode) {
+            ScopeMode.MONITOR_ALL_EXCEPT_WHITELIST -> PrefsRepository.PendingWeakenAction.SetWhitelisted(pkg, !monitor)
+            ScopeMode.MONITOR_ONLY_LISTED -> PrefsRepository.PendingWeakenAction.SetMonitored(pkg, monitor)
+        }
+        applyOrChallenge(!monitor, {}, descriptor) {
             when (mode) {
                 ScopeMode.MONITOR_ALL_EXCEPT_WHITELIST -> {
                     // "Monitor" off means "add to whitelist" (trusted).
@@ -161,7 +169,7 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                     // defaults to *not* watching anything unless explicitly
                     // listed, versus MONITOR_ALL_EXCEPT_WHITELIST's broader
                     // default coverage.
-                    applyOrChallenge(newMode == ScopeMode.MONITOR_ONLY_LISTED, {}) {
+                    applyOrChallenge(newMode == ScopeMode.MONITOR_ONLY_LISTED, {}, PrefsRepository.PendingWeakenAction.SetScopeMode(newMode)) {
                         mode = newMode
                         prefs.mode = newMode
                     }
