@@ -489,6 +489,22 @@ class ContentGuardService : AccessibilityService() {
         // content. See KeywordBlocklist's doc comment. Checked before
         // GATE3 for the same reason as the incognito checks above - this
         // blocks outright regardless of whether an image is on screen.
+        // Temporary diagnostic: user-reported "keyword blocking isn't
+        // working" in a browser, with no earlier lead pointing at a specific
+        // cause - the same "gate reached but never fires" symptom this
+        // exact log line already diagnosed once before for Reddit's search
+        // box (see 88da393/d8bb4d0), where the depth-capped node walk
+        // (MAX_DEPTH=12, sized for the unrelated image scan) was silently
+        // missing the input field entirely. Scoped to browsers only here,
+        // unlike that investigation - this only needs to confirm whether
+        // the same walk is (or isn't) seeing what's typed into a browser's
+        // address/search bar, not re-litigate the non-browser extension
+        // that was reverted separately.
+        if (IncognitoDetector.isBrowserPackage(pkg) && scan.inputFieldText.isNotBlank()) {
+            val line = "[$pkg] GATE4B_INPUT_FIELD_TEXT_DEBUG text=\"${scan.inputFieldText}\""
+            Log.d(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+        }
         val matchedExplicitKeyword = if (IncognitoDetector.isBrowserPackage(pkg)) {
             KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
         } else {
