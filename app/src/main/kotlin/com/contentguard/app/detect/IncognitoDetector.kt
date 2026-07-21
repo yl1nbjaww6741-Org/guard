@@ -94,6 +94,34 @@ object IncognitoDetector {
         "com.UCMobile.intl",
         "com.mi.globalbrowser",
         "com.yandex.browser",
+
+        // Added for broader incognito-browser coverage (deliberately not
+        // "beyond browsers" into other apps' own private-chat features -
+        // those would need their own, unverified keyword sets; see this
+        // class's own false-positive history for why that's not a guess
+        // worth making without real-device text to confirm). Safe to add
+        // liberally: an unmatched package name here is a pure no-op, never
+        // a false-positive risk - the worst case for a wrong/unused entry
+        // is simply "does nothing," not "breaks something." Most of these
+        // are Chromium or Firefox forks that inherit the same upstream
+        // "Incognito"/"Private Browsing" UI strings TITLE_KEYWORDS/
+        // CONTENT_KEYWORDS already cover, so no new keywords were added
+        // alongside these - only the newest few (Naver Whale, Huawei
+        // Browser) haven't been directly confirmed on-device; if
+        // GATE4_INCOGNITO_DETECTED never fires for one of those, that's
+        // the first thing to check via the Debug log rather than assumed
+        // broken.
+        "org.mozilla.focus", // Firefox Focus - always-private by design, no separate mode to detect
+        "org.mozilla.klar", // Firefox Klar (Focus, DE branding)
+        "org.torproject.torbrowser", // Tor Browser - Firefox-derived
+        "com.cloudmosa.puffin", // Puffin Browser
+        "mobi.mgeek.TunnyBrowser", // Dolphin Browser
+        "com.naver.whale", // Naver Whale
+        "com.huawei.browser", // Huawei Browser
+        "com.ghostery.android.ghostery", // Ghostery Privacy Browser
+        "org.bromite.bromite", // Bromite (privacy-focused Chromium fork)
+        "com.alohamobile.browser", // Aloha Browser
+        "com.ecosia.android", // Ecosia - Chromium-based
     )
 
     fun isBrowserPackage(packageName: String): Boolean = packageName in BROWSER_PACKAGES
