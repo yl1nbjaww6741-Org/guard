@@ -122,6 +122,14 @@ object IncognitoDetector {
         "org.bromite.bromite", // Bromite (privacy-focused Chromium fork)
         "com.alohamobile.browser", // Aloha Browser
         "com.ecosia.android", // Ecosia - Chromium-based
+
+        // Confirmed via real on-device log (NudeNetDetector reached the
+        // classifier for this package with none of the incognito-specific
+        // gates having fired first) - not a guess. Always-private by
+        // design like Firefox Focus above, so the title/content keyword
+        // checks may have little or nothing to match; gate 5b's structural
+        // FLAG_SECURE detection is what actually protects this one.
+        "com.androidbull.incognito.browser", // Incognito Browser (AndroidBull)
     )
 
     fun isBrowserPackage(packageName: String): Boolean = packageName in BROWSER_PACKAGES
