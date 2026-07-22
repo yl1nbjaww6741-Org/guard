@@ -2,6 +2,10 @@ package com.contentguard.app.service
 
 import android.accessibilityservice.AccessibilityService
 import android.app.ActivityManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.PowerManager
@@ -59,6 +63,11 @@ class ContentGuardService : AccessibilityService() {
     private var settingsGuardUnlocked = false
     private var onGuardedSettingsScreen = false
 
+    // Registered in onServiceConnected, unregistered in onDestroy - see
+    // there for why this replaces a periodic PackageManager poll for
+    // keeping IncognitoDetector's dynamic browser set current.
+    private var packageChangeReceiver: BroadcastReceiver? = null
+
     private val activityManager: ActivityManager by lazy { getSystemService(ActivityManager::class.java) }
     private val powerManager: PowerManager by lazy { getSystemService(PowerManager::class.java) }
 
@@ -74,10 +83,12 @@ class ContentGuardService : AccessibilityService() {
         AccessibilityWatchdogService.start(applicationContext)
         prefs = PrefsRepository(applicationContext)
         scopePolicy = AppScopePolicy(prefs)
-        // Populate immediately on (re)connect - see recheckStaticContent
-        // for the ongoing periodic refresh that picks up newly installed
-        // browsers without needing a restart.
-        IncognitoDetector.maybeRefreshInstalledBrowsers(packageManager, forceNow = true)
+        // Populate immediately on (re)connect - covers anything installed
+        // while the service wasn't running to receive the broadcast below
+        // (disabled, force-stopped, or before the very first boot after
+        // this feature shipped).
+        IncognitoDetector.refreshInstalledBrowsers(packageManager)
+        registerPackageChangeReceiver()
         debouncer = EventDebouncer()
         screenCapturer = ScreenCapturer(this, ContextCompat.getMainExecutor(this), prefs)
         nsfwClassifier = NsfwClassifierFactory.create(applicationContext)
@@ -149,6 +160,33 @@ class ContentGuardService : AccessibilityService() {
         serviceScope.launch { consumeFrames() }
         serviceScope.launch { recheckStaticContent() }
         Log.i(TAG, "connected: mode=${prefs.mode} threshold=${prefs.nsfwThreshold}")
+    }
+
+    /**
+     * Keeps IncognitoDetector's dynamic browser set current by reacting to
+     * actual installs, instead of re-querying PackageManager on a periodic
+     * timer regardless of whether anything changed. ACTION_PACKAGE_ADDED/
+     * ACTION_PACKAGE_REPLACED are protected system broadcasts - only the OS
+     * itself can send them, so RECEIVER_NOT_EXPORTED (no other app needs to
+     * be able to trigger this) is the correct, narrower flag Android 13+
+     * requires an explicit choice on. Registered here (not the manifest):
+     * a context-registered receiver isn't subject to the Android 8+
+     * restriction on manifest-declared implicit-broadcast receivers, and
+     * this only ever needs to exist while the service itself is alive.
+     */
+    private fun registerPackageChangeReceiver() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                IncognitoDetector.refreshInstalledBrowsers(packageManager)
+            }
+        }
+        packageChangeReceiver = receiver
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     private fun applyPendingWeakenActionIfDue() {
@@ -420,16 +458,6 @@ class ContentGuardService : AccessibilityService() {
             // (2000ms), so it wouldn't actually suppress a capture attempt
             // here the way it does for genuinely redundant same-second ticks.
             if (!powerManager.isInteractive) continue
-
-            // TTL-gated no-op most ticks (see maybeRefreshInstalledBrowsers'
-            // own doc comment) - picks up newly installed browsers without
-            // needing a dedicated PACKAGE_ADDED broadcast receiver. Placed
-            // after the isInteractive check above, not before: nothing can
-            // be browsed with the screen off, so there's no reason to pay
-            // for a real PackageManager query (this ticks every ~2s, so a
-            // screen-off stretch would otherwise still hit its every-30-min
-            // TTL window and run the query for no benefit).
-            IncognitoDetector.maybeRefreshInstalledBrowsers(packageManager)
 
             val root = rootInActiveWindow
             val pkg = root?.packageName?.toString()
@@ -778,6 +806,7 @@ class ContentGuardService : AccessibilityService() {
         if (::overlay.isInitialized && overlay.isVisible()) overlay.hide()
         if (::passwordGuardOverlay.isInitialized && passwordGuardOverlay.isVisible()) passwordGuardOverlay.hide()
         if (::nsfwClassifier.isInitialized) nsfwClassifier.close()
+        packageChangeReceiver?.let { unregisterReceiver(it) }
         serviceScope.cancel()
     }
 

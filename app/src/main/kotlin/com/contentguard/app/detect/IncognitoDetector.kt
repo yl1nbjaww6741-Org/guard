@@ -56,7 +56,7 @@ object IncognitoDetector {
 
     /**
      * The hand-maintained floor of [isBrowserPackage] - not the only
-     * packages ever checked (see [maybeRefreshInstalledBrowsers] below for
+     * packages ever checked (see [refreshInstalledBrowsers] below for
      * the dynamic set layered on top), but restricting *some* explicit set
      * to "known browsers" is what keeps this from ever firing on an
      * unrelated app (Gboard, or anything else) no matter what text
@@ -161,24 +161,16 @@ object IncognitoDetector {
     @Volatile
     private var dynamicBrowserPackages: Set<String> = emptySet()
 
-    @Volatile
-    private var lastRefreshAtMillis: Long = 0L
-
-    private const val REFRESH_INTERVAL_MS = 30 * 60 * 1000L
-
     /**
-     * Cheap no-op after the first call within any given
-     * [REFRESH_INTERVAL_MS] window - safe to call from a periodic
-     * maintenance tick (see ContentGuardService.recheckStaticContent)
-     * without needing a dedicated broadcast receiver for newly installed
-     * apps. Queries both http and https, since a browser only strictly
-     * needs to declare one of the two.
+     * Re-queries PackageManager for the current set of installed browsers.
+     * Called from ContentGuardService once on service (re)connect and once
+     * per actual install/update via a registered ACTION_PACKAGE_ADDED/
+     * ACTION_PACKAGE_REPLACED receiver - not on a periodic timer, since
+     * nothing about "which apps are browsers" changes except when an app
+     * is installed, updated, or removed. Queries both http and https,
+     * since a browser only strictly needs to declare one of the two.
      */
-    fun maybeRefreshInstalledBrowsers(packageManager: PackageManager, forceNow: Boolean = false) {
-        val now = System.currentTimeMillis()
-        if (!forceNow && now - lastRefreshAtMillis < REFRESH_INTERVAL_MS) return
-        lastRefreshAtMillis = now
-
+    fun refreshInstalledBrowsers(packageManager: PackageManager) {
         val discovered = mutableSetOf<String>()
         for (scheme in arrayOf("http", "https")) {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse("$scheme://"))
@@ -188,12 +180,13 @@ object IncognitoDetector {
         }
         dynamicBrowserPackages = discovered
 
-        // Logged unconditionally (not behind verbose logging) - this is a
-        // rare event (every 30 min at most) and its whole purpose is to be
-        // auditable: gates 4/4b/5b all trust isBrowserPackage(), so this
-        // list is exactly what to check if something unexpected (a
-        // banking app, say) ever turns out to have a broad, unscoped
-        // http/https VIEW filter and gets pulled in by mistake.
+        // Logged unconditionally (not behind verbose logging) - this only
+        // fires on service connect and on an actual install/update, so it's
+        // rare, and its whole purpose is to be auditable: gates 4/4b/5b all
+        // trust isBrowserPackage(), so this list is exactly what to check
+        // if something unexpected (a banking app, say) ever turns out to
+        // have a broad, unscoped http/https VIEW filter and gets pulled in
+        // by mistake.
         val line = "BROWSER_REGISTRY_REFRESHED count=${discovered.size} packages=$discovered"
         Log.i(TAG, line)
         DebugLogBuffer.add(TAG, line)

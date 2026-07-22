@@ -770,7 +770,7 @@ explicit-content strike.
 found a second gap beyond wording: `com.androidbull.incognito.browser`
 (a real, always-private browser) wasn't in the hand-maintained list at
 all, so every check above - gate 4, 4b, and 5b - was simply invisible to
-it, whack-a-mole style. `IncognitoDetector.maybeRefreshInstalledBrowsers()`
+it, whack-a-mole style. `IncognitoDetector.refreshInstalledBrowsers()`
 closes this by querying `PackageManager` for every app that registers to
 handle a plain `http`/`https` `ACTION_VIEW` intent - the same mechanism
 Android's own "Open with" chooser and default-browser picker use to
@@ -781,10 +781,22 @@ individually reported. This app already holds `QUERY_ALL_PACKAGES` (see
 `AndroidManifest.xml` - sideloaded-only distribution, so the Play Store
 restriction on that permission doesn't apply), so the query sees every
 installed app directly with no extra `<queries>` manifest declaration
-needed. Refreshed once immediately on service connect and then lazily
-(30-minute TTL, checked from `recheckStaticContent`'s existing periodic
-tick) so a newly installed browser is picked up without requiring a
-reboot or a dedicated `PACKAGE_ADDED` broadcast receiver.
+needed.
+
+Refreshed on service connect (covers anything installed while the service
+wasn't running to hear about it), and otherwise driven by a
+`ACTION_PACKAGE_ADDED`/`ACTION_PACKAGE_REPLACED` broadcast receiver
+registered in `ContentGuardService.onServiceConnected()` (unregistered in
+`onDestroy()`) - not a periodic timer. Nothing about "which apps are
+browsers" changes except when an app is installed, updated, or removed,
+so there's no reason to re-query on a clock. Registered via
+`Context.registerReceiver()` rather than a manifest `<receiver>`
+specifically because manifest-declared receivers for most implicit
+broadcasts are restricted on Android 8+ - a context-registered one isn't,
+and this only ever needs to exist while the service itself is alive
+anyway. `RECEIVER_NOT_EXPORTED` is correct here (not
+`RECEIVER_EXPORTED`): both of these are protected system broadcasts only
+the OS itself can send, so no other app needs to be able to trigger this.
 
 ### Gate 4b: keyword-based search blocking, on search intent not page content
 
