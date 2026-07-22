@@ -101,11 +101,25 @@ class PrefsRepository(context: Context) {
         prefs.edit().putStringSet(KEY_WHITELIST, next).apply()
     }
 
+    /** Same as [setWhitelisted] but one prefs write for the whole batch - the Apps tab's per-category bulk on/off. */
+    fun setWhitelistedBulk(packageNames: Collection<String>, whitelisted: Boolean) {
+        val next = getWhitelist().toMutableSet()
+        if (whitelisted) next.addAll(packageNames) else next.removeAll(packageNames.toSet())
+        prefs.edit().putStringSet(KEY_WHITELIST, next).apply()
+    }
+
     fun getMonitoredSet(): Set<String> = prefs.getStringSet(KEY_MONITORED, null)?.toSet() ?: emptySet()
 
     fun setMonitored(packageName: String, monitored: Boolean) {
         val next = getMonitoredSet().toMutableSet()
         if (monitored) next.add(packageName) else next.remove(packageName)
+        prefs.edit().putStringSet(KEY_MONITORED, next).apply()
+    }
+
+    /** Same as [setMonitored] but one prefs write for the whole batch - the Apps tab's per-category bulk on/off. */
+    fun setMonitoredBulk(packageNames: Collection<String>, monitored: Boolean) {
+        val next = getMonitoredSet().toMutableSet()
+        if (monitored) next.addAll(packageNames) else next.removeAll(packageNames.toSet())
         prefs.edit().putStringSet(KEY_MONITORED, next).apply()
     }
 
@@ -368,6 +382,15 @@ class PrefsRepository(context: Context) {
         data class SetLockoutDurationMinutes(val value: Int) : PendingWeakenAction()
         data class SetWhitelisted(val packageName: String, val whitelisted: Boolean) : PendingWeakenAction()
         data class SetMonitored(val packageName: String, val monitored: Boolean) : PendingWeakenAction()
+
+        // Apps tab's per-category "Allow all" bulk action - one password
+        // challenge for the whole batch rather than one per app (which
+        // would mean re-entering the password dozens of times for a
+        // system-apps category). packageNames is whatever was visible in
+        // that section at tap time (current search/filter included), not
+        // necessarily every app in the category.
+        data class SetWhitelistedBulk(val packageNames: List<String>, val whitelisted: Boolean) : PendingWeakenAction()
+        data class SetMonitoredBulk(val packageNames: List<String>, val monitored: Boolean) : PendingWeakenAction()
         data class SetScopeMode(val mode: ScopeMode) : PendingWeakenAction()
         data class SetPasswordHash(val hash: String) : PendingWeakenAction()
 
@@ -442,6 +465,8 @@ class PrefsRepository(context: Context) {
             is PendingWeakenAction.SetLockoutDurationMinutes -> lockoutDurationMinutes = action.value
             is PendingWeakenAction.SetWhitelisted -> setWhitelisted(action.packageName, action.whitelisted)
             is PendingWeakenAction.SetMonitored -> setMonitored(action.packageName, action.monitored)
+            is PendingWeakenAction.SetWhitelistedBulk -> setWhitelistedBulk(action.packageNames, action.whitelisted)
+            is PendingWeakenAction.SetMonitoredBulk -> setMonitoredBulk(action.packageNames, action.monitored)
             is PendingWeakenAction.SetScopeMode -> mode = action.mode
             is PendingWeakenAction.SetPasswordHash -> prefs.edit().putString(KEY_PASSWORD_HASH, action.hash).apply()
             is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> delayBeforeUnlockEnabled = action.enabled
@@ -460,6 +485,8 @@ class PrefsRepository(context: Context) {
         is PendingWeakenAction.SetLockoutDurationMinutes -> "SetLockoutDurationMinutes"
         is PendingWeakenAction.SetWhitelisted -> "SetWhitelisted"
         is PendingWeakenAction.SetMonitored -> "SetMonitored"
+        is PendingWeakenAction.SetWhitelistedBulk -> "SetWhitelistedBulk"
+        is PendingWeakenAction.SetMonitoredBulk -> "SetMonitoredBulk"
         is PendingWeakenAction.SetScopeMode -> "SetScopeMode"
         is PendingWeakenAction.SetPasswordHash -> "SetPasswordHash"
         is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> "SetDelayBeforeUnlockEnabled"
@@ -479,6 +506,11 @@ class PrefsRepository(context: Context) {
         is PendingWeakenAction.SetLockoutDurationMinutes -> value.toString()
         is PendingWeakenAction.SetWhitelisted -> "$packageName|$whitelisted"
         is PendingWeakenAction.SetMonitored -> "$packageName|$monitored"
+        // Package names never contain "," or "|" (valid Android package
+        // name characters are limited to letters, digits, '.', '_'), so a
+        // comma-joined list followed by the flag is safe with no escaping.
+        is PendingWeakenAction.SetWhitelistedBulk -> "${packageNames.joinToString(",")}|$whitelisted"
+        is PendingWeakenAction.SetMonitoredBulk -> "${packageNames.joinToString(",")}|$monitored"
         is PendingWeakenAction.SetScopeMode -> mode.name
         is PendingWeakenAction.SetPasswordHash -> hash
         is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> enabled.toString()
@@ -500,6 +532,14 @@ class PrefsRepository(context: Context) {
             "SetMonitored" -> {
                 val (pkg, flag) = param.split("|", limit = 2)
                 PendingWeakenAction.SetMonitored(pkg, flag.toBoolean())
+            }
+            "SetWhitelistedBulk" -> {
+                val (pkgs, flag) = param.split("|", limit = 2)
+                PendingWeakenAction.SetWhitelistedBulk(pkgs.split(",").filter { it.isNotBlank() }, flag.toBoolean())
+            }
+            "SetMonitoredBulk" -> {
+                val (pkgs, flag) = param.split("|", limit = 2)
+                PendingWeakenAction.SetMonitoredBulk(pkgs.split(",").filter { it.isNotBlank() }, flag.toBoolean())
             }
             "SetScopeMode" -> PendingWeakenAction.SetScopeMode(ScopeMode.valueOf(param))
             "SetPasswordHash" -> PendingWeakenAction.SetPasswordHash(param)

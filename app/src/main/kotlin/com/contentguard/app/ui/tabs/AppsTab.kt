@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,12 +41,14 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.scope.ScopeMode
 import com.contentguard.app.ui.CGBottomNavClearance
+import com.contentguard.app.ui.CGButton
 import com.contentguard.app.ui.CGCardShape
 import com.contentguard.app.ui.CGChip
 import com.contentguard.app.ui.CGPageTitle
@@ -73,7 +76,7 @@ private data class AppEntry(
     val isInputMethod: Boolean,
 )
 
-private enum class AppsFilter { ALL, MONITORED, ALLOWED, SYSTEM }
+private enum class AppsFilter { ALL, MONITORED, ALLOWED }
 
 /** How ContentGuard scopes what it watches - restyled to the redesign's token system (step 3), same PrefsRepository state and gating as step 2. */
 @Composable
@@ -127,6 +130,32 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
         }
     }
 
+    // Same shape as setMonitored above, but one password challenge for the
+    // whole batch - a per-app challenge would mean re-entering the
+    // password dozens of times for something like "Allow all" on a
+    // system-apps section. pkgs is whatever's currently visible in that
+    // section (current search/filter chip included), not necessarily
+    // every app in the category.
+    fun bulkSetMonitored(pkgs: List<String>, monitor: Boolean) {
+        if (pkgs.isEmpty()) return
+        val descriptor = when (mode) {
+            ScopeMode.MONITOR_ALL_EXCEPT_WHITELIST -> PrefsRepository.PendingWeakenAction.SetWhitelistedBulk(pkgs, !monitor)
+            ScopeMode.MONITOR_ONLY_LISTED -> PrefsRepository.PendingWeakenAction.SetMonitoredBulk(pkgs, monitor)
+        }
+        applyOrChallenge(!monitor, {}, descriptor) {
+            when (mode) {
+                ScopeMode.MONITOR_ALL_EXCEPT_WHITELIST -> {
+                    prefs.setWhitelistedBulk(pkgs, !monitor)
+                    whitelist = prefs.getWhitelist()
+                }
+                ScopeMode.MONITOR_ONLY_LISTED -> {
+                    prefs.setMonitoredBulk(pkgs, monitor)
+                    monitored = prefs.getMonitoredSet()
+                }
+            }
+        }
+    }
+
     val monitoredCount = apps.count { isMonitored(it.packageName) }
     val filtered = apps
         .filter {
@@ -134,7 +163,6 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                 AppsFilter.ALL -> true
                 AppsFilter.MONITORED -> isMonitored(it.packageName)
                 AppsFilter.ALLOWED -> !isMonitored(it.packageName)
-                AppsFilter.SYSTEM -> it.hidden
             }
         }
         .filter {
@@ -142,6 +170,14 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                 it.label.contains(appSearchQuery, ignoreCase = true) ||
                 it.packageName.contains(appSearchQuery, ignoreCase = true)
         }
+    // Split into two permanent sections rather than a single flat list -
+    // "hidden" (no launcher/home icon: background services, input methods,
+    // other OEM system apps - see AppEntry's doc comment) is exactly the
+    // distinction between something the user actually opens versus a
+    // process running unseen, which is a materially different thing to be
+    // deciding whether to monitor.
+    val regularApps = filtered.filter { !it.hidden }
+    val systemApps = filtered.filter { it.hidden }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -189,9 +225,6 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                 item {
                     CGChip("Allowed · ${apps.size - monitoredCount}", selected = filter == AppsFilter.ALLOWED, onClick = { filter = AppsFilter.ALLOWED })
                 }
-                item {
-                    CGChip("System", selected = filter == AppsFilter.SYSTEM, onClick = { filter = AppsFilter.SYSTEM })
-                }
             }
         }
 
@@ -213,24 +246,91 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
             )
         }
 
-        // items(), not a forEach inside one eager CGCard Column, so a
-        // 500+-app device list stays lazily virtualized the same way it
-        // was in step 2 - only the row's own background/corners fake the
-        // single continuous card look CGCard would otherwise give it.
-        itemsIndexed(filtered, key = { _, app -> app.packageName }) { index, app ->
-            AppRow(
-                app = app,
-                monitored = isMonitored(app.packageName),
-                onToggle = { setMonitored(app.packageName, it) },
-                shape = when {
-                    filtered.size == 1 -> CGCardShape
-                    index == 0 -> RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
-                    index == filtered.lastIndex -> RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)
-                    else -> RoundedCornerShape(0.dp)
-                },
-                showDivider = index != filtered.lastIndex,
-            )
-        }
+        appsSection(
+            title = "Apps",
+            entries = regularApps,
+            topPadding = 0.dp,
+            isMonitored = ::isMonitored,
+            onToggle = { pkg, monitor -> setMonitored(pkg, monitor) },
+            onMonitorAll = { bulkSetMonitored(regularApps.map { it.packageName }, true) },
+            onAllowAll = { bulkSetMonitored(regularApps.map { it.packageName }, false) },
+        )
+        appsSection(
+            title = "Processes & system",
+            entries = systemApps,
+            topPadding = if (regularApps.isEmpty()) 0.dp else 22.dp,
+            isMonitored = ::isMonitored,
+            onToggle = { pkg, monitor -> setMonitored(pkg, monitor) },
+            onMonitorAll = { bulkSetMonitored(systemApps.map { it.packageName }, true) },
+            onAllowAll = { bulkSetMonitored(systemApps.map { it.packageName }, false) },
+        )
+    }
+}
+
+// items(), not a forEach inside one eager CGCard Column, so a 500+-app
+// device list stays lazily virtualized the same way it was before
+// sectioning - only each row's own background/corners fake the single
+// continuous card look CGCard would otherwise give it, per section.
+private fun LazyListScope.appsSection(
+    title: String,
+    entries: List<AppEntry>,
+    topPadding: Dp,
+    isMonitored: (String) -> Boolean,
+    onToggle: (String, Boolean) -> Unit,
+    onMonitorAll: () -> Unit,
+    onAllowAll: () -> Unit,
+) {
+    if (entries.isEmpty()) return
+    item {
+        AppsSectionHeader(
+            title = title,
+            count = entries.size,
+            onMonitorAll = onMonitorAll,
+            onAllowAll = onAllowAll,
+            modifier = Modifier.padding(top = topPadding, bottom = 10.dp),
+        )
+    }
+    itemsIndexed(entries, key = { _, app -> app.packageName }) { index, app ->
+        AppRow(
+            app = app,
+            monitored = isMonitored(app.packageName),
+            onToggle = { onToggle(app.packageName, it) },
+            shape = when {
+                entries.size == 1 -> CGCardShape
+                index == 0 -> RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+                index == entries.lastIndex -> RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)
+                else -> RoundedCornerShape(0.dp)
+            },
+            showDivider = index != entries.lastIndex,
+        )
+    }
+}
+
+@Composable
+private fun AppsSectionHeader(
+    title: String,
+    count: Int,
+    onMonitorAll: () -> Unit,
+    onAllowAll: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            "$title · $count",
+            color = CGColor.Dim,
+            fontFamily = JetBrainsMono,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        CGButton("Monitor all", onClick = onMonitorAll, ghost = true, small = true)
+        CGButton("Allow all", onClick = onAllowAll, ghost = true, small = true)
     }
 }
 
