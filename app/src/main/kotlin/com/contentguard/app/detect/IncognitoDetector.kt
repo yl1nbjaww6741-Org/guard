@@ -3,6 +3,8 @@ package com.contentguard.app.detect
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.util.Log
+import com.contentguard.app.util.DebugLogBuffer
 
 /**
  * Gate 4 of the cascade: browser-agnostic detection of private/incognito
@@ -185,6 +187,16 @@ object IncognitoDetector {
             resolved.forEach { discovered.add(it.activityInfo.packageName) }
         }
         dynamicBrowserPackages = discovered
+
+        // Logged unconditionally (not behind verbose logging) - this is a
+        // rare event (every 30 min at most) and its whole purpose is to be
+        // auditable: gates 4/4b/5b all trust isBrowserPackage(), so this
+        // list is exactly what to check if something unexpected (a
+        // banking app, say) ever turns out to have a broad, unscoped
+        // http/https VIEW filter and gets pulled in by mistake.
+        val line = "BROWSER_REGISTRY_REFRESHED count=${discovered.size} packages=$discovered"
+        Log.i(TAG, line)
+        DebugLogBuffer.add(TAG, line)
     }
 
     fun isBrowserPackage(packageName: String): Boolean =
@@ -256,4 +268,6 @@ object IncognitoDetector {
         val lower = text.lowercase()
         return keywords.any { lower.contains(it) }
     }
+
+    private const val TAG = "IncognitoDetector"
 }
