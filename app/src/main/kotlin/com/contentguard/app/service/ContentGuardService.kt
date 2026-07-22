@@ -403,11 +403,6 @@ class ContentGuardService : AccessibilityService() {
             // not wait for the screen to turn back on first.
             applyPendingWeakenActionIfDue()
 
-            // TTL-gated no-op most ticks (see maybeRefreshInstalledBrowsers'
-            // own doc comment) - picks up newly installed browsers without
-            // needing a dedicated PACKAGE_ADDED broadcast receiver.
-            IncognitoDetector.maybeRefreshInstalledBrowsers(packageManager)
-
             // Unlike onAccessibilityEvent (naturally quiet with the screen
             // off, since no window-state changes occur), this loop is timer-
             // driven and previously kept firing every tick regardless -
@@ -425,6 +420,16 @@ class ContentGuardService : AccessibilityService() {
             // (2000ms), so it wouldn't actually suppress a capture attempt
             // here the way it does for genuinely redundant same-second ticks.
             if (!powerManager.isInteractive) continue
+
+            // TTL-gated no-op most ticks (see maybeRefreshInstalledBrowsers'
+            // own doc comment) - picks up newly installed browsers without
+            // needing a dedicated PACKAGE_ADDED broadcast receiver. Placed
+            // after the isInteractive check above, not before: nothing can
+            // be browsed with the screen off, so there's no reason to pay
+            // for a real PackageManager query (this ticks every ~2s, so a
+            // screen-off stretch would otherwise still hit its every-30-min
+            // TTL window and run the query for no benefit).
+            IncognitoDetector.maybeRefreshInstalledBrowsers(packageManager)
 
             val root = rootInActiveWindow
             val pkg = root?.packageName?.toString()
