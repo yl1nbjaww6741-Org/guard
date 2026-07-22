@@ -96,7 +96,7 @@ fun ContentGuardApp(prefs: PrefsRepository) {
     // delay-before-unlock is on - see PendingWeakenAction's doc comment for
     // why a raw closure can't be the thing that actually gets deferred.
     var pendingWeakenDescriptor by remember { mutableStateOf<PrefsRepository.PendingWeakenAction?>(null) }
-    var activePendingUnlock by remember { mutableStateOf(prefs.getPendingUnlock()) }
+    var activePendingUnlocks by remember { mutableStateOf(prefs.getPendingUnlocks()) }
 
     fun applyOrChallenge(
         weakening: Boolean,
@@ -146,8 +146,8 @@ fun ContentGuardApp(prefs: PrefsRepository) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 refreshSafeguards()
-                prefs.applyPendingWeakenActionIfEligible()
-                activePendingUnlock = prefs.getPendingUnlock()
+                prefs.applyEligiblePendingWeakenActions()
+                activePendingUnlocks = prefs.getPendingUnlocks()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -205,18 +205,19 @@ fun ContentGuardApp(prefs: PrefsRepository) {
                         context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
                     },
                     applyOrChallenge = ::applyOrChallenge,
-                    pendingUnlock = activePendingUnlock,
-                    onCancelPendingUnlock = {
-                        prefs.clearPendingWeakenAction()
-                        activePendingUnlock = null
+                    pendingUnlocks = activePendingUnlocks,
+                    onCancelPendingUnlock = { action ->
+                        prefs.clearPendingWeakenAction(action)
+                        activePendingUnlocks = prefs.getPendingUnlocks()
                     },
                     onPendingUnlockTick = {
                         // Called on the SecurityTab's own once-a-second
-                        // ticker while a pending unlock is showing, so it
-                        // resolves live if eligibleAt passes while this
-                        // screen is open, not just next time the app resumes.
-                        prefs.applyPendingWeakenActionIfEligible()
-                        activePendingUnlock = prefs.getPendingUnlock()
+                        // ticker while any pending unlock is showing, so
+                        // each one resolves live if its own eligibleAt
+                        // passes while this screen is open, not just next
+                        // time the app resumes.
+                        prefs.applyEligiblePendingWeakenActions()
+                        activePendingUnlocks = prefs.getPendingUnlocks()
                     },
                 )
             }
@@ -239,10 +240,13 @@ fun ContentGuardApp(prefs: PrefsRepository) {
                     // means the change doesn't take effect yet - persisted
                     // so it survives restart/force-stop/reboot; actually
                     // applied later by ContentGuardService once eligible
-                    // (see PrefsRepository.applyPendingWeakenActionIfEligible).
+                    // (see PrefsRepository.applyEligiblePendingWeakenActions).
+                    // Queues alongside any other still-cooling-down pending
+                    // unlocks rather than replacing them - see
+                    // PrefsRepository.setPendingWeakenAction's doc comment.
                     val eligibleAt = System.currentTimeMillis() + prefs.delayBeforeUnlockMinutes * 60_000L
                     prefs.setPendingWeakenAction(descriptor, eligibleAt)
-                    activePendingUnlock = prefs.getPendingUnlock()
+                    activePendingUnlocks = prefs.getPendingUnlocks()
                 } else {
                     action()
                 }

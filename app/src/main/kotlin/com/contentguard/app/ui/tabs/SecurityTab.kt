@@ -54,8 +54,8 @@ fun SecurityTab(
     onEnableDeviceAdmin: () -> Unit,
     onOpenSecuritySettings: () -> Unit,
     applyOrChallenge: GateChallenge,
-    pendingUnlock: PrefsRepository.PendingUnlock?,
-    onCancelPendingUnlock: () -> Unit,
+    pendingUnlocks: List<PrefsRepository.PendingUnlock>,
+    onCancelPendingUnlock: (PrefsRepository.PendingWeakenAction) -> Unit,
     onPendingUnlockTick: () -> Unit,
 ) {
     LazyColumn(
@@ -156,9 +156,9 @@ fun SecurityTab(
 
         item { CGEyebrow("Delay before unlock") }
 
-        if (pendingUnlock != null) {
+        if (pendingUnlocks.isNotEmpty()) {
             item {
-                PendingUnlockCard(pendingUnlock = pendingUnlock, onCancel = onCancelPendingUnlock, onTick = onPendingUnlockTick)
+                PendingUnlocksSection(pendingUnlocks = pendingUnlocks, onCancel = onCancelPendingUnlock, onTick = onPendingUnlockTick)
             }
         }
 
@@ -169,18 +169,22 @@ fun SecurityTab(
 }
 
 /**
- * Anti-impulse cooldown: after a correct password, protection doesn't
- * weaken immediately - it stays full-strength until [pendingUnlock]'s
- * eligible-at time, actually applied by ContentGuardService (see
- * PrefsRepository.applyPendingWeakenActionIfEligible). [onTick] re-checks
- * eligibility once a second while this card is showing, so a cooldown that
- * finishes while the user is looking at this exact screen resolves live
- * instead of needing to leave and come back.
+ * Adjusting setting A, then B, then C (each its own password entry) queues
+ * all three independently - see PrefsRepository.PendingWeakenAction's doc
+ * comment - so this renders one card per pending unlock, each on its own
+ * eligible-at clock, not just the single most recent one. A single shared
+ * once-a-second ticker drives every card's remaining-time display and
+ * re-checks eligibility for all of them together, rather than each card
+ * running its own redundant timer.
  */
 @Composable
-private fun PendingUnlockCard(pendingUnlock: PrefsRepository.PendingUnlock, onCancel: () -> Unit, onTick: () -> Unit) {
+private fun PendingUnlocksSection(
+    pendingUnlocks: List<PrefsRepository.PendingUnlock>,
+    onCancel: (PrefsRepository.PendingWeakenAction) -> Unit,
+    onTick: () -> Unit,
+) {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(pendingUnlock) {
+    LaunchedEffect(pendingUnlocks.size) {
         while (true) {
             delay(1000)
             onTick()
@@ -188,9 +192,18 @@ private fun PendingUnlockCard(pendingUnlock: PrefsRepository.PendingUnlock, onCa
         }
     }
 
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        pendingUnlocks.forEach { pending ->
+            PendingUnlockCard(pendingUnlock = pending, now = now, onCancel = { onCancel(pending.action) })
+        }
+    }
+}
+
+@Composable
+private fun PendingUnlockCard(pendingUnlock: PrefsRepository.PendingUnlock, now: Long, onCancel: () -> Unit) {
     val remainingMs = (pendingUnlock.eligibleAtMillis - now).coerceAtLeast(0)
     CGCard {
-        CGLabel("A change is waiting")
+        CGLabel(pendingUnlock.action.describeForPendingCard())
         CGHint(
             "Protection stays full-strength until this cooldown ends. Re-entering your password " +
                 "doesn't shorten it - only Cancel does.",
@@ -201,6 +214,29 @@ private fun PendingUnlockCard(pendingUnlock: PrefsRepository.PendingUnlock, onCa
         }
         CGButton("Cancel", onClick = onCancel, ghost = true, small = true, modifier = Modifier.padding(top = 12.dp))
     }
+}
+
+// Human-readable label for a pending card - now that several can be queued
+// concurrently, "A change is waiting" (the old single-slot copy) is no
+// longer enough to tell them apart.
+private fun PrefsRepository.PendingWeakenAction.describeForPendingCard(): String = when (this) {
+    is PrefsRepository.PendingWeakenAction.SetThreshold -> "NSFW threshold → ${"%.2f".format(value)}"
+    is PrefsRepository.PendingWeakenAction.SetCaptureThrottleMs -> "Capture throttle → ${value}ms"
+    is PrefsRepository.PendingWeakenAction.RemoveKeyword -> "Remove keyword \"$keyword\""
+    PrefsRepository.PendingWeakenAction.ResetKeywordsToDefault -> "Reset keywords to default"
+    is PrefsRepository.PendingWeakenAction.SetStrikesToLockout -> "Strikes to lockout → $value"
+    is PrefsRepository.PendingWeakenAction.SetLockoutDurationMinutes -> "Lockout duration → ${value}m"
+    is PrefsRepository.PendingWeakenAction.SetWhitelisted -> if (whitelisted) "Allow $packageName" else "Monitor $packageName"
+    is PrefsRepository.PendingWeakenAction.SetMonitored -> if (monitored) "Monitor $packageName" else "Allow $packageName"
+    is PrefsRepository.PendingWeakenAction.SetWhitelistedBulk ->
+        if (whitelisted) "Allow ${packageNames.size} apps" else "Monitor ${packageNames.size} apps"
+    is PrefsRepository.PendingWeakenAction.SetMonitoredBulk ->
+        if (monitored) "Monitor ${packageNames.size} apps" else "Allow ${packageNames.size} apps"
+    is PrefsRepository.PendingWeakenAction.SetScopeMode -> "Scope mode change"
+    is PrefsRepository.PendingWeakenAction.SetPasswordHash -> "Password change"
+    is PrefsRepository.PendingWeakenAction.SetDelayBeforeUnlockEnabled ->
+        if (enabled) "Turn on delay before unlock" else "Turn off delay before unlock"
+    is PrefsRepository.PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "Delay before unlock → ${minutes}m"
 }
 
 private fun formatRemaining(ms: Long): String {

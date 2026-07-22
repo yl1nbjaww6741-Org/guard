@@ -137,12 +137,13 @@ class ContentGuardService : AccessibilityService() {
             },
         )
 
-        // Re-evaluates a delay-before-unlock pending action every time the
-        // service (re)connects - after a reboot, after being force-stopped
-        // and relaunched, or just the OS rebinding it - so a cooldown that
-        // finished while the process was dead still takes effect promptly,
-        // without needing any new background scheduler. See
-        // PrefsRepository.applyPendingWeakenActionIfEligible's doc comment.
+        // Re-evaluates every delay-before-unlock pending action every time
+        // the service (re)connects - after a reboot, after being
+        // force-stopped and relaunched, or just the OS rebinding it - so
+        // any cooldown that finished while the process was dead still
+        // takes effect promptly, without needing any new background
+        // scheduler. See PrefsRepository.applyEligiblePendingWeakenActions's
+        // doc comment.
         applyPendingWeakenActionIfDue()
 
         serviceScope.launch { consumeFrames() }
@@ -151,10 +152,12 @@ class ContentGuardService : AccessibilityService() {
     }
 
     private fun applyPendingWeakenActionIfDue() {
-        val applied = prefs.applyPendingWeakenActionIfEligible() ?: return
-        val line = "PENDING_UNLOCK_APPLIED action=$applied"
-        Log.i(TAG, line)
-        DebugLogBuffer.add(TAG, line)
+        val applied = prefs.applyEligiblePendingWeakenActions()
+        applied.forEach { action ->
+            val line = "PENDING_UNLOCK_APPLIED action=$action"
+            Log.i(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+        }
     }
 
     /**

@@ -312,7 +312,7 @@ class PrefsRepository(context: Context) {
     /**
      * Anti-impulse cooldown: when on, a correct password doesn't weaken
      * protection immediately - see [PendingWeakenAction] and
-     * [applyPendingWeakenActionIfEligible]. Off by default, preserving
+     * [applyEligiblePendingWeakenActions]. Off by default, preserving
      * today's instant-apply-on-correct-password behavior exactly.
      */
     var delayBeforeUnlockEnabled: Boolean
@@ -372,6 +372,15 @@ class PrefsRepository(context: Context) {
      * CGGatedButton) - those launch an external screen rather than change
      * any of ContentGuard's own state, so there's nothing here to defer or
      * persist; they stay instant-on-password as before.
+     *
+     * Multiple of these can be queued concurrently, each on its own
+     * eligible-at clock - adjusting setting A, then B, then C (each its
+     * own password entry) queues all three independently rather than the
+     * newest replacing the others. See [setPendingWeakenAction]/
+     * [slotKey] for the one exception: a second request for the exact same
+     * setting (not just the same action type) still replaces its own
+     * earlier entry, since re-adjusting one thing again should reset that
+     * one thing's timer, not create a duplicate.
      */
     sealed class PendingWeakenAction {
         data class SetThreshold(val value: Float) : PendingWeakenAction()
@@ -412,55 +421,64 @@ class PrefsRepository(context: Context) {
     fun hashPasswordForPending(raw: String): String = hash(raw)
 
     /**
-     * Persists [action] as the one pending unlock, replacing any existing
-     * one - only a single slot is kept (see class doc on
-     * [PendingWeakenAction]): a new weakening request made while one is
-     * already pending overwrites it with a fresh eligible-at, rather than
-     * queuing both.
+     * Persists [action] as one of potentially several concurrently pending
+     * unlocks - adjusting setting A, then B, then C (each its own password
+     * entry) queues all three independently, each on its own eligible-at
+     * clock, rather than the newest overwriting the others the way a
+     * single slot used to. A second request for the *same* setting (matched
+     * by [PendingWeakenAction.slotKey] - e.g. the same package for
+     * SetWhitelisted, the same keyword for RemoveKeyword) still replaces its
+     * own earlier entry with a fresh eligible-at, same as before - only
+     * genuinely different settings coexist.
      */
     fun setPendingWeakenAction(action: PendingWeakenAction, eligibleAtMillis: Long) {
-        prefs.edit()
-            .putString(KEY_PENDING_ACTION_TYPE, action.typeTag())
-            .putString(KEY_PENDING_ACTION_PARAM, action.paramValue())
-            .putLong(KEY_PENDING_ELIGIBLE_AT, eligibleAtMillis)
-            .apply()
+        val next = getPendingUnlocks().filterNot { it.action.slotKey() == action.slotKey() } + PendingUnlock(action, eligibleAtMillis)
+        savePendingUnlocks(next)
     }
 
-    fun getPendingUnlock(): PendingUnlock? {
-        val type = prefs.getString(KEY_PENDING_ACTION_TYPE, null) ?: return null
-        val param = prefs.getString(KEY_PENDING_ACTION_PARAM, "").orEmpty()
-        val eligibleAt = prefs.getLong(KEY_PENDING_ELIGIBLE_AT, 0L)
-        val action = decodePendingAction(type, param) ?: return null
-        return PendingUnlock(action, eligibleAt)
+    /** Every pending unlock currently queued, oldest first. */
+    fun getPendingUnlocks(): List<PendingUnlock> {
+        val count = prefs.getInt(KEY_PENDING_COUNT, -1)
+        if (count < 0) return migrateLegacySinglePendingUnlock()
+        return (0 until count).mapNotNull { i ->
+            val type = prefs.getString(pendingTypeKey(i), null) ?: return@mapNotNull null
+            val param = prefs.getString(pendingParamKey(i), "").orEmpty()
+            val eligibleAt = prefs.getLong(pendingEligibleAtKey(i), 0L)
+            decodePendingAction(type, param)?.let { PendingUnlock(it, eligibleAt) }
+        }
     }
 
-    /** Discards a pending unlock outright - the safe direction, always allowed with no challenge. */
-    fun clearPendingWeakenAction() {
-        prefs.edit()
-            .remove(KEY_PENDING_ACTION_TYPE)
-            .remove(KEY_PENDING_ACTION_PARAM)
-            .remove(KEY_PENDING_ELIGIBLE_AT)
-            .apply()
+    /** Discards one specific pending unlock outright - the safe direction, always allowed with no challenge. Any other pending unlocks are untouched. */
+    fun clearPendingWeakenAction(action: PendingWeakenAction) {
+        savePendingUnlocks(getPendingUnlocks().filterNot { it.action.slotKey() == action.slotKey() })
     }
 
     /**
-     * Applies the pending action for real if [PendingUnlock.eligibleAtMillis]
-     * has passed, then clears it. No-ops (returns null) if there's nothing
-     * pending or it isn't eligible yet. Called from ContentGuardService on
-     * service (re)connect and its periodic recheck loop - both already
-     * running whenever the app is alive at all, so this needs no new
-     * background infrastructure (no AlarmManager/WorkManager), and
-     * re-evaluates correctly after restart, force-stop, or reboot purely
-     * because it's driven off this persisted state, not an in-memory timer.
+     * Applies every pending unlock whose [PendingUnlock.eligibleAtMillis]
+     * has already passed, leaving any still-cooling-down ones queued.
+     * Returns the actions actually applied (empty if none were eligible
+     * yet). Called from ContentGuardService on service (re)connect and its
+     * periodic recheck loop - both already running whenever the app is
+     * alive at all, so this needs no new background infrastructure (no
+     * AlarmManager/WorkManager), and re-evaluates correctly after restart,
+     * force-stop, or reboot purely because it's driven off this persisted
+     * state, not an in-memory timer.
      */
-    fun applyPendingWeakenActionIfEligible(): PendingWeakenAction? {
-        val pending = getPendingUnlock() ?: return null
-        if (System.currentTimeMillis() < pending.eligibleAtMillis) return null
-        when (val action = pending.action) {
+    fun applyEligiblePendingWeakenActions(): List<PendingWeakenAction> {
+        val now = System.currentTimeMillis()
+        val (due, notYetDue) = getPendingUnlocks().partition { now >= it.eligibleAtMillis }
+        if (due.isEmpty()) return emptyList()
+        due.forEach { applyPendingAction(it.action) }
+        savePendingUnlocks(notYetDue)
+        return due.map { it.action }
+    }
+
+    private fun applyPendingAction(action: PendingWeakenAction) {
+        when (action) {
             is PendingWeakenAction.SetThreshold -> nsfwThreshold = action.value
             is PendingWeakenAction.SetCaptureThrottleMs -> captureThrottleMs = action.value
             is PendingWeakenAction.RemoveKeyword -> removeExplicitKeyword(action.keyword)
-            is PendingWeakenAction.ResetKeywordsToDefault -> resetExplicitKeywordsToDefault()
+            PendingWeakenAction.ResetKeywordsToDefault -> resetExplicitKeywordsToDefault()
             is PendingWeakenAction.SetStrikesToLockout -> strikesToLockout = action.value
             is PendingWeakenAction.SetLockoutDurationMinutes -> lockoutDurationMinutes = action.value
             is PendingWeakenAction.SetWhitelisted -> setWhitelisted(action.packageName, action.whitelisted)
@@ -472,8 +490,72 @@ class PrefsRepository(context: Context) {
             is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> delayBeforeUnlockEnabled = action.enabled
             is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> delayBeforeUnlockMinutes = action.minutes
         }
-        clearPendingWeakenAction()
-        return pending.action
+    }
+
+    // Two requests occupy the "same slot" if adjusting one again should
+    // replace the other's still-pending entry rather than queue alongside
+    // it - keyed by whatever makes them the same *setting*, not just the
+    // same action type (SetWhitelisted for two different packages are two
+    // different settings and must be able to coexist).
+    private fun PendingWeakenAction.slotKey(): String = when (this) {
+        is PendingWeakenAction.SetThreshold -> "SetThreshold"
+        is PendingWeakenAction.SetCaptureThrottleMs -> "SetCaptureThrottleMs"
+        is PendingWeakenAction.RemoveKeyword -> "RemoveKeyword:$keyword"
+        PendingWeakenAction.ResetKeywordsToDefault -> "ResetKeywordsToDefault"
+        is PendingWeakenAction.SetStrikesToLockout -> "SetStrikesToLockout"
+        is PendingWeakenAction.SetLockoutDurationMinutes -> "SetLockoutDurationMinutes"
+        is PendingWeakenAction.SetWhitelisted -> "SetWhitelisted:$packageName"
+        is PendingWeakenAction.SetMonitored -> "SetMonitored:$packageName"
+        is PendingWeakenAction.SetWhitelistedBulk -> "SetWhitelistedBulk"
+        is PendingWeakenAction.SetMonitoredBulk -> "SetMonitoredBulk"
+        is PendingWeakenAction.SetScopeMode -> "SetScopeMode"
+        is PendingWeakenAction.SetPasswordHash -> "SetPasswordHash"
+        is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> "SetDelayBeforeUnlockEnabled"
+        is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "SetDelayBeforeUnlockMinutes"
+    }
+
+    private fun pendingTypeKey(index: Int) = "pending_action_type_$index"
+    private fun pendingParamKey(index: Int) = "pending_action_param_$index"
+    private fun pendingEligibleAtKey(index: Int) = "pending_eligible_at_$index"
+
+    private fun savePendingUnlocks(list: List<PendingUnlock>) {
+        val oldCount = prefs.getInt(KEY_PENDING_COUNT, 0).coerceAtLeast(list.size)
+        val editor = prefs.edit()
+        list.forEachIndexed { i, pending ->
+            editor.putString(pendingTypeKey(i), pending.action.typeTag())
+            editor.putString(pendingParamKey(i), pending.action.paramValue())
+            editor.putLong(pendingEligibleAtKey(i), pending.eligibleAtMillis)
+        }
+        for (i in list.size until oldCount) {
+            editor.remove(pendingTypeKey(i))
+            editor.remove(pendingParamKey(i))
+            editor.remove(pendingEligibleAtKey(i))
+        }
+        // Also clears the pre-multi-slot legacy keys - migrateLegacySinglePendingUnlock()
+        // already folded whatever they held into `list` by the time any
+        // mutating call reaches here, so this is what actually completes
+        // the one-time migration.
+        editor.remove(KEY_PENDING_ACTION_TYPE)
+        editor.remove(KEY_PENDING_ACTION_PARAM)
+        editor.remove(KEY_PENDING_ELIGIBLE_AT)
+        editor.putInt(KEY_PENDING_COUNT, list.size)
+        editor.apply()
+    }
+
+    // Reads the old single-slot format (from before concurrently pending
+    // unlocks were supported) - KEY_PENDING_COUNT being absent is the
+    // signal this device hasn't been through the new format yet. Doesn't
+    // persist anything itself; the next mutating call (setPendingWeakenAction/
+    // clearPendingWeakenAction/applyEligiblePendingWeakenActions, all of
+    // which go through savePendingUnlocks) writes the migrated list and
+    // clears the legacy keys for good, so this fallback is only ever hit
+    // once per device.
+    private fun migrateLegacySinglePendingUnlock(): List<PendingUnlock> {
+        val legacyType = prefs.getString(KEY_PENDING_ACTION_TYPE, null) ?: return emptyList()
+        val param = prefs.getString(KEY_PENDING_ACTION_PARAM, "").orEmpty()
+        val eligibleAt = prefs.getLong(KEY_PENDING_ELIGIBLE_AT, 0L)
+        val action = decodePendingAction(legacyType, param) ?: return emptyList()
+        return listOf(PendingUnlock(action, eligibleAt))
     }
 
     private fun PendingWeakenAction.typeTag(): String = when (this) {
@@ -575,9 +657,11 @@ class PrefsRepository(context: Context) {
         private const val KEY_FRAME_DIFF_MAX_SKIP_AGE_MS = "frame_diff_max_skip_age_ms"
         private const val KEY_DELAY_BEFORE_UNLOCK_ENABLED = "delay_before_unlock_enabled"
         private const val KEY_DELAY_BEFORE_UNLOCK_MINUTES = "delay_before_unlock_minutes"
+        // Legacy single-slot keys, read only by migrateLegacySinglePendingUnlock().
         private const val KEY_PENDING_ACTION_TYPE = "pending_weaken_action_type"
         private const val KEY_PENDING_ACTION_PARAM = "pending_weaken_action_param"
         private const val KEY_PENDING_ELIGIBLE_AT = "pending_weaken_eligible_at"
+        private const val KEY_PENDING_COUNT = "pending_weaken_action_count"
         private const val KEY_SETTINGS_GUARD_COOLDOWN_ELIGIBLE_AT = "settings_guard_cooldown_eligible_at"
         private const val PASSWORD_SALT = "contentguard-v1-"
         const val DEFAULT_THRESHOLD = 0.80f
