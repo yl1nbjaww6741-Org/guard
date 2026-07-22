@@ -16,6 +16,7 @@ import com.contentguard.app.detect.KeywordBlocklist
 import com.contentguard.app.detect.NodeInspector
 import com.contentguard.app.detect.NsfwClassifier
 import com.contentguard.app.detect.NsfwClassifierFactory
+import com.contentguard.app.detect.SecureContentDetector
 import com.contentguard.app.detect.SkinTonePrefilter
 import com.contentguard.app.overlay.BlurOverlayController
 import com.contentguard.app.overlay.PasswordGuardOverlayController
@@ -531,6 +532,43 @@ class ContentGuardService : AccessibilityService() {
             return
         }
         prefs.recordScreenshot()
+
+        // Structural complement to gate 4/4b's keyword matching, scoped to
+        // the same browser package list - not a replacement, and
+        // deliberately not extended to every app (banking, streaming, and
+        // password-manager apps legitimately use the identical mechanism
+        // and aren't private browsing). Android renders any FLAG_SECURE
+        // window as flat black to every capture path, platform-wide,
+        // regardless of what that window's own UI text says - so this
+        // catches a private/incognito tab in literally any browser,
+        // including ones whose wording IncognitoDetector's keyword lists
+        // don't recognize or that aren't a Chromium/Firefox fork at all,
+        // without needing to know anything about that browser in advance.
+        // Gate 3 already confirmed the accessibility tree sees real
+        // image-shaped content here (scan.hasImages) - a captured frame
+        // that's uniformly black despite that is the mismatch this exists
+        // to catch. Requires both very low brightness AND very low
+        // variance, not just "dark," since an ordinary dark-themed page
+        // still has real text/icon/border variation that a true
+        // FLAG_SECURE cutout doesn't.
+        if (IncognitoDetector.isBrowserPackage(pkg)) {
+            val secureCheck = SecureContentDetector.analyze(bitmap)
+            if (prefs.verboseLogging) {
+                val line = "[$pkg] SECURE_CONTENT_CHECK avgLuma=${"%.1f".format(secureCheck.avgLuma)} stdDev=${"%.1f".format(secureCheck.stdDev)}"
+                Log.d(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+            }
+            if (secureCheck.looksSecureBlocked) {
+                if (!overlay.isVisible()) {
+                    val line = "[$pkg] exit@GATE5B_SECURE_CONTENT_DETECTED avgLuma=${"%.1f".format(secureCheck.avgLuma)} stdDev=${"%.1f".format(secureCheck.stdDev)}"
+                    Log.i(TAG, line)
+                    DebugLogBuffer.add(TAG, line)
+                    withContext(Dispatchers.Main) { overlay.show(pkg) }
+                }
+                bitmap.recycle()
+                return
+            }
+        }
 
         val skinAnalysis = SkinTonePrefilter.analyze(bitmap)
         if (!skinAnalysis.hasSkin) {

@@ -745,6 +745,20 @@ here, both instructive:**
    this specific failure mode - it means capture is failing (consistent
    with a private tab) but gate 4 never caught it.
 
+   **Correction, found while building gate 5b below**: `AccessibilityService
+   .takeScreenshot(displayId, ...)` (what `ScreenCapturer` actually calls)
+   does *not* fail/error on a `FLAG_SECURE` window the way this point
+   assumed - confirmed against the platform CTS test suite
+   (`AccessibilityTakeScreenshotTest`), where only the *window*-scoped
+   `takeScreenshotOfWindow(windowId, ...)` (a different, newer method this
+   app doesn't use) returns `ERROR_TAKE_SCREENSHOT_SECURE_WINDOW`. The
+   *display*-scoped call this app uses instead **succeeds**, returning a
+   real bitmap with the secure window's own region rendered flat black -
+   so `GATE5_CAPTURE_THROTTLED_OR_FAILED` was never actually the diagnostic
+   signal for this; it just happened not to contradict the theory at the
+   time. See gate 5b immediately below for the fix that's actually
+   grounded in this corrected understanding.
+
 Deliberately no Settings toggle to disable this - the point is that
 private browsing can't be used to evade the rest of the cascade, so it
 shouldn't have an easy in-app off switch any more than the password-gated
@@ -798,6 +812,47 @@ clearing every keyword functionally disables the gate, the same way
 setting the NSFW threshold to 1.0 already can for gates 6/7 - kept
 editable anyway because a fixed, unreviewable list can't be tuned for
 false positives/negatives actually observed on a real device.
+
+### Gate 5b: structural FLAG_SECURE detection, browser-agnostic without keywords
+
+Explicit user request: gate 4/4b's keyword matching only ever catches a
+private/incognito tab if that browser's own UI happens to use wording one
+of `TITLE_KEYWORDS`/`CONTENT_KEYWORDS` already lists - a real gap for any
+browser using different phrasing, a different language, or one nobody's
+tested against yet. `SecureContentDetector.kt` closes that gap
+structurally instead of adding more keywords: Android renders *any*
+`FLAG_SECURE` window as flat black to every capture path, platform-wide,
+regardless of what that window's own text says - browsers set this flag on
+private tabs for exactly this reason, so detecting the black-out itself
+doesn't need to know anything about a given browser's incognito wording,
+or even that the browser exists yet.
+
+Runs in `processFrame()` right after gate 5's capture succeeds, scoped to
+the same `IncognitoDetector.BROWSER_PACKAGES` set gates 4/4b already use -
+deliberately *not* extended to every app, since banking, payment,
+streaming (DRM), and password-manager apps all use the identical flag
+legitimately and aren't private browsing. Gate 3 already confirmed the
+accessibility tree sees real image-shaped content on screen
+(`scan.hasImages`); a captured frame that's uniformly black despite that is
+the mismatch this exists to catch.
+
+Requires both very low average brightness *and* very low variance
+(`SecureContentDetector.MAX_AVG_LUMA` / `MAX_STD_DEV`), not just "dark" -
+deliberately conservative, since an ordinary dark-themed page still has
+real text/icon/border variation a true `FLAG_SECURE` cutout doesn't have
+at all (nothing real was ever rendered into it). Logs
+`GATE5B_SECURE_CONTENT_DETECTED avgLuma=... stdDev=...` and blocks with the
+same overlay as a real `GATE8_BLOCK`. `SECURE_CONTENT_CHECK avgLuma=...
+stdDev=...` also logs every evaluation (gated behind verbose logging) so a
+missed detection or an unexpected false positive on real dark-mode content
+is a direct threshold-tuning lookup, not another blind guess - the same
+diagnose-from-logs discipline every gate in this file already follows.
+
+Not yet confirmed against a real device (no access to one while writing
+this) - the thresholds are a reasoned starting point, not a tuned one. If
+`GATE5B_SECURE_CONTENT_DETECTED` never fires on a real incognito tab, or
+fires on ordinary dark browsing, the logged `avgLuma`/`stdDev` values are
+the next lead.
 
 ## 4. Dropping in the real model
 
