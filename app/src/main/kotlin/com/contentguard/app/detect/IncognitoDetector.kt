@@ -1,5 +1,9 @@
 package com.contentguard.app.detect
 
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+
 /**
  * Gate 4 of the cascade: browser-agnostic detection of private/incognito
  * browsing.
@@ -49,10 +53,11 @@ package com.contentguard.app.detect
 object IncognitoDetector {
 
     /**
-     * Only these packages are ever checked - not because the text
-     * signals couldn't in principle appear elsewhere, but because
-     * restricting to known browsers is what keeps this from ever firing
-     * on an unrelated app (Gboard, or anything else) no matter what text
+     * The hand-maintained floor of [isBrowserPackage] - not the only
+     * packages ever checked (see [maybeRefreshInstalledBrowsers] below for
+     * the dynamic set layered on top), but restricting *some* explicit set
+     * to "known browsers" is what keeps this from ever firing on an
+     * unrelated app (Gboard, or anything else) no matter what text
      * transiently appears in its own accessibility tree.
      *
      * Chrome's own package IDs were previously pulled out of this set -
@@ -132,7 +137,58 @@ object IncognitoDetector {
         "com.androidbull.incognito.browser", // Incognito Browser (AndroidBull)
     )
 
-    fun isBrowserPackage(packageName: String): Boolean = packageName in BROWSER_PACKAGES
+    // Dynamically-discovered browsers, on top of the hand-maintained list
+    // above - queried from the platform's own record of which apps
+    // register to handle a plain http(s) VIEW intent, the same mechanism
+    // Android's own "Open with" chooser and default-browser picker use to
+    // decide what counts as a browser. This is what actually closes the
+    // "not every browser is covered" gap for good, instead of needing
+    // every new/niche/regional browser reported and hand-added one at a
+    // time (see the com.androidbull.incognito.browser entry above for a
+    // concrete example of that happening). BROWSER_PACKAGES itself is
+    // kept as a floor rather than replaced - a union costs nothing (an
+    // already-covered package matching twice is a no-op) and still covers
+    // the rare browser that, for whatever reason, doesn't declare the
+    // standard VIEW+http/https intent filter.
+    //
+    // This app already holds QUERY_ALL_PACKAGES (see AndroidManifest.xml -
+    // sideloaded-only distribution, so the Play Store restriction on that
+    // permission doesn't apply), so this sees every installed app's
+    // intent filters directly with no additional <queries> declaration
+    // needed.
+    @Volatile
+    private var dynamicBrowserPackages: Set<String> = emptySet()
+
+    @Volatile
+    private var lastRefreshAtMillis: Long = 0L
+
+    private const val REFRESH_INTERVAL_MS = 30 * 60 * 1000L
+
+    /**
+     * Cheap no-op after the first call within any given
+     * [REFRESH_INTERVAL_MS] window - safe to call from a periodic
+     * maintenance tick (see ContentGuardService.recheckStaticContent)
+     * without needing a dedicated broadcast receiver for newly installed
+     * apps. Queries both http and https, since a browser only strictly
+     * needs to declare one of the two.
+     */
+    fun maybeRefreshInstalledBrowsers(packageManager: PackageManager, forceNow: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!forceNow && now - lastRefreshAtMillis < REFRESH_INTERVAL_MS) return
+        lastRefreshAtMillis = now
+
+        val discovered = mutableSetOf<String>()
+        for (scheme in arrayOf("http", "https")) {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("$scheme://"))
+            @Suppress("DEPRECATION")
+            val resolved = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            resolved.forEach { discovered.add(it.activityInfo.packageName) }
+        }
+        dynamicBrowserPackages = discovered
+    }
+
+    fun isBrowserPackage(packageName: String): Boolean =
+        packageName in BROWSER_PACKAGES || packageName in dynamicBrowserPackages
 
     // Checked against a single short window/task title string (see
     // ContentGuardService's title-based guard pattern, already used for

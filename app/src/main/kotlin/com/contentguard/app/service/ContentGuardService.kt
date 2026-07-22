@@ -74,6 +74,10 @@ class ContentGuardService : AccessibilityService() {
         AccessibilityWatchdogService.start(applicationContext)
         prefs = PrefsRepository(applicationContext)
         scopePolicy = AppScopePolicy(prefs)
+        // Populate immediately on (re)connect - see recheckStaticContent
+        // for the ongoing periodic refresh that picks up newly installed
+        // browsers without needing a restart.
+        IncognitoDetector.maybeRefreshInstalledBrowsers(packageManager, forceNow = true)
         debouncer = EventDebouncer()
         screenCapturer = ScreenCapturer(this, ContextCompat.getMainExecutor(this), prefs)
         nsfwClassifier = NsfwClassifierFactory.create(applicationContext)
@@ -395,6 +399,11 @@ class ContentGuardService : AccessibilityService() {
             // delay-before-unlock cooldown should resolve on its own clock,
             // not wait for the screen to turn back on first.
             applyPendingWeakenActionIfDue()
+
+            // TTL-gated no-op most ticks (see maybeRefreshInstalledBrowsers'
+            // own doc comment) - picks up newly installed browsers without
+            // needing a dedicated PACKAGE_ADDED broadcast receiver.
+            IncognitoDetector.maybeRefreshInstalledBrowsers(packageManager)
 
             // Unlike onAccessibilityEvent (naturally quiet with the screen
             // off, since no window-state changes occur), this loop is timer-

@@ -766,6 +766,26 @@ Settings/Accessibility screens do. Not wired into the N-strikes/lockout
 counters or usage stats - it's an independent block, not treated as an
 explicit-content strike.
 
+**`BROWSER_PACKAGES` is a floor, not the whole story.** Real-world use
+found a second gap beyond wording: `com.androidbull.incognito.browser`
+(a real, always-private browser) wasn't in the hand-maintained list at
+all, so every check above - gate 4, 4b, and 5b - was simply invisible to
+it, whack-a-mole style. `IncognitoDetector.maybeRefreshInstalledBrowsers()`
+closes this by querying `PackageManager` for every app that registers to
+handle a plain `http`/`https` `ACTION_VIEW` intent - the same mechanism
+Android's own "Open with" chooser and default-browser picker use to
+decide what counts as a browser - and unions the result with
+`BROWSER_PACKAGES`. `isBrowserPackage()` checks both sets, so a brand new
+or niche browser is covered automatically once installed, not after being
+individually reported. This app already holds `QUERY_ALL_PACKAGES` (see
+`AndroidManifest.xml` - sideloaded-only distribution, so the Play Store
+restriction on that permission doesn't apply), so the query sees every
+installed app directly with no extra `<queries>` manifest declaration
+needed. Refreshed once immediately on service connect and then lazily
+(30-minute TTL, checked from `recheckStaticContent`'s existing periodic
+tick) so a newly installed browser is picked up without requiring a
+reboot or a dedicated `PACKAGE_ADDED` broadcast receiver.
+
 ### Gate 4b: keyword-based search blocking, on search intent not page content
 
 `KeywordBlocklist.kt` blocks an app outright the moment an explicit search
