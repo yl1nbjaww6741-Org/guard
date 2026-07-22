@@ -173,11 +173,32 @@ class ContentGuardService : AccessibilityService() {
      * a context-registered receiver isn't subject to the Android 8+
      * restriction on manifest-declared implicit-broadcast receivers, and
      * this only ever needs to exist while the service itself is alive.
+     *
+     * Idempotent: onServiceConnected() (which calls this) can legitimately
+     * fire more than once per process - Android rebinds an
+     * AccessibilityService without necessarily tearing it down first - so
+     * this unregisters whatever was already registered before creating a
+     * new one. Without that, each rebind would leak one more permanently-
+     * registered receiver, all still firing (and each re-querying
+     * PackageManager) on every future install alongside each other.
      */
     private fun registerPackageChangeReceiver() {
+        packageChangeReceiver?.let { unregisterReceiver(it) }
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                IncognitoDetector.refreshInstalledBrowsers(packageManager)
+                // Off the main thread - queryIntentActivities is a Binder
+                // call into PackageManagerService that walks every
+                // installed app's manifest, not free enough to run
+                // synchronously on the thread onReceive() is dispatched on.
+                // Safe to fire-and-forget here specifically: this process
+                // already stays alive via the accessibility service binding
+                // and AccessibilityWatchdogService's own foreground service,
+                // so there's no risk of the process being reclaimed before
+                // this coroutine finishes the way there would be for an
+                // ordinary short-lived receiver.
+                serviceScope.launch(Dispatchers.Default) {
+                    IncognitoDetector.refreshInstalledBrowsers(packageManager)
+                }
             }
         }
         packageChangeReceiver = receiver
