@@ -397,6 +397,28 @@ class ContentGuardService : AccessibilityService() {
             }
         }
 
+        // A block overlay is already displayed for this app. While it's up,
+        // nothing the cascade could decide changes what's on screen:
+        // exitSafe() deliberately never hides the overlay (see its doc), and
+        // every overlay.show() path no-ops when it's already visible. So
+        // capturing a screenshot and running inference behind it - which the
+        // content still churning underneath (autoplay, rotating ads,
+        // infinite scroll) would otherwise trigger every cycle - is pure
+        // wasted battery with no possible effect. The overlay only ever comes
+        // down via a real app switch (handled at the top of this method) or
+        // the user dismissing it, neither of which needs the cascade running.
+        // Locked-out and settings-guard cases already returned above; this
+        // covers the ordinary post-block case.
+        //
+        // Excludes a real app switch: that already requested overlay.hide()
+        // above, but hide() runs on the main dispatcher after this handler
+        // returns, so isVisible() is still true here - skipping on the switch
+        // event itself would drop the first frame for the app just opened and
+        // delay evaluating it until its next event or the static recheck. A
+        // non-switch event (content changing behind a still-standing block)
+        // is exactly the case to skip.
+        if (overlay.isVisible() && !isRealAppSwitch) return
+
         if (!debouncer.shouldProcess(event)) {
             if (prefs.verboseLogging) Log.d(TAG, "[$packageName] exit@GATE2_DEBOUNCE")
             return
@@ -497,6 +519,14 @@ class ContentGuardService : AccessibilityService() {
             // typing, with no app ever opened. A keyboard's own window is
             // never content worth scoring regardless of scope mode.
             if (windowId != null && !isApplicationWindow(windowId)) continue
+            // Same reason the event path skips while a block overlay is up
+            // (see onAccessibilityEvent): re-capturing and re-classifying
+            // behind an already-displayed block can't change what's shown, so
+            // this timer would just be paying for a screenshot + inference
+            // every tick to no effect. Without this the static-recheck loop
+            // kept the cascade running behind every block the whole time it
+            // stayed on screen.
+            if (overlay.isVisible()) continue
             if (onGuardedSettingsScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) continue
             frameChannel.trySend(FrameRequest(pkg))
         }
