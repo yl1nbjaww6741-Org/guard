@@ -59,6 +59,13 @@ class ContentGuardService : AccessibilityService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val frameChannel = Channel<FrameRequest>(Channel.CONFLATED)
 
+    // Wakes recheckStaticContent out of its parked (screen-off) state. Fed by
+    // screenStateReceiver on ACTION_SCREEN_ON/OFF; CONFLATED so a burst of
+    // transitions collapses to a single pending wake and the loop never
+    // builds a backlog of them. See recheckStaticContent for why the loop
+    // parks entirely with the screen off instead of polling.
+    private val screenStateChannel = Channel<Unit>(Channel.CONFLATED)
+
     private var lastForegroundPackage: String? = null
     private var settingsGuardUnlocked = false
     private var onGuardedSettingsScreen = false
@@ -67,6 +74,11 @@ class ContentGuardService : AccessibilityService() {
     // there for why this replaces a periodic PackageManager poll for
     // keeping IncognitoDetector's dynamic browser set current.
     private var packageChangeReceiver: BroadcastReceiver? = null
+
+    // Registered in onServiceConnected, unregistered in onDestroy. Turns the
+    // screen-off period into a genuine indefinite sleep for the static-recheck
+    // loop (zero wakeups) rather than a coarse poll - see registerScreenStateReceiver.
+    private var screenStateReceiver: BroadcastReceiver? = null
 
     private val activityManager: ActivityManager by lazy { getSystemService(ActivityManager::class.java) }
     private val powerManager: PowerManager by lazy { getSystemService(PowerManager::class.java) }
@@ -89,6 +101,7 @@ class ContentGuardService : AccessibilityService() {
         // this feature shipped).
         IncognitoDetector.refreshInstalledBrowsers(packageManager)
         registerPackageChangeReceiver()
+        registerScreenStateReceiver()
         debouncer = EventDebouncer()
         screenCapturer = ScreenCapturer(this, ContextCompat.getMainExecutor(this), prefs)
         nsfwClassifier = NsfwClassifierFactory.create(applicationContext)
@@ -206,6 +219,39 @@ class ContentGuardService : AccessibilityService() {
             addAction(Intent.ACTION_PACKAGE_ADDED)
             addAction(Intent.ACTION_PACKAGE_REPLACED)
             addDataScheme("package")
+        }
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+    }
+
+    /**
+     * Lets recheckStaticContent sleep indefinitely while the display is off
+     * instead of waking on a timer to find nothing to do. ACTION_SCREEN_ON/
+     * ACTION_SCREEN_OFF are protected system broadcasts (only the OS sends
+     * them) and, unlike most implicit broadcasts, *must* be registered
+     * dynamically at runtime - a manifest-declared receiver never receives
+     * them at all - so a context-registered receiver that lives exactly as
+     * long as the service is the only option regardless of the Android 8+
+     * manifest-broadcast restrictions. RECEIVER_NOT_EXPORTED because no other
+     * app has any business delivering these to us.
+     *
+     * Every transition just nudges [screenStateChannel]; the loop re-reads
+     * powerManager.isInteractive itself to decide what to do, so a spurious
+     * or coalesced wake is harmless. Idempotent for the same reason
+     * registerPackageChangeReceiver is - onServiceConnected can fire more
+     * than once per process, so unregister any prior receiver first to avoid
+     * leaking one per rebind.
+     */
+    private fun registerScreenStateReceiver() {
+        screenStateReceiver?.let { unregisterReceiver(it) }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                screenStateChannel.trySend(Unit)
+            }
+        }
+        screenStateReceiver = receiver
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
         }
         ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
@@ -476,49 +522,40 @@ class ContentGuardService : AccessibilityService() {
      */
     private suspend fun recheckStaticContent() {
         while (serviceScope.isActive) {
-            // Interval is chosen up front from screen state, then re-checked
-            // after the delay below. While the display is off there is
-            // nothing on screen to scan, so this loop's only remaining job is
-            // to let a delay-before-unlock cooldown resolve on its own clock
-            // (see applyPendingWeakenActionIfDue). Those cooldowns are
-            // minutes-to-hours long, so polling them at the same ~2s cadence
-            // the on-screen static recheck needs is pure wasted CPU wakeups
-            // through every pocket/overnight stretch - the single biggest
-            // idle battery cost of this timer, and the one the doc comment
-            // below already flagged. Backing off to SCREEN_OFF_RECHECK_INTERVAL_MS
-            // while the screen is off cuts those idle wakeups ~15x with no
-            // detection trade-off: nothing is captured while the screen is
-            // off regardless, and a cooldown resolving up to that interval
-            // late is immaterial (onServiceConnected and the first on-screen
-            // tick both re-apply pending actions promptly the moment the
-            // device is used again, and the event-driven path - not this
-            // backstop - is what catches the actual screen-on transition).
-            val interactive = powerManager.isInteractive
-            delay(if (interactive) prefs.staticRecheckIntervalMs else SCREEN_OFF_RECHECK_INTERVAL_MS)
-
-            // Runs every tick regardless of screen-on state - a
-            // delay-before-unlock cooldown should resolve on its own clock,
-            // not wait for the screen to turn back on first.
-            applyPendingWeakenActionIfDue()
-
-            // Unlike onAccessibilityEvent (naturally quiet with the screen
-            // off, since no window-state changes occur), this loop is timer-
-            // driven and previously kept firing every tick regardless -
+            // Screen off: park the loop entirely rather than poll. Unlike
+            // onAccessibilityEvent (naturally quiet with the screen off, since
+            // no window-state changes occur), this loop is timer-driven, and
             // accessibility services aren't Doze-throttled the way ordinary
-            // apps are, so this ran 24/7 including screen-off stretches
-            // (pocket, overnight charging). isInteractive is false whenever
-            // the display isn't actually on, at which point nothing could be
-            // visible to detect - skipping here is a pure win, not a
-            // detection trade-off the way the interval/threshold tuning
-            // elsewhere in this file is. Re-read here (not reused from
-            // `interactive` above) because the screen may have turned off
-            // during the delay. rootInActiveWindow can also still report the
-            // last-foreground app after the screen turns off, so this check
-            // has to happen before capture is even attempted, not rely on
-            // ScreenCapturer's own throttle to make it cheap - that throttle
-            // (1800ms) is shorter than this loop's own on-screen interval
-            // (2000ms), so it wouldn't actually suppress a capture attempt
-            // here the way it does for genuinely redundant same-second ticks.
+            // apps are - so a plain timer here would keep waking the CPU 24/7
+            // through every pocket/overnight stretch just to find nothing on
+            // screen to scan. There is no reason to run at all while the
+            // display is off: nothing is capturable, and a delay-before-unlock
+            // cooldown only has any observable effect once the screen is back
+            // on anyway (it changes future gating, and nothing is gated while
+            // the screen is off). So we suspend on screenStateChannel until
+            // the ACTION_SCREEN_ON receiver wakes us, contributing zero
+            // wakeups meanwhile, then apply any now-due pending actions the
+            // instant we wake - onServiceConnected also applies them on every
+            // (re)connect, so nothing is missed across the sleep. receive()
+            // throwing on serviceScope cancellation is the intended shutdown
+            // path (the while-isActive loop simply ends).
+            if (!powerManager.isInteractive) {
+                screenStateChannel.receive()
+                applyPendingWeakenActionIfDue()
+                continue
+            }
+
+            // Screen on: pace the backstop at the on-screen interval. The
+            // delay is at the top of this branch (not the bottom) because the
+            // several `continue`s below would otherwise skip it and spin. The
+            // screen can turn off during this delay, so re-read isInteractive
+            // afterward and route back to the park above if it did -
+            // rootInActiveWindow can still report the last-foreground app
+            // after the screen turns off, so this check has to happen before
+            // any capture is attempted rather than relying on ScreenCapturer's
+            // own throttle (1800ms, shorter than this interval) to make it cheap.
+            delay(prefs.staticRecheckIntervalMs)
+            applyPendingWeakenActionIfDue()
             if (!powerManager.isInteractive) continue
 
             val root = rootInActiveWindow
@@ -877,21 +914,12 @@ class ContentGuardService : AccessibilityService() {
         if (::passwordGuardOverlay.isInitialized && passwordGuardOverlay.isVisible()) passwordGuardOverlay.hide()
         if (::nsfwClassifier.isInitialized) nsfwClassifier.close()
         packageChangeReceiver?.let { unregisterReceiver(it) }
+        screenStateReceiver?.let { unregisterReceiver(it) }
         serviceScope.cancel()
     }
 
     companion object {
         private const val TAG = "ContentGuardService"
-
-        // Coarse poll cadence for the static-recheck loop while the display
-        // is off - see recheckStaticContent. Deliberately much longer than
-        // the on-screen staticRecheckIntervalMs (~2s): with the screen off
-        // there is nothing to scan, so this only paces how promptly a
-        // minutes-to-hours-long delay-before-unlock cooldown is re-checked,
-        // where 30s granularity is indistinguishable in practice while
-        // eliminating the overwhelming majority of this timer's idle CPU
-        // wakeups during pocket/overnight stretches.
-        private const val SCREEN_OFF_RECHECK_INTERVAL_MS = 30_000L
 
         // Standard AOSP Settings package - the "Device admin apps" and
         // "Accessibility" screens are core fragments OEMs rarely
