@@ -2,8 +2,11 @@ package com.contentguard.app.scope
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.SystemClock
 import com.contentguard.app.detect.KeywordBlocklist
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * SharedPreferences on purpose, not DataStore: after the first (async,
@@ -93,12 +96,23 @@ class PrefsRepository(context: Context) {
             prefs.edit().putLong(KEY_FRAME_DIFF_MAX_SKIP_AGE_MS, value.coerceIn(1000L, 120_000L)).apply()
         }
 
-    fun getWhitelist(): Set<String> = prefs.getStringSet(KEY_WHITELIST, null)?.toSet() ?: emptySet()
+    // The defensive .toSet() copy (required - mutating the set instance
+    // SharedPreferences hands back is documented undefined behavior) is
+    // cached rather than re-made per call: getWhitelist/getMonitoredSet run
+    // on every accessibility event via AppScopePolicy.shouldMonitor, and
+    // getExplicitKeywords on every processed browser frame, so a fresh
+    // HashSet copy each time was constant allocation churn on the hottest
+    // paths. All writes in this single-process app flow through the
+    // mutators below, each of which resets its cache.
+
+    fun getWhitelist(): Set<String> =
+        cachedWhitelist ?: (prefs.getStringSet(KEY_WHITELIST, null)?.toSet() ?: emptySet()).also { cachedWhitelist = it }
 
     fun setWhitelisted(packageName: String, whitelisted: Boolean) {
         val next = getWhitelist().toMutableSet()
         if (whitelisted) next.add(packageName) else next.remove(packageName)
         prefs.edit().putStringSet(KEY_WHITELIST, next).apply()
+        cachedWhitelist = null
     }
 
     /** Same as [setWhitelisted] but one prefs write for the whole batch - the Apps tab's per-category bulk on/off. */
@@ -106,14 +120,17 @@ class PrefsRepository(context: Context) {
         val next = getWhitelist().toMutableSet()
         if (whitelisted) next.addAll(packageNames) else next.removeAll(packageNames.toSet())
         prefs.edit().putStringSet(KEY_WHITELIST, next).apply()
+        cachedWhitelist = null
     }
 
-    fun getMonitoredSet(): Set<String> = prefs.getStringSet(KEY_MONITORED, null)?.toSet() ?: emptySet()
+    fun getMonitoredSet(): Set<String> =
+        cachedMonitored ?: (prefs.getStringSet(KEY_MONITORED, null)?.toSet() ?: emptySet()).also { cachedMonitored = it }
 
     fun setMonitored(packageName: String, monitored: Boolean) {
         val next = getMonitoredSet().toMutableSet()
         if (monitored) next.add(packageName) else next.remove(packageName)
         prefs.edit().putStringSet(KEY_MONITORED, next).apply()
+        cachedMonitored = null
     }
 
     /** Same as [setMonitored] but one prefs write for the whole batch - the Apps tab's per-category bulk on/off. */
@@ -121,6 +138,7 @@ class PrefsRepository(context: Context) {
         val next = getMonitoredSet().toMutableSet()
         if (monitored) next.addAll(packageNames) else next.removeAll(packageNames.toSet())
         prefs.edit().putStringSet(KEY_MONITORED, next).apply()
+        cachedMonitored = null
     }
 
     /**
@@ -133,11 +151,14 @@ class PrefsRepository(context: Context) {
      * for why this feature itself has no such switch).
      */
     fun getExplicitKeywords(): Set<String> =
-        prefs.getStringSet(KEY_EXPLICIT_KEYWORDS, null)?.toSet() ?: KeywordBlocklist.EXPLICIT_KEYWORDS
+        cachedExplicitKeywords
+            ?: (prefs.getStringSet(KEY_EXPLICIT_KEYWORDS, null)?.toSet() ?: KeywordBlocklist.EXPLICIT_KEYWORDS)
+                .also { cachedExplicitKeywords = it }
 
     fun setExplicitKeywords(keywords: Set<String>) {
         val normalized = keywords.map { it.trim().lowercase() }.filter { it.isNotBlank() }.toSet()
         prefs.edit().putStringSet(KEY_EXPLICIT_KEYWORDS, normalized).apply()
+        cachedExplicitKeywords = null
     }
 
     fun addExplicitKeyword(keyword: String) {
@@ -151,6 +172,7 @@ class PrefsRepository(context: Context) {
     /** Reverts to the built-in default list by clearing the stored override entirely. */
     fun resetExplicitKeywordsToDefault() {
         prefs.edit().remove(KEY_EXPLICIT_KEYWORDS).apply()
+        cachedExplicitKeywords = null
     }
 
     fun explicitKeywordsAreCustomized(): Boolean = prefs.contains(KEY_EXPLICIT_KEYWORDS)
@@ -192,30 +214,71 @@ class PrefsRepository(context: Context) {
             prefs.edit().putBoolean(KEY_VERBOSE_LOGGING, value).apply()
         }
 
+    /** Includes the not-yet-flushed in-memory deltas, so same-process readers (the Home/Activity tabs) always see current totals. */
     fun getUsageStats(): UsageStats = UsageStats(
-        screenshotCount = prefs.getInt(KEY_SCREENSHOT_COUNT, 0),
-        inferenceCount = prefs.getInt(KEY_INFERENCE_COUNT, 0),
-        totalInferenceMs = prefs.getLong(KEY_TOTAL_INFERENCE_MS, 0L),
-        blockCount = prefs.getInt(KEY_BLOCK_COUNT, 0),
+        screenshotCount = prefs.getInt(KEY_SCREENSHOT_COUNT, 0) + pendingScreenshotCount.get(),
+        inferenceCount = prefs.getInt(KEY_INFERENCE_COUNT, 0) + pendingInferenceCount.get(),
+        totalInferenceMs = prefs.getLong(KEY_TOTAL_INFERENCE_MS, 0L) + pendingInferenceMs.get(),
+        blockCount = prefs.getInt(KEY_BLOCK_COUNT, 0) + pendingBlockCount.get(),
         sinceMillis = prefs.getLong(KEY_STATS_SINCE, 0L),
     )
 
+    // recordScreenshot/recordInference fire once per capture cycle (every
+    // ~captureThrottleMs while a monitored app with images is on screen) -
+    // the hottest sustained write path in the app. Each SharedPreferences
+    // apply() rewrites the ENTIRE prefs XML (whitelist, keywords, pending
+    // unlocks and all) to flash, so writing per event meant two full-file
+    // disk writes every couple of seconds for as long as the user scrolled.
+    // Counters now accumulate in process-wide atomics and flush at most once
+    // per STATS_FLUSH_INTERVAL_MS (plus on screen-off and service destroy -
+    // see ContentGuardService). Worst case on process death is losing the
+    // last interval's counts of a diagnostic proxy, which DebugLogBuffer
+    // already accepts for the same reason.
+
     fun recordScreenshot() {
-        prefs.edit().putInt(KEY_SCREENSHOT_COUNT, prefs.getInt(KEY_SCREENSHOT_COUNT, 0) + 1).apply()
+        pendingScreenshotCount.incrementAndGet()
+        maybeFlushUsageStats()
     }
 
     fun recordInference(latencyMs: Long) {
-        prefs.edit()
-            .putInt(KEY_INFERENCE_COUNT, prefs.getInt(KEY_INFERENCE_COUNT, 0) + 1)
-            .putLong(KEY_TOTAL_INFERENCE_MS, prefs.getLong(KEY_TOTAL_INFERENCE_MS, 0L) + latencyMs)
-            .apply()
+        pendingInferenceCount.incrementAndGet()
+        pendingInferenceMs.addAndGet(latencyMs)
+        maybeFlushUsageStats()
     }
 
     fun recordBlock() {
-        prefs.edit().putInt(KEY_BLOCK_COUNT, prefs.getInt(KEY_BLOCK_COUNT, 0) + 1).apply()
+        pendingBlockCount.incrementAndGet()
+        // Blocks are rare and meaningful - flush immediately rather than
+        // risk losing one to a process death within the batching window.
+        flushUsageStats()
+    }
+
+    private fun maybeFlushUsageStats() {
+        if (SystemClock.elapsedRealtime() - lastStatsFlushAt < STATS_FLUSH_INTERVAL_MS) return
+        flushUsageStats()
+    }
+
+    /** Persists any accumulated counter deltas now. Safe to call from any thread; no-op when nothing is pending. */
+    fun flushUsageStats() {
+        lastStatsFlushAt = SystemClock.elapsedRealtime()
+        val screenshots = pendingScreenshotCount.getAndSet(0)
+        val inferences = pendingInferenceCount.getAndSet(0)
+        val inferenceMs = pendingInferenceMs.getAndSet(0L)
+        val blocks = pendingBlockCount.getAndSet(0)
+        if (screenshots == 0 && inferences == 0 && inferenceMs == 0L && blocks == 0) return
+        prefs.edit()
+            .putInt(KEY_SCREENSHOT_COUNT, prefs.getInt(KEY_SCREENSHOT_COUNT, 0) + screenshots)
+            .putInt(KEY_INFERENCE_COUNT, prefs.getInt(KEY_INFERENCE_COUNT, 0) + inferences)
+            .putLong(KEY_TOTAL_INFERENCE_MS, prefs.getLong(KEY_TOTAL_INFERENCE_MS, 0L) + inferenceMs)
+            .putInt(KEY_BLOCK_COUNT, prefs.getInt(KEY_BLOCK_COUNT, 0) + blocks)
+            .apply()
     }
 
     fun resetUsageStats() {
+        pendingScreenshotCount.set(0)
+        pendingInferenceCount.set(0)
+        pendingInferenceMs.set(0L)
+        pendingBlockCount.set(0)
         prefs.edit()
             .putInt(KEY_SCREENSHOT_COUNT, 0)
             .putInt(KEY_INFERENCE_COUNT, 0)
@@ -632,6 +695,32 @@ class PrefsRepository(context: Context) {
     }.getOrNull()
 
     companion object {
+        // Process-wide, not per-instance, deliberately: several
+        // PrefsRepository instances coexist in this one process (the
+        // service, NsfwClassifierFactory, SettingsActivity) over the same
+        // underlying SharedPreferences file, so per-instance accumulators
+        // or caches would let one instance's view drift from another's.
+
+        // Usage-stat deltas awaiting flushUsageStats() - see recordScreenshot.
+        private val pendingScreenshotCount = AtomicInteger(0)
+        private val pendingInferenceCount = AtomicInteger(0)
+        private val pendingInferenceMs = AtomicLong(0L)
+        private val pendingBlockCount = AtomicInteger(0)
+        @Volatile
+        private var lastStatsFlushAt = 0L
+
+        // Cached copies of the hot-path string sets - see getWhitelist.
+        // null means "re-read (and re-copy) from prefs on next get";
+        // every mutator resets its set's cache to null.
+        @Volatile
+        private var cachedWhitelist: Set<String>? = null
+        @Volatile
+        private var cachedMonitored: Set<String>? = null
+        @Volatile
+        private var cachedExplicitKeywords: Set<String>? = null
+
+        private const val STATS_FLUSH_INTERVAL_MS = 60_000L
+
         private const val PREFS_NAME = "content_guard_prefs"
         private const val KEY_MODE = "scope_mode"
         private const val KEY_WHITELIST = "whitelist_packages"

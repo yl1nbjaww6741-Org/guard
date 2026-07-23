@@ -42,8 +42,7 @@ class ScreenCapturer(
      * since it's very unlikely to itself exceed [longestEdgePx].
      */
     suspend fun captureDownscaled(longestEdgePx: Int = TARGET_LONGEST_EDGE, cropRegion: Rect? = null): Bitmap? {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastCaptureAt < prefs.captureThrottleMs) {
+        if (wouldThrottle()) {
             return null
         }
 
@@ -64,6 +63,15 @@ class ScreenCapturer(
             hardwareBuffer.close()
         }
     }
+
+    /**
+     * True when a [captureDownscaled] call right now would drop the frame at
+     * the throttle floor. Exposed so the cascade can ask this cheap question
+     * *before* paying for work whose only consumer is the capture itself
+     * (the accessibility-tree walk in particular - see
+     * ContentGuardService.processFrame's pre-scan gate).
+     */
+    fun wouldThrottle(): Boolean = SystemClock.elapsedRealtime() - lastCaptureAt < prefs.captureThrottleMs
 
     private suspend fun takeScreenshotSuspending(): ScreenshotResult? =
         suspendCancellableCoroutine { cont ->

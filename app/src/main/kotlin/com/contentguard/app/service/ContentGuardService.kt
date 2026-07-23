@@ -533,8 +533,10 @@ class ContentGuardService : AccessibilityService() {
      * (derived from the user-tunable capture cadence in Settings, see
      * PrefsRepository), not a fixed constant. CONFLATED channel + ScreenCapturer's
      * own throttle mean redundant ticks are cheap while the screen is
-     * genuinely in use - they just exit at GATE5_CAPTURE_THROTTLED_OR_FAILED
-     * when a real event already triggered a capture recently. Skips entirely
+     * genuinely in use - they exit at GATE5_CAPTURE_THROTTLED_PRE_SCAN (or,
+     * for browsers, GATE5_CAPTURE_THROTTLED_OR_FAILED after the per-frame
+     * text scan gates 4/4b need) when a real event already triggered a
+     * capture recently. Skips entirely
      * while the screen is off (see the isInteractive check below) - that's
      * the loop's main real battery cost, since it otherwise runs on this
      * timer 24/7 regardless of whether anything is actually on screen to
@@ -578,6 +580,10 @@ class ContentGuardService : AccessibilityService() {
             // throwing on serviceScope cancellation is the intended shutdown
             // path (the while-isActive loop simply ends).
             if (!powerManager.isInteractive) {
+                // Nothing will accumulate while parked, so persist any
+                // batched usage-stat deltas before the indefinite sleep -
+                // this plus onDestroy bounds how long they stay memory-only.
+                prefs.flushUsageStats()
                 screenStateChannel.receive()
                 applyPendingWeakenActionIfDue()
                 continue
@@ -596,6 +602,18 @@ class ContentGuardService : AccessibilityService() {
             applyPendingWeakenActionIfDue()
             if (!powerManager.isInteractive) continue
 
+            // Same reason the event path skips while a block overlay is up
+            // (see onAccessibilityEvent): re-capturing and re-classifying
+            // behind an already-displayed block can't change what's shown, so
+            // this timer would just be paying for a screenshot + inference
+            // every tick to no effect. Without this the static-recheck loop
+            // kept the cascade running behind every block the whole time it
+            // stayed on screen. Checked before the rootInActiveWindow/windows
+            // queries below - it's a plain in-process boolean, and the two
+            // window queries are both binder calls there's no point paying
+            // while a block is up.
+            if (overlay.isVisible()) continue
+
             val root = rootInActiveWindow
             val pkg = root?.packageName?.toString()
             val windowId = root?.windowId
@@ -613,14 +631,6 @@ class ContentGuardService : AccessibilityService() {
             // typing, with no app ever opened. A keyboard's own window is
             // never content worth scoring regardless of scope mode.
             if (windowId != null && !isApplicationWindow(windowId)) continue
-            // Same reason the event path skips while a block overlay is up
-            // (see onAccessibilityEvent): re-capturing and re-classifying
-            // behind an already-displayed block can't change what's shown, so
-            // this timer would just be paying for a screenshot + inference
-            // every tick to no effect. Without this the static-recheck loop
-            // kept the cascade running behind every block the whole time it
-            // stayed on screen.
-            if (overlay.isVisible()) continue
             if (onGuardedSettingsScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) continue
             frameChannel.trySend(FrameRequest(pkg))
         }
@@ -628,6 +638,22 @@ class ContentGuardService : AccessibilityService() {
 
     private suspend fun processFrame(request: FrameRequest) {
         val pkg = request.packageName
+
+        // For a non-browser package, everything the tree walk below produces
+        // (hasImages, the crop region) is only ever consumed by a capture -
+        // so when the capture throttle guarantees gate 5 would drop this
+        // frame anyway, exit before paying for rootInActiveWindow +
+        // NodeInspector.scan. That walk is hundreds of binder calls into the
+        // foreground app's process, and the debouncer admits an event every
+        // 100ms while captures happen at most every captureThrottleMs
+        // (1800ms default) - without this gate, most walks during a scroll
+        // ran to completion just to be discarded at GATE5. Browsers are
+        // exempt: gates 4/4b match the tree's text every frame and must run
+        // whether or not a capture follows.
+        if (!IncognitoDetector.isBrowserPackage(pkg) && screenCapturer.wouldThrottle()) {
+            exitSafe(pkg, "GATE5_CAPTURE_THROTTLED_PRE_SCAN")
+            return
+        }
 
         val root = rootInActiveWindow
         if (root == null) {
@@ -951,6 +977,7 @@ class ContentGuardService : AccessibilityService() {
         if (::overlay.isInitialized && overlay.isVisible()) overlay.hide()
         if (::passwordGuardOverlay.isInitialized && passwordGuardOverlay.isVisible()) passwordGuardOverlay.hide()
         if (::nsfwClassifier.isInitialized) nsfwClassifier.close()
+        if (::prefs.isInitialized) prefs.flushUsageStats()
         packageChangeReceiver?.let { unregisterReceiver(it) }
         screenStateReceiver?.let { unregisterReceiver(it) }
         serviceScope.cancel()

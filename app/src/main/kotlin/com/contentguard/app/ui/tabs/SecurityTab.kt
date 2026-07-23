@@ -21,9 +21,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.ui.CGBottomNavClearance
 import com.contentguard.app.ui.CGButton
@@ -176,6 +179,15 @@ fun SecurityTab(
  * once-a-second ticker drives every card's remaining-time display and
  * re-checks eligibility for all of them together, rather than each card
  * running its own redundant timer.
+ *
+ * The ticker only runs while this UI is actually visible (lifecycle
+ * STARTED): a LaunchedEffect is not paused by backgrounding, so a bare
+ * while(true) loop here kept waking the CPU once a second for as long as
+ * the backgrounded activity stayed alive - potentially the full length of
+ * a 12/24h cooldown - to update a countdown nobody could see.
+ * ContentGuardService independently applies pending actions when they come
+ * due, so nothing is missed while the ticker is parked; on return to the
+ * foreground the loop restarts and refreshes immediately.
  */
 @Composable
 private fun PendingUnlocksSection(
@@ -184,11 +196,14 @@ private fun PendingUnlocksSection(
     onTick: () -> Unit,
 ) {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(pendingUnlocks.size) {
-        while (true) {
-            delay(1000)
-            onTick()
-            now = System.currentTimeMillis()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(pendingUnlocks.size, lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                now = System.currentTimeMillis()
+                onTick()
+                delay(1000)
+            }
         }
     }
 
