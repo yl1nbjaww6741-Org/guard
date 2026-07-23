@@ -51,6 +51,11 @@ class OnnxNsfwClassifier(
     modelAssetPath: String,
     var nsfwThreshold: Float = PrefsRepository.DEFAULT_THRESHOLD,
     enableVerboseOrtLogging: Boolean = false,
+    // Gates the per-inference log below - see NsfwClassifierFactory. Distinct
+    // from enableVerboseOrtLogging (ORT's own native session log verbosity,
+    // fixed at construction); this is the app-level Debug-log toggle, read
+    // live so flipping it in Settings takes effect without rebuilding.
+    private val verboseLogging: () -> Boolean = { false },
 ) : NsfwClassifier {
 
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
@@ -115,8 +120,12 @@ class OnnxNsfwClassifier(
         val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000
 
         val nsfwProb = probs[1]
-        Log.d(TAG, "inference: ep=$executionProvider latencyMs=$elapsedMs " +
-            "sfw=${probs[0]} nsfw=$nsfwProb")
+        // Gated: runs on every inference; only pay the string build + Log.d
+        // when the Debug log is actually being watched (see NsfwClassifierFactory).
+        if (verboseLogging()) {
+            Log.d(TAG, "inference: ep=$executionProvider latencyMs=$elapsedMs " +
+                "sfw=${probs[0]} nsfw=$nsfwProb")
+        }
 
         return NsfwResult(
             sfwProb = probs[0],

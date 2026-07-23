@@ -476,10 +476,27 @@ class ContentGuardService : AccessibilityService() {
      */
     private suspend fun recheckStaticContent() {
         while (serviceScope.isActive) {
-            delay(prefs.staticRecheckIntervalMs)
+            // Interval is chosen up front from screen state, then re-checked
+            // after the delay below. While the display is off there is
+            // nothing on screen to scan, so this loop's only remaining job is
+            // to let a delay-before-unlock cooldown resolve on its own clock
+            // (see applyPendingWeakenActionIfDue). Those cooldowns are
+            // minutes-to-hours long, so polling them at the same ~2s cadence
+            // the on-screen static recheck needs is pure wasted CPU wakeups
+            // through every pocket/overnight stretch - the single biggest
+            // idle battery cost of this timer, and the one the doc comment
+            // below already flagged. Backing off to SCREEN_OFF_RECHECK_INTERVAL_MS
+            // while the screen is off cuts those idle wakeups ~15x with no
+            // detection trade-off: nothing is captured while the screen is
+            // off regardless, and a cooldown resolving up to that interval
+            // late is immaterial (onServiceConnected and the first on-screen
+            // tick both re-apply pending actions promptly the moment the
+            // device is used again, and the event-driven path - not this
+            // backstop - is what catches the actual screen-on transition).
+            val interactive = powerManager.isInteractive
+            delay(if (interactive) prefs.staticRecheckIntervalMs else SCREEN_OFF_RECHECK_INTERVAL_MS)
 
-            // Checked every tick regardless of screen-on state below (unlike
-            // the image-detection work this loop mainly exists for) - a
+            // Runs every tick regardless of screen-on state - a
             // delay-before-unlock cooldown should resolve on its own clock,
             // not wait for the screen to turn back on first.
             applyPendingWeakenActionIfDue()
@@ -493,11 +510,13 @@ class ContentGuardService : AccessibilityService() {
             // the display isn't actually on, at which point nothing could be
             // visible to detect - skipping here is a pure win, not a
             // detection trade-off the way the interval/threshold tuning
-            // elsewhere in this file is. rootInActiveWindow can also still
-            // report the last-foreground app after the screen turns off, so
-            // this check has to happen before capture is even attempted, not
-            // rely on ScreenCapturer's own throttle to make it cheap - that
-            // throttle (1800ms) is shorter than this loop's own interval
+            // elsewhere in this file is. Re-read here (not reused from
+            // `interactive` above) because the screen may have turned off
+            // during the delay. rootInActiveWindow can also still report the
+            // last-foreground app after the screen turns off, so this check
+            // has to happen before capture is even attempted, not rely on
+            // ScreenCapturer's own throttle to make it cheap - that throttle
+            // (1800ms) is shorter than this loop's own on-screen interval
             // (2000ms), so it wouldn't actually suppress a capture attempt
             // here the way it does for genuinely redundant same-second ticks.
             if (!powerManager.isInteractive) continue
@@ -863,6 +882,16 @@ class ContentGuardService : AccessibilityService() {
 
     companion object {
         private const val TAG = "ContentGuardService"
+
+        // Coarse poll cadence for the static-recheck loop while the display
+        // is off - see recheckStaticContent. Deliberately much longer than
+        // the on-screen staticRecheckIntervalMs (~2s): with the screen off
+        // there is nothing to scan, so this only paces how promptly a
+        // minutes-to-hours-long delay-before-unlock cooldown is re-checked,
+        // where 30s granularity is indistinguishable in practice while
+        // eliminating the overwhelming majority of this timer's idle CPU
+        // wakeups during pocket/overnight stretches.
+        private const val SCREEN_OFF_RECHECK_INTERVAL_MS = 30_000L
 
         // Standard AOSP Settings package - the "Device admin apps" and
         // "Accessibility" screens are core fragments OEMs rarely

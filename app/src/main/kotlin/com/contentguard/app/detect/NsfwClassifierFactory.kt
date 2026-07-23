@@ -2,6 +2,7 @@ package com.contentguard.app.detect
 
 import android.content.Context
 import android.util.Log
+import com.contentguard.app.scope.PrefsRepository
 import java.io.IOException
 
 object NsfwClassifierFactory {
@@ -33,6 +34,21 @@ object NsfwClassifierFactory {
      * - no caller-side changes.
      */
     fun create(context: Context): NsfwClassifier {
+        // Per-inference diagnostic logging in the classifier backends is
+        // gated behind this, exactly like ContentGuardService.exitSafe gates
+        // the routine gate-exit logs: a running classifier scores a frame
+        // every couple of seconds while any monitored app is foreground, and
+        // paying a string build + Log.d + DebugLogBuffer write (SimpleDateFormat
+        // + a synchronized deque insert) on every one of those, whether or not
+        // anyone is watching the Debug log, is the kind of unconditional
+        // hot-path work the rest of this app deliberately avoids. Read through
+        // a live provider (not a captured boolean) so toggling verbose logging
+        // in Settings takes effect without recreating the classifier. Blocks
+        // themselves are still logged unconditionally at the service layer
+        // (GATE8_BLOCK), so nothing meaningful is lost when this is off.
+        val prefs = PrefsRepository(context)
+        val verboseLogging: () -> Boolean = { prefs.verboseLogging }
+
         if (assetExists(context, NUDENET_MODEL_ASSET)) {
             try {
                 var blockThresholds = NudeNetGatePolicy.DEFAULT_BLOCK_THRESHOLDS
@@ -42,7 +58,7 @@ object NsfwClassifierFactory {
                 if (BLOCK_MALE_BREAST_EXPOSED) {
                     blockThresholds = blockThresholds + NudeNetGatePolicy.MALE_BREAST_EXPOSED_THRESHOLD
                 }
-                return NudeNetDetector(context, NUDENET_MODEL_ASSET, blockThresholds)
+                return NudeNetDetector(context, NUDENET_MODEL_ASSET, blockThresholds, verboseLogging = verboseLogging)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load $NUDENET_MODEL_ASSET, falling back", e)
             }
@@ -50,7 +66,7 @@ object NsfwClassifierFactory {
 
         if (assetExists(context, ONNX_MODEL_ASSET)) {
             try {
-                return OnnxNsfwClassifier(context, ONNX_MODEL_ASSET)
+                return OnnxNsfwClassifier(context, ONNX_MODEL_ASSET, verboseLogging = verboseLogging)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load $ONNX_MODEL_ASSET, falling back", e)
             }

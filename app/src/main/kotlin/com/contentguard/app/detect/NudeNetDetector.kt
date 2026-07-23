@@ -143,6 +143,9 @@ class NudeNetDetector(
     private val blockThresholds: Map<NudeNetLabel, Float> = NudeNetGatePolicy.DEFAULT_BLOCK_THRESHOLDS,
     private val candidateScoreThreshold: Float = 0.2f,
     private val nmsIouThreshold: Float = 0.45f,
+    // Gates the per-frame detection log below - see NsfwClassifierFactory.
+    // Defaults to off so direct/test construction stays quiet unless asked.
+    private val verboseLogging: () -> Boolean = { false },
 ) : NsfwClassifier {
 
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
@@ -202,8 +205,6 @@ class NudeNetDetector(
     )
 
     fun detect(bitmap: Bitmap, packageName: String? = null): GateResult {
-        val pkgTag = packageName ?: "?"
-
         val preprocessStartNanos = System.nanoTime()
         val (inputBuffer, scale) = letterboxAndPreprocess(bitmap)
         val preprocessMs = (System.nanoTime() - preprocessStartNanos) / 1_000_000
@@ -224,16 +225,24 @@ class NudeNetDetector(
         val blocked = escalated.any { d -> (blockThresholds[d.label] ?: Float.MAX_VALUE) <= d.score }
         val decisionMs = (System.nanoTime() - decisionStartNanos) / 1_000_000
 
-        val detectionSummary = if (escalated.isEmpty()) {
-            "none"
-        } else {
-            escalated.joinToString(", ") { "${it.label}=${"%.2f".format(it.score)}@${it.box}" }
+        // Gated: this fires on every inference (a monitored app with images
+        // on screen scores a frame roughly every couple of seconds), so the
+        // summary string build + Log.d + DebugLogBuffer write are only paid
+        // when the Debug log is actually being watched. The block decision
+        // itself is still surfaced unconditionally by the caller (GATE8_BLOCK).
+        if (verboseLogging()) {
+            val pkgTag = packageName ?: "?"
+            val detectionSummary = if (escalated.isEmpty()) {
+                "none"
+            } else {
+                escalated.joinToString(", ") { "${it.label}=${"%.2f".format(it.score)}@${it.box}" }
+            }
+            val line = "[$pkgTag] regionPx=${bitmap.width}x${bitmap.height} detections=$detectionSummary " +
+                "blocked=$blocked ep=$executionProvider " +
+                "timing(preprocessMs=$preprocessMs inferenceMs=$inferenceMs decisionMs=$decisionMs)"
+            Log.d(TAG, line)
+            DebugLogBuffer.add(TAG, line)
         }
-        val line = "[$pkgTag] regionPx=${bitmap.width}x${bitmap.height} detections=$detectionSummary " +
-            "blocked=$blocked ep=$executionProvider " +
-            "timing(preprocessMs=$preprocessMs inferenceMs=$inferenceMs decisionMs=$decisionMs)"
-        Log.d(TAG, line)
-        DebugLogBuffer.add(TAG, line)
 
         return GateResult(blocked, escalated, preprocessMs, inferenceMs, decisionMs)
     }
