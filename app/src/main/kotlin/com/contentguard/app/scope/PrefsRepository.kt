@@ -528,6 +528,15 @@ class PrefsRepository(context: Context) {
      * state, not an in-memory timer.
      */
     fun applyEligiblePendingWeakenActions(): List<PendingWeakenAction> {
+        // Fast path for the overwhelmingly common state - nothing queued
+        // (and no legacy single-slot entry left to migrate). The service's
+        // static-recheck loop calls this every couple of seconds for as
+        // long as the screen is on, so prove "nothing to do" with two
+        // in-memory lookups instead of building the PendingUnlock list
+        // (and its per-entry string reads) on every tick.
+        val storedCount = prefs.getInt(KEY_PENDING_COUNT, -1)
+        if (storedCount == 0 || (storedCount < 0 && !prefs.contains(KEY_PENDING_ACTION_TYPE))) return emptyList()
+
         val now = System.currentTimeMillis()
         val (due, notYetDue) = getPendingUnlocks().partition { now >= it.eligibleAtMillis }
         if (due.isEmpty()) return emptyList()

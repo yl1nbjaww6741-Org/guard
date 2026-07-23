@@ -9,6 +9,7 @@ import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
@@ -29,6 +30,7 @@ import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.util.DebugLogBuffer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -69,6 +71,14 @@ class ContentGuardService : AccessibilityService() {
     private var lastForegroundPackage: String? = null
     private var settingsGuardUnlocked = false
     private var onGuardedSettingsScreen = false
+
+    // Only touched from the single consumeFrames coroutine, so no
+    // synchronization needed - see processFrame's pre-scan gate.
+    private var lastBrowserTextScanAt = 0L
+
+    // Pending debounced registry refresh - see registerPackageChangeReceiver.
+    // Only touched from onReceive, which always runs on the main thread.
+    private var registryRefreshJob: Job? = null
 
     // Guards the heavy, strictly-one-time setup in onServiceConnected against
     // that callback firing more than once on the same instance - see the
@@ -124,6 +134,7 @@ class ContentGuardService : AccessibilityService() {
         // this feature shipped). Both receiver registrations are idempotent
         // (each unregisters any prior instance before re-registering).
         IncognitoDetector.refreshInstalledBrowsers(packageManager)
+        AppScopePolicy.refreshInstalledLaunchers(packageManager)
         registerPackageChangeReceiver()
         registerScreenStateReceiver()
 
@@ -247,8 +258,22 @@ class ContentGuardService : AccessibilityService() {
                 // so there's no risk of the process being reclaimed before
                 // this coroutine finishes the way there would be for an
                 // ordinary short-lived receiver.
-                serviceScope.launch(Dispatchers.Default) {
+                //
+                // Debounced, not refreshed per broadcast: these arrive one
+                // per package, and a Play Store auto-update batch (often
+                // overnight, screen off) previously meant one wake + two
+                // PackageManager walks for every single package in the
+                // batch. Restarting the delay on each broadcast collapses a
+                // whole batch into one refresh shortly after its last
+                // install. Worst case for the delay: a browser installed
+                // and opened within the debounce window isn't recognized as
+                // one for a few seconds - BROWSER_PACKAGES' hand-maintained
+                // floor still covers every well-known browser immediately.
+                registryRefreshJob?.cancel()
+                registryRefreshJob = serviceScope.launch(Dispatchers.Default) {
+                    delay(REGISTRY_REFRESH_DEBOUNCE_MS)
                     IncognitoDetector.refreshInstalledBrowsers(packageManager)
+                    AppScopePolicy.refreshInstalledLaunchers(packageManager)
                 }
             }
         }
@@ -639,20 +664,32 @@ class ContentGuardService : AccessibilityService() {
     private suspend fun processFrame(request: FrameRequest) {
         val pkg = request.packageName
 
-        // For a non-browser package, everything the tree walk below produces
-        // (hasImages, the crop region) is only ever consumed by a capture -
-        // so when the capture throttle guarantees gate 5 would drop this
-        // frame anyway, exit before paying for rootInActiveWindow +
-        // NodeInspector.scan. That walk is hundreds of binder calls into the
-        // foreground app's process, and the debouncer admits an event every
-        // 100ms while captures happen at most every captureThrottleMs
-        // (1800ms default) - without this gate, most walks during a scroll
-        // ran to completion just to be discarded at GATE5. Browsers are
-        // exempt: gates 4/4b match the tree's text every frame and must run
-        // whether or not a capture follows.
-        if (!IncognitoDetector.isBrowserPackage(pkg) && screenCapturer.wouldThrottle()) {
-            exitSafe(pkg, "GATE5_CAPTURE_THROTTLED_PRE_SCAN")
-            return
+        // When the capture throttle guarantees gate 5 would drop this frame
+        // anyway, most of the tree walk below is wasted - it's hundreds of
+        // binder calls into the foreground app's process, and the debouncer
+        // admits an event every 100ms while captures happen at most every
+        // captureThrottleMs (1800ms default). Without this gate, most walks
+        // during a scroll ran to completion just to be discarded at GATE5.
+        //
+        // For a non-browser package everything the walk produces (hasImages,
+        // the crop region) is only ever consumed by a capture, so it's
+        // skipped outright. A browser still needs the walk between captures
+        // - gates 4/4b match the tree's text per frame regardless of
+        // capture - but not at full event rate: those text scans are paced
+        // to BROWSER_TEXT_SCAN_MIN_INTERVAL_MS, cutting scroll-time walk
+        // volume ~3x while keeping incognito/keyword detection well under
+        // half a second. The event-side *title* check in onAccessibilityEvent
+        // is untouched by this - it's a plain string match with no walk, so
+        // title-based incognito detection stays instant.
+        if (screenCapturer.wouldThrottle()) {
+            if (!IncognitoDetector.isBrowserPackage(pkg)) {
+                exitSafe(pkg, "GATE5_CAPTURE_THROTTLED_PRE_SCAN")
+                return
+            }
+            if (SystemClock.elapsedRealtime() - lastBrowserTextScanAt < BROWSER_TEXT_SCAN_MIN_INTERVAL_MS) {
+                exitSafe(pkg, "GATE4_TEXT_SCAN_THROTTLED")
+                return
+            }
         }
 
         val root = rootInActiveWindow
@@ -665,6 +702,12 @@ class ContentGuardService : AccessibilityService() {
         } finally {
             @Suppress("DEPRECATION")
             root.recycle()
+        }
+        // Stamped after any completed walk in a browser (capture-bound or
+        // text-only alike) - it's what the pre-scan gate above paces
+        // between-capture text scans against.
+        if (IncognitoDetector.isBrowserPackage(pkg)) {
+            lastBrowserTextScanAt = SystemClock.elapsedRealtime()
         }
 
         // Fallback for when the window-title check in onAccessibilityEvent
@@ -1000,6 +1043,18 @@ class ContentGuardService : AccessibilityService() {
         // separate per-app battery page, which needed a different fix
         // entirely (see OPLUS_BATTERY_PACKAGE below).
         private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "accessibility", "contentguard")
+
+        // One refresh per install batch instead of one per package - see
+        // registerPackageChangeReceiver. Long enough to straddle the gaps
+        // between a Play auto-update batch's per-package broadcasts, short
+        // enough that a just-installed browser is recognized within seconds.
+        private const val REGISTRY_REFRESH_DEBOUNCE_MS = 5_000L
+
+        // Floor between gate-4/4b text scans in a browser when no capture
+        // will run - see processFrame's pre-scan gate. Well under the
+        // half-second a private tab needs to be caught in, far above the
+        // debouncer's 100ms event admission rate.
+        private const val BROWSER_TEXT_SCAN_MIN_INTERVAL_MS = 300L
 
         // Discovered via real-device logging (GATE_SETTINGS_GUARD_DEBUG,
         // since removed) that ColorOS's per-app battery-management page
