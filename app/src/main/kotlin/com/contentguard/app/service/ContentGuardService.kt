@@ -70,6 +70,11 @@ class ContentGuardService : AccessibilityService() {
     private var settingsGuardUnlocked = false
     private var onGuardedSettingsScreen = false
 
+    // Guards the heavy, strictly-one-time setup in onServiceConnected against
+    // that callback firing more than once on the same instance - see the
+    // comment there and initializeOnce.
+    private var oneTimeSetupDone = false
+
     // Registered in onServiceConnected, unregistered in onDestroy - see
     // there for why this replaces a periodic PackageManager poll for
     // keeping IncognitoDetector's dynamic browser set current.
@@ -93,15 +98,58 @@ class ContentGuardService : AccessibilityService() {
         // with no reboot in between). See AccessibilityWatchdogService's
         // doc comment for why it has to be a separate service.
         AccessibilityWatchdogService.start(applicationContext)
-        prefs = PrefsRepository(applicationContext)
-        scopePolicy = AppScopePolicy(prefs)
+
+        // One-time per service instance. onServiceConnected can legitimately
+        // fire more than once on the SAME instance - Android rebinds an
+        // AccessibilityService without necessarily calling onDestroy first
+        // (see registerPackageChangeReceiver's doc), and the watchdog
+        // re-enabling this service after ColorOS strips it drives exactly
+        // such reconnects. Everything below this block is idempotent or
+        // intentionally repeated per (re)connect, but initializeOnce must not
+        // repeat: without this guard every reconnect built a fresh
+        // NsfwClassifier (another ~7MB ONNX session, the previous one never
+        // closed - a native leak) and launched another consumeFrames +
+        // recheckStaticContent on the long-lived serviceScope. Those
+        // duplicate loops never stopped, so N reconnects meant N detection
+        // loops all capturing screenshots and running inference in parallel -
+        // escalating battery drain that grew across a day of ordinary rebinds.
+        if (!oneTimeSetupDone) {
+            oneTimeSetupDone = true
+            initializeOnce()
+        }
+
         // Populate immediately on (re)connect - covers anything installed
         // while the service wasn't running to receive the broadcast below
         // (disabled, force-stopped, or before the very first boot after
-        // this feature shipped).
+        // this feature shipped). Both receiver registrations are idempotent
+        // (each unregisters any prior instance before re-registering).
         IncognitoDetector.refreshInstalledBrowsers(packageManager)
         registerPackageChangeReceiver()
         registerScreenStateReceiver()
+
+        // Re-evaluates every delay-before-unlock pending action every time
+        // the service (re)connects - after a reboot, after being
+        // force-stopped and relaunched, or just the OS rebinding it - so
+        // any cooldown that finished while the process was dead still
+        // takes effect promptly, without needing any new background
+        // scheduler. See PrefsRepository.applyEligiblePendingWeakenActions's
+        // doc comment.
+        applyPendingWeakenActionIfDue()
+
+        Log.i(TAG, "connected: mode=${prefs.mode} threshold=${prefs.nsfwThreshold}")
+    }
+
+    /**
+     * The heavy, strictly-one-time setup - creating the classifier (which
+     * loads the ONNX model and opens a native session) and launching the two
+     * long-lived consumer coroutines on serviceScope. Guarded by
+     * [oneTimeSetupDone] in onServiceConnected precisely because that callback
+     * can fire repeatedly on a single instance; running any of this more than
+     * once leaks a classifier session and stacks duplicate detection loops.
+     */
+    private fun initializeOnce() {
+        prefs = PrefsRepository(applicationContext)
+        scopePolicy = AppScopePolicy(prefs)
         debouncer = EventDebouncer()
         screenCapturer = ScreenCapturer(this, ContextCompat.getMainExecutor(this), prefs)
         nsfwClassifier = NsfwClassifierFactory.create(applicationContext)
@@ -161,18 +209,8 @@ class ContentGuardService : AccessibilityService() {
             },
         )
 
-        // Re-evaluates every delay-before-unlock pending action every time
-        // the service (re)connects - after a reboot, after being
-        // force-stopped and relaunched, or just the OS rebinding it - so
-        // any cooldown that finished while the process was dead still
-        // takes effect promptly, without needing any new background
-        // scheduler. See PrefsRepository.applyEligiblePendingWeakenActions's
-        // doc comment.
-        applyPendingWeakenActionIfDue()
-
         serviceScope.launch { consumeFrames() }
         serviceScope.launch { recheckStaticContent() }
-        Log.i(TAG, "connected: mode=${prefs.mode} threshold=${prefs.nsfwThreshold}")
     }
 
     /**
