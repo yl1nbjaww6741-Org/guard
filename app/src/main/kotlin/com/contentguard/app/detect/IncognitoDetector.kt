@@ -164,10 +164,10 @@ object IncognitoDetector {
     /**
      * Re-queries PackageManager for the current set of installed browsers.
      * Called from ContentGuardService once on service (re)connect and once
-     * per actual install/update via a registered ACTION_PACKAGE_ADDED/
-     * ACTION_PACKAGE_REPLACED receiver - not on a periodic timer, since
-     * nothing about "which apps are browsers" changes except when an app
-     * is installed, updated, or removed. Queries both http and https,
+     * per new app install via a registered ACTION_PACKAGE_ADDED receiver
+     * (updates of already-installed apps are ignored - see that receiver) -
+     * not on a periodic timer, since a browser can only enter the set when
+     * an app is installed for the first time. Queries both http and https,
      * since a browser only strictly needs to declare one of the two.
      */
     fun refreshInstalledBrowsers(packageManager: PackageManager) {
@@ -181,8 +181,8 @@ object IncognitoDetector {
         dynamicBrowserPackages = discovered
 
         // Logged unconditionally (not behind verbose logging) - this only
-        // fires on service connect and on an actual install/update, so it's
-        // rare, and its whole purpose is to be auditable: gates 4/4b/5b all
+        // fires on service connect and on a new app install, so it's rare,
+        // and its whole purpose is to be auditable: gates 4/4b/5b all
         // trust isBrowserPackage(), so this list is exactly what to check
         // if something unexpected (a banking app, say) ever turns out to
         // have a broad, unscoped http/https VIEW filter and gets pulled in

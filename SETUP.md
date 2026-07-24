@@ -784,19 +784,26 @@ installed app directly with no extra `<queries>` manifest declaration
 needed.
 
 Refreshed on service connect (covers anything installed while the service
-wasn't running to hear about it), and otherwise driven by a
-`ACTION_PACKAGE_ADDED`/`ACTION_PACKAGE_REPLACED` broadcast receiver
-registered in `ContentGuardService.onServiceConnected()` (unregistered in
-`onDestroy()`) - not a periodic timer. Nothing about "which apps are
-browsers" changes except when an app is installed, updated, or removed,
-so there's no reason to re-query on a clock. Registered via
+wasn't running to hear about it), and otherwise driven by an
+`ACTION_PACKAGE_ADDED` broadcast receiver registered in
+`ContentGuardService.onServiceConnected()` (unregistered in `onDestroy()`) -
+not a periodic timer. Updates of already-installed apps are deliberately
+ignored: the receiver skips any broadcast carrying `EXTRA_REPLACING` and
+doesn't listen for `ACTION_PACKAGE_REPLACED` at all, since a browser can
+only *enter* the set on a first-time install, and app updates (Play Store
+auto-update) fire constantly for no registry-relevant reason - they were
+previously causing a full `BROWSER_REGISTRY_REFRESHED` walk on every
+update. A first-time install is the only package event that can add a
+browser, so there's no reason to re-query on a clock or on a version bump.
+Registered via
 `Context.registerReceiver()` rather than a manifest `<receiver>`
 specifically because manifest-declared receivers for most implicit
 broadcasts are restricted on Android 8+ - a context-registered one isn't,
 and this only ever needs to exist while the service itself is alive
 anyway. `RECEIVER_NOT_EXPORTED` is correct here (not
-`RECEIVER_EXPORTED`): both of these are protected system broadcasts only
-the OS itself can send, so no other app needs to be able to trigger this.
+`RECEIVER_EXPORTED`): `ACTION_PACKAGE_ADDED` is a protected system
+broadcast only the OS itself can send, so no other app needs to be able to
+trigger this.
 
 ### Gate 4b: keyword-based search blocking, on search intent not page content
 

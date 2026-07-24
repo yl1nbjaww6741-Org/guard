@@ -226,12 +226,16 @@ class ContentGuardService : AccessibilityService() {
 
     /**
      * Keeps IncognitoDetector's dynamic browser set current by reacting to
-     * actual installs, instead of re-querying PackageManager on a periodic
-     * timer regardless of whether anything changed. ACTION_PACKAGE_ADDED/
-     * ACTION_PACKAGE_REPLACED are protected system broadcasts - only the OS
-     * itself can send them, so RECEIVER_NOT_EXPORTED (no other app needs to
-     * be able to trigger this) is the correct, narrower flag Android 13+
-     * requires an explicit choice on. Registered here (not the manifest):
+     * new app installs, instead of re-querying PackageManager on a periodic
+     * timer regardless of whether anything changed. Updates of already-
+     * installed apps are deliberately ignored (see the receiver body) - only
+     * a first-time install can change which apps are browsers, and app
+     * updates otherwise fire constantly (Play Store auto-update) for no
+     * registry-relevant reason. ACTION_PACKAGE_ADDED is a protected system
+     * broadcast - only the OS itself can send it, so RECEIVER_NOT_EXPORTED
+     * (no other app needs to be able to trigger this) is the correct,
+     * narrower flag Android 13+ requires an explicit choice on. Registered
+     * here (not the manifest):
      * a context-registered receiver isn't subject to the Android 8+
      * restriction on manifest-declared implicit-broadcast receivers, and
      * this only ever needs to exist while the service itself is alive.
@@ -248,6 +252,22 @@ class ContentGuardService : AccessibilityService() {
         packageChangeReceiver?.let { unregisterReceiver(it) }
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                // Only react to genuinely new installs, not updates of
+                // already-installed apps. An update fires ACTION_PACKAGE_ADDED
+                // too, but with EXTRA_REPLACING=true (the same broadcast a
+                // fresh install sends without that extra) - and a Play Store
+                // auto-update storm is exactly that: dozens of REPLACING adds
+                // for apps we already know about. "Which apps are browsers"
+                // can't change on a plain version bump of an app that's
+                // already installed, so a replace carries no new registry
+                // information; skip it and let the debounced refresh fire only
+                // when a package that wasn't here before appears. (The rare
+                // case where an update *adds* a browser intent filter to an
+                // existing app is still picked up on the next service
+                // (re)connect refresh, and BROWSER_PACKAGES' hand-maintained
+                // floor covers every well-known browser regardless.)
+                if (intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return
+
                 // Off the main thread - queryIntentActivities is a Binder
                 // call into PackageManagerService that walks every
                 // installed app's manifest, not free enough to run
@@ -259,13 +279,12 @@ class ContentGuardService : AccessibilityService() {
                 // this coroutine finishes the way there would be for an
                 // ordinary short-lived receiver.
                 //
-                // Debounced, not refreshed per broadcast: these arrive one
-                // per package, and a Play Store auto-update batch (often
-                // overnight, screen off) previously meant one wake + two
-                // PackageManager walks for every single package in the
-                // batch. Restarting the delay on each broadcast collapses a
-                // whole batch into one refresh shortly after its last
-                // install. Worst case for the delay: a browser installed
+                // Debounced, not refreshed per broadcast: new installs can
+                // still arrive in bursts (e.g. restoring a device, or a batch
+                // of sideloaded APKs), and one wake + two PackageManager walks
+                // per package adds up. Restarting the delay on each broadcast
+                // collapses a whole burst into one refresh shortly after its
+                // last install. Worst case for the delay: a browser installed
                 // and opened within the debounce window isn't recognized as
                 // one for a few seconds - BROWSER_PACKAGES' hand-maintained
                 // floor still covers every well-known browser immediately.
@@ -278,9 +297,14 @@ class ContentGuardService : AccessibilityService() {
             }
         }
         packageChangeReceiver = receiver
+        // Only ACTION_PACKAGE_ADDED - not ACTION_PACKAGE_REPLACED. A replace
+        // (app update) never introduces a package we didn't already know
+        // about, so it can't change which apps are browsers/launchers; the
+        // EXTRA_REPLACING guard in onReceive additionally drops the ADDED
+        // broadcast that an update fires alongside REPLACED, leaving only
+        // genuine first-time installs to trigger a registry refresh.
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED)
-            addAction(Intent.ACTION_PACKAGE_REPLACED)
             addDataScheme("package")
         }
         ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
