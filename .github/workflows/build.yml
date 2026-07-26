@@ -100,14 +100,75 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           df -h /
 
-      # The one checkout that genuinely needs LFS: this job's APK is the one
-      # that gets installed, and an APK carrying a 133-byte LFS pointer where
-      # assets/320n.onnx should be would load no classifier at all - gate 7
-      # would score every frame 0f and nothing would ever be blocked.
+      # This job's APK is the one people install, so it is the only place that
+      # genuinely needs the real model bytes - an APK carrying a 133-byte LFS
+      # pointer where assets/320n.onnx should be would load no classifier at
+      # all: gate 7 would score every frame 0f and nothing would ever be
+      # blocked. But it deliberately does NOT use checkout's own lfs: true.
+      # That fetches from GitHub on every single run, and LFS bandwidth is a
+      # finite monthly budget - at this repo's push rate that exhausted the
+      # budget outright, at which point checkout itself fails and nothing can
+      # be built or released at all. The steps below fetch the same objects
+      # through the Actions cache instead, so the bandwidth is paid once per
+      # *model change* rather than once per push.
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Keyed on the LFS object IDs themselves (from the pointer files), not
+      # on the commit - so every build of an unchanged model reuses one cache
+      # entry, and swapping in a new model misses and re-fetches automatically
+      # with no key to remember to bump.
+      - name: Resolve LFS object IDs
+        id: lfs-ids
+        run: echo "key=$(git lfs ls-files --long | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # restore/save are split rather than using actions/cache, so the cache is
+      # only written after the verification step below has confirmed the
+      # objects are real. A combined actions/cache saves in a post-step that
+      # runs even when the job failed, which could persist a cache with
+      # missing objects under a key that then looks like a hit forever.
+      - name: Restore LFS object cache
+        id: lfs-cache
+        uses: actions/cache/restore@v4
         with:
-          lfs: true
+          path: .git/lfs
+          key: lfs-${{ steps.lfs-ids.outputs.key }}
+
+      - name: Fetch LFS objects
+        if: steps.lfs-cache.outputs.cache-hit != 'true'
+        run: git lfs fetch origin "$GITHUB_SHA"
+
+      # Materializes the working-tree files from the local object store. No
+      # network on a cache hit - this is what makes the cached path free.
+      - name: Populate working tree from LFS objects
+        run: git lfs checkout
+
+      # Hard gate on the failure mode this whole job exists to avoid. Any path
+      # that leaves an object unmaterialized - a partial fetch, a stale cache,
+      # a future edit that drops the fetch step - would otherwise package the
+      # pointer file as the model and produce an APK that installs cleanly,
+      # runs happily, and blocks nothing at all. Fail loudly instead of
+      # shipping that.
+      - name: Verify LFS assets are real files, not pointers
+        run: |
+          status=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            if head -c 64 "$f" | grep -q 'git-lfs.github.com/spec'; then
+              echo "::error file=$f::still a Git LFS pointer - the real object was never fetched"
+              status=1
+            else
+              echo "ok: $f ($(stat -c%s "$f") bytes)"
+            fi
+          done < <(git lfs ls-files --name-only)
+          exit $status
+
+      - name: Save LFS object cache
+        if: steps.lfs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ steps.lfs-ids.outputs.key }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
