@@ -28,6 +28,7 @@ import com.contentguard.app.overlay.PasswordGuardOverlayController
 import com.contentguard.app.scope.AppScopePolicy
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.util.DebugLogBuffer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,6 +39,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 /**
  * Orchestrates the whole gating cascade. Every stage funnels through a
@@ -58,7 +60,12 @@ class ContentGuardService : AccessibilityService() {
     private lateinit var passwordGuardOverlay: PasswordGuardOverlayController
     private val frameDiffGate = FrameDiffGate()
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // Recreated by initializeOnce, not a val: onDestroy cancels this scope,
+    // and a cancelled scope can never run another coroutine - launch() on it
+    // is a silent no-op forever. Since initializeOnce is what launches both
+    // detection loops, a scope that outlived its own cancellation would mean
+    // the cascade never restarts. See onDestroy/initializeOnce.
+    private var serviceScope = newServiceScope()
     private val frameChannel = Channel<FrameRequest>(Channel.CONFLATED)
 
     // Wakes recheckStaticContent out of its parked (screen-off) state. Fed by
@@ -82,7 +89,11 @@ class ContentGuardService : AccessibilityService() {
 
     // Guards the heavy, strictly-one-time setup in onServiceConnected against
     // that callback firing more than once on the same instance - see the
-    // comment there and initializeOnce.
+    // comment there and initializeOnce. Reset in onDestroy: this means "the
+    // setup done by THIS live incarnation of the service is still standing,"
+    // not "this process has ever run setup." Once onDestroy has torn that
+    // setup down (cancelled scope, closed classifier session), a later
+    // (re)connect must build it again or the cascade stays dead forever.
     private var oneTimeSetupDone = false
 
     // Registered in onServiceConnected, unregistered in onDestroy - see
@@ -109,23 +120,36 @@ class ContentGuardService : AccessibilityService() {
         // doc comment for why it has to be a separate service.
         AccessibilityWatchdogService.start(applicationContext)
 
-        // One-time per service instance. onServiceConnected can legitimately
-        // fire more than once on the SAME instance - Android rebinds an
-        // AccessibilityService without necessarily calling onDestroy first
-        // (see registerPackageChangeReceiver's doc), and the watchdog
-        // re-enabling this service after ColorOS strips it drives exactly
-        // such reconnects. Everything below this block is idempotent or
-        // intentionally repeated per (re)connect, but initializeOnce must not
-        // repeat: without this guard every reconnect built a fresh
-        // NsfwClassifier (another ~7MB ONNX session, the previous one never
-        // closed - a native leak) and launched another consumeFrames +
-        // recheckStaticContent on the long-lived serviceScope. Those
-        // duplicate loops never stopped, so N reconnects meant N detection
-        // loops all capturing screenshots and running inference in parallel -
-        // escalating battery drain that grew across a day of ordinary rebinds.
+        // One-time per *live setup*, not once per process. onServiceConnected
+        // can legitimately fire more than once on the SAME instance - Android
+        // rebinds an AccessibilityService without necessarily calling
+        // onDestroy first (see registerPackageChangeReceiver's doc), and the
+        // watchdog re-enabling this service after ColorOS strips it drives
+        // exactly such reconnects. Everything below this block is idempotent
+        // or intentionally repeated per (re)connect, but initializeOnce must
+        // not repeat while its previous run is still standing: without this
+        // guard every reconnect built a fresh NsfwClassifier (another ~7MB
+        // ONNX session, the previous one never closed - a native leak) and
+        // launched another consumeFrames + recheckStaticContent on the
+        // long-lived serviceScope. Those duplicate loops never stopped, so N
+        // reconnects meant N detection loops all capturing screenshots and
+        // running inference in parallel - escalating battery drain that grew
+        // across a day of ordinary rebinds.
+        //
+        // The flag is cleared by onDestroy, which is what makes the opposite
+        // failure impossible too: onDestroy cancels serviceScope and closes
+        // the classifier, so a connect that skipped initializeOnce after a
+        // teardown would leave the service apparently healthy (enabled,
+        // overlays working, events arriving) with both detection loops gone
+        // and launch() a permanent no-op on the cancelled scope - i.e.
+        // nothing ever scored or blocked again until the process restarted.
         if (!oneTimeSetupDone) {
-            oneTimeSetupDone = true
+            // Set only on success. If setup throws part-way (a native ORT
+            // load failure, say), latching the flag first would mean every
+            // later reconnect skipped the retry and ran on half-initialized
+            // lateinit state instead.
             initializeOnce()
+            oneTimeSetupDone = true
         }
 
         // Populate immediately on (re)connect - covers anything installed
@@ -151,14 +175,33 @@ class ContentGuardService : AccessibilityService() {
     }
 
     /**
-     * The heavy, strictly-one-time setup - creating the classifier (which
-     * loads the ONNX model and opens a native session) and launching the two
-     * long-lived consumer coroutines on serviceScope. Guarded by
-     * [oneTimeSetupDone] in onServiceConnected precisely because that callback
-     * can fire repeatedly on a single instance; running any of this more than
-     * once leaks a classifier session and stacks duplicate detection loops.
+     * The heavy setup - creating the classifier (which loads the ONNX model
+     * and opens a native session) and launching the two long-lived consumer
+     * coroutines. Guarded by [oneTimeSetupDone] in onServiceConnected
+     * precisely because that callback can fire repeatedly on a single
+     * instance; running this again while the previous run is still standing
+     * leaks a classifier session and stacks duplicate detection loops.
+     *
+     * Runs again (not "once per process") after an onDestroy has torn the
+     * previous setup down - which is why it starts by replacing
+     * [serviceScope]. onDestroy cancels that scope permanently; relaunching
+     * the detection loops on the cancelled one would silently do nothing at
+     * all, leaving a service that looks connected but never scores a frame.
      */
     private fun initializeOnce() {
+        // Cancel-then-replace rather than reuse, and close any classifier
+        // still open. Both are no-ops on the first connect, and both make
+        // this method safely repeatable: the duplicate detection loops and
+        // leaked ~7MB ONNX sessions that motivated the oneTimeSetupDone guard
+        // in the first place are now structurally impossible here rather than
+        // only prevented by that flag being correct. That matters for the one
+        // case the flag alone doesn't cover - initializeOnce throwing
+        // part-way, after the classifier exists but before the loops start,
+        // which leaves the flag false so the next connect retries.
+        serviceScope.cancel()
+        serviceScope = newServiceScope()
+        if (::nsfwClassifier.isInitialized) nsfwClassifier.close()
+
         prefs = PrefsRepository(applicationContext)
         scopePolicy = AppScopePolicy(prefs)
         debouncer = EventDebouncer()
@@ -561,12 +604,30 @@ class ContentGuardService : AccessibilityService() {
         frameChannel.trySend(FrameRequest(packageName))
     }
 
+    /**
+     * The single consumer of [frameChannel]. There is exactly one of these,
+     * and nothing restarts it, so it must survive anything a single frame can
+     * throw: if this loop ever exits, no frame is scored again for the life of
+     * the process and the app goes silently non-blocking.
+     *
+     * Catches Throwable rather than Exception deliberately. The work below is
+     * native-backed (ONNX Runtime) and allocation-heavy (full-resolution
+     * screenshot bitmaps), and NodeInspector's tree walk is recursive - so
+     * OutOfMemoryError, UnsatisfiedLinkError and StackOverflowError are all
+     * reachable here, and none of them is an Exception. One of those on one
+     * bad frame must cost that frame, not the whole cascade. CancellationException
+     * is rethrown: that one isn't a failure, it's serviceScope being cancelled
+     * in onDestroy, and swallowing it would make this loop uncancellable.
+     */
     private suspend fun consumeFrames() {
         for (request in frameChannel) {
             try {
                 processFrame(request)
-            } catch (e: Exception) {
-                Log.e(TAG, "cascade error for ${request.packageName}", e)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e(TAG, "cascade error for ${request.packageName}", t)
+                DebugLogBuffer.add(TAG, "[${request.packageName}] CASCADE_ERROR ${t.javaClass.simpleName}: ${t.message}")
             }
         }
     }
@@ -610,79 +671,113 @@ class ContentGuardService : AccessibilityService() {
      * opened, getting captured and scored every tick as a result.
      */
     private suspend fun recheckStaticContent() {
-        while (serviceScope.isActive) {
-            // Screen off: park the loop entirely rather than poll. Unlike
-            // onAccessibilityEvent (naturally quiet with the screen off, since
-            // no window-state changes occur), this loop is timer-driven, and
-            // accessibility services aren't Doze-throttled the way ordinary
-            // apps are - so a plain timer here would keep waking the CPU 24/7
-            // through every pocket/overnight stretch just to find nothing on
-            // screen to scan. There is no reason to run at all while the
-            // display is off: nothing is capturable, and a delay-before-unlock
-            // cooldown only has any observable effect once the screen is back
-            // on anyway (it changes future gating, and nothing is gated while
-            // the screen is off). So we suspend on screenStateChannel until
-            // the ACTION_SCREEN_ON receiver wakes us, contributing zero
-            // wakeups meanwhile, then apply any now-due pending actions the
-            // instant we wake - onServiceConnected also applies them on every
-            // (re)connect, so nothing is missed across the sleep. receive()
-            // throwing on serviceScope cancellation is the intended shutdown
-            // path (the while-isActive loop simply ends).
-            if (!powerManager.isInteractive) {
-                // Nothing will accumulate while parked, so persist any
-                // batched usage-stat deltas before the indefinite sleep -
-                // this plus onDestroy bounds how long they stay memory-only.
-                prefs.flushUsageStats()
-                screenStateChannel.receive()
-                applyPendingWeakenActionIfDue()
-                continue
+        // The coroutine's own job, not serviceScope's - serviceScope is
+        // replaced wholesale on re-initialization (see initializeOnce), and a
+        // loop left over from a previous incarnation must end when *its* scope
+        // was cancelled, not keep running because a newer scope is active.
+        while (coroutineContext.isActive) {
+            try {
+                recheckStaticContentTick()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                // Same reasoning as consumeFrames: nothing restarts this
+                // backstop, so a single failing tick (a binder failure from
+                // rootInActiveWindow/windows while an app is dying, say) must
+                // not be able to end it. Without this the periodic recheck -
+                // the only thing that catches content the user simply dwells
+                // on, generating no further events - could stop for good.
+                Log.e(TAG, "static recheck tick failed", t)
+                DebugLogBuffer.add(TAG, "STATIC_RECHECK_ERROR ${t.javaClass.simpleName}: ${t.message}")
+                // Fixed constant, not prefs.staticRecheckIntervalMs: a tick
+                // that failed while reading prefs would throw again here, out
+                // of the catch block, and end the loop - the exact outcome
+                // this whole guard exists to prevent. A failing tick also
+                // hasn't necessarily reached its own delay, so without a
+                // pause here the loop could hot-spin on a persistent fault.
+                delay(RECHECK_ERROR_BACKOFF_MS)
             }
-
-            // Screen on: pace the backstop at the on-screen interval. The
-            // delay is at the top of this branch (not the bottom) because the
-            // several `continue`s below would otherwise skip it and spin. The
-            // screen can turn off during this delay, so re-read isInteractive
-            // afterward and route back to the park above if it did -
-            // rootInActiveWindow can still report the last-foreground app
-            // after the screen turns off, so this check has to happen before
-            // any capture is attempted rather than relying on ScreenCapturer's
-            // own throttle (1800ms, shorter than this interval) to make it cheap.
-            delay(prefs.staticRecheckIntervalMs)
-            applyPendingWeakenActionIfDue()
-            if (!powerManager.isInteractive) continue
-
-            // Same reason the event path skips while a block overlay is up
-            // (see onAccessibilityEvent): re-capturing and re-classifying
-            // behind an already-displayed block can't change what's shown, so
-            // this timer would just be paying for a screenshot + inference
-            // every tick to no effect. Without this the static-recheck loop
-            // kept the cascade running behind every block the whole time it
-            // stayed on screen. Checked before the rootInActiveWindow/windows
-            // queries below - it's a plain in-process boolean, and the two
-            // window queries are both binder calls there's no point paying
-            // while a block is up.
-            if (overlay.isVisible()) continue
-
-            val root = rootInActiveWindow
-            val pkg = root?.packageName?.toString()
-            val windowId = root?.windowId
-            @Suppress("DEPRECATION")
-            root?.recycle()
-            if (pkg == null) continue
-            // Same defense onAccessibilityEvent already applies to the
-            // event-driven path (see the IME-hijacking comment above) - it
-            // was missing here. rootInActiveWindow isn't limited to
-            // TYPE_APPLICATION windows, and an IME window (Gboard etc.) can
-            // genuinely become "the active window" while it has input
-            // focus, not just via a spurious event - real-device logs
-            // showed this loop repeatedly queuing and scoring
-            // com.google.android.inputmethod.latin every ~2s purely from
-            // typing, with no app ever opened. A keyboard's own window is
-            // never content worth scoring regardless of scope mode.
-            if (windowId != null && !isApplicationWindow(windowId)) continue
-            if (onGuardedSettingsScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) continue
-            frameChannel.trySend(FrameRequest(pkg))
         }
+    }
+
+    /**
+     * One iteration of [recheckStaticContent]; see that method's doc comment.
+     * Extracted so a failing tick can be caught and the loop kept alive -
+     * every early exit that was a `continue` in the loop is a `return` here,
+     * with identical meaning (skip the rest of this tick, go round again).
+     */
+    private suspend fun recheckStaticContentTick() {
+        // Screen off: park the loop entirely rather than poll. Unlike
+        // onAccessibilityEvent (naturally quiet with the screen off, since
+        // no window-state changes occur), this loop is timer-driven, and
+        // accessibility services aren't Doze-throttled the way ordinary
+        // apps are - so a plain timer here would keep waking the CPU 24/7
+        // through every pocket/overnight stretch just to find nothing on
+        // screen to scan. There is no reason to run at all while the
+        // display is off: nothing is capturable, and a delay-before-unlock
+        // cooldown only has any observable effect once the screen is back
+        // on anyway (it changes future gating, and nothing is gated while
+        // the screen is off). So we suspend on screenStateChannel until
+        // the ACTION_SCREEN_ON receiver wakes us, contributing zero
+        // wakeups meanwhile, then apply any now-due pending actions the
+        // instant we wake - onServiceConnected also applies them on every
+        // (re)connect, so nothing is missed across the sleep. receive()
+        // throwing on serviceScope cancellation is the intended shutdown
+        // path (the while-isActive loop simply ends).
+        if (!powerManager.isInteractive) {
+            // Nothing will accumulate while parked, so persist any
+            // batched usage-stat deltas before the indefinite sleep -
+            // this plus onDestroy bounds how long they stay memory-only.
+            prefs.flushUsageStats()
+            screenStateChannel.receive()
+            applyPendingWeakenActionIfDue()
+            return
+        }
+
+        // Screen on: pace the backstop at the on-screen interval. The
+        // delay is at the top of this branch (not the bottom) because the
+        // several early returns below would otherwise skip it and spin. The
+        // screen can turn off during this delay, so re-read isInteractive
+        // afterward and route back to the park above if it did -
+        // rootInActiveWindow can still report the last-foreground app
+        // after the screen turns off, so this check has to happen before
+        // any capture is attempted rather than relying on ScreenCapturer's
+        // own throttle (1800ms, shorter than this interval) to make it cheap.
+        delay(prefs.staticRecheckIntervalMs)
+        applyPendingWeakenActionIfDue()
+        if (!powerManager.isInteractive) return
+
+        // Same reason the event path skips while a block overlay is up
+        // (see onAccessibilityEvent): re-capturing and re-classifying
+        // behind an already-displayed block can't change what's shown, so
+        // this timer would just be paying for a screenshot + inference
+        // every tick to no effect. Without this the static-recheck loop
+        // kept the cascade running behind every block the whole time it
+        // stayed on screen. Checked before the rootInActiveWindow/windows
+        // queries below - it's a plain in-process boolean, and the two
+        // window queries are both binder calls there's no point paying
+        // while a block is up.
+        if (overlay.isVisible()) return
+
+        val root = rootInActiveWindow
+        val pkg = root?.packageName?.toString()
+        val windowId = root?.windowId
+        @Suppress("DEPRECATION")
+        root?.recycle()
+        if (pkg == null) return
+        // Same defense onAccessibilityEvent already applies to the
+        // event-driven path (see the IME-hijacking comment above) - it
+        // was missing here. rootInActiveWindow isn't limited to
+        // TYPE_APPLICATION windows, and an IME window (Gboard etc.) can
+        // genuinely become "the active window" while it has input
+        // focus, not just via a spurious event - real-device logs
+        // showed this loop repeatedly queuing and scoring
+        // com.google.android.inputmethod.latin every ~2s purely from
+        // typing, with no app ever opened. A keyboard's own window is
+        // never content worth scoring regardless of scope mode.
+        if (windowId != null && !isApplicationWindow(windowId)) return
+        if (onGuardedSettingsScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) return
+        frameChannel.trySend(FrameRequest(pkg))
     }
 
     private suspend fun processFrame(request: FrameRequest) {
@@ -1039,19 +1134,47 @@ class ContentGuardService : AccessibilityService() {
         Log.w(TAG, "onInterrupt")
     }
 
+    /**
+     * Must leave the service in a state a later onServiceConnected can fully
+     * rebuild from - Android is free to reconnect this same instance after a
+     * teardown, and everything torn down here (the cancelled scope, the
+     * closed ONNX session) is unusable afterwards. Hence clearing
+     * [oneTimeSetupDone] and the receiver handles: whatever this method
+     * undoes, initializeOnce has to be allowed to do again, or the cascade
+     * stays permanently dead while the service still looks connected.
+     */
     override fun onDestroy() {
         super.onDestroy()
         if (::overlay.isInitialized && overlay.isVisible()) overlay.hide()
         if (::passwordGuardOverlay.isInitialized && passwordGuardOverlay.isVisible()) passwordGuardOverlay.hide()
         if (::nsfwClassifier.isInitialized) nsfwClassifier.close()
         if (::prefs.isInitialized) prefs.flushUsageStats()
+        // Nulled after unregistering, not just unregistered: the registration
+        // helpers unregister whatever they find here before re-registering,
+        // and passing an already-unregistered receiver back to
+        // unregisterReceiver throws IllegalArgumentException.
         packageChangeReceiver?.let { unregisterReceiver(it) }
+        packageChangeReceiver = null
         screenStateReceiver?.let { unregisterReceiver(it) }
+        screenStateReceiver = null
+        registryRefreshJob = null
         serviceScope.cancel()
+        oneTimeSetupDone = false
     }
 
     companion object {
         private const val TAG = "ContentGuardService"
+
+        // SupervisorJob so a failure in one detection loop can never cancel
+        // the other (or the scope itself). A fresh one is built per
+        // initializeOnce - see the serviceScope field's comment.
+        private fun newServiceScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+        // Pause after a failed static-recheck tick before going round again -
+        // see the catch block in recheckStaticContent. Deliberately a
+        // constant rather than the tunable interval, so the recovery path
+        // can't fault on the same state the tick just faulted on.
+        private const val RECHECK_ERROR_BACKOFF_MS = 5_000L
 
         // Standard AOSP Settings package - the "Device admin apps" and
         // "Accessibility" screens are core fragments OEMs rarely

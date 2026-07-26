@@ -3,6 +3,7 @@ package com.contentguard.app.detect
 import android.content.Context
 import android.util.Log
 import com.contentguard.app.scope.PrefsRepository
+import com.contentguard.app.util.DebugLogBuffer
 import java.io.IOException
 
 object NsfwClassifierFactory {
@@ -49,6 +50,13 @@ object NsfwClassifierFactory {
         val prefs = PrefsRepository(context)
         val verboseLogging: () -> Boolean = { prefs.verboseLogging }
 
+        // Every backend below catches Throwable, not Exception. Loading any
+        // of these is the one place in the app that pulls in a native runtime
+        // (ONNX Runtime / TFLite), and a native load failure surfaces as
+        // UnsatisfiedLinkError or ExceptionInInitializerError - Errors, not
+        // Exceptions. Catching only Exception meant such a failure propagated
+        // straight out of create() and aborted ContentGuardService's whole
+        // setup, rather than degrading to the next backend as intended.
         if (assetExists(context, NUDENET_MODEL_ASSET)) {
             try {
                 var blockThresholds = NudeNetGatePolicy.DEFAULT_BLOCK_THRESHOLDS
@@ -59,30 +67,44 @@ object NsfwClassifierFactory {
                     blockThresholds = blockThresholds + NudeNetGatePolicy.MALE_BREAST_EXPOSED_THRESHOLD
                 }
                 return NudeNetDetector(context, NUDENET_MODEL_ASSET, blockThresholds, verboseLogging = verboseLogging)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load $NUDENET_MODEL_ASSET, falling back", e)
+            } catch (t: Throwable) {
+                logLoadFailure(NUDENET_MODEL_ASSET, t)
             }
         }
 
         if (assetExists(context, ONNX_MODEL_ASSET)) {
             try {
                 return OnnxNsfwClassifier(context, ONNX_MODEL_ASSET, verboseLogging = verboseLogging)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load $ONNX_MODEL_ASSET, falling back", e)
+            } catch (t: Throwable) {
+                logLoadFailure(ONNX_MODEL_ASSET, t)
             }
         }
 
         if (assetExists(context, TFLITE_MODEL_ASSET)) {
-            return try {
-                TFLiteNsfwClassifier(context, TFLITE_MODEL_ASSET)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load $TFLITE_MODEL_ASSET, falling back to stub", e)
-                StubNsfwClassifier()
+            try {
+                return TFLiteNsfwClassifier(context, TFLITE_MODEL_ASSET)
+            } catch (t: Throwable) {
+                logLoadFailure(TFLITE_MODEL_ASSET, t)
             }
         }
 
-        Log.i(TAG, "no NSFW model assets found - using StubNsfwClassifier (gate 7 always scores 0)")
+        // Unconditional, and mirrored into DebugLogBuffer rather than left as
+        // a logcat-only line: this is the single most consequential state the
+        // app can be in - gate 7 scores every frame 0f, so no amount of
+        // explicit content will ever be blocked - and it is otherwise
+        // completely silent from inside the app. Anyone looking at the
+        // Activity tab's Debug log because "it isn't blocking anything" needs
+        // to see this first, not have to reach for adb logcat.
+        val line = "NO_CLASSIFIER - using StubNsfwClassifier: gate 7 always scores 0, nothing will ever be blocked"
+        Log.w(TAG, line)
+        DebugLogBuffer.add(TAG, line)
         return StubNsfwClassifier()
+    }
+
+    private fun logLoadFailure(asset: String, t: Throwable) {
+        val line = "CLASSIFIER_LOAD_FAILED asset=$asset ${t.javaClass.simpleName}: ${t.message}"
+        Log.e(TAG, line, t)
+        DebugLogBuffer.add(TAG, line)
     }
 
     private fun assetExists(context: Context, path: String): Boolean = try {
