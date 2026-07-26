@@ -1,6 +1,6 @@
-NsfwClassifierFactory looks for 320n.onnx first, then nsfw.onnx,
-then nsfw.tflite, then falls back to StubNsfwClassifier (always scores 0,
-never blocks) if none are present.
+NsfwClassifierFactory looks for 320n.onnx first, then nsfw.onnx, then
+falls back to StubNsfwClassifier (always scores 0, never blocks) if
+neither is present.
 
 As of this commit, 320n.onnx is the live gate-7 model (notAI-tech/NudeNet
 v3's 320n export, FP32, run via NudeNetDetector.kt with the XNNPACK
@@ -34,27 +34,13 @@ If 320n.onnx ever does fail to load, that is now loud rather than a silent
 swap to different detection semantics - NsfwClassifierFactory logs
 CLASSIFIER_LOAD_FAILED and NO_CLASSIFIER to the Activity tab's Debug log.
 
---- Legacy TFLite path (nsfw.tflite) ---
+--- Legacy TFLite path (nsfw.tflite) - REMOVED ---
 
-Expected contract (see detect/TFLiteNsfwClassifier.kt):
-  - Single image input, any HxW in the 128-160px range, NHWC layout.
-  - Either float32 (normalized 0..1) or fully-integer-quantized
-    (uint8/int8 with the standard TFLite scale/zero-point metadata) input.
-  - Single-value output tensor: one NSFW probability in [0,1] (float32
-    output, or quantized uint8/int8 dequantized via scale/zero-point).
+TFLiteNsfwClassifier and the org.tensorflow:* dependencies were removed.
+The asset it read was never committed, so the branch could not activate in
+any shipped build, while libtensorflowlite_jni.so was packaged into every
+APK regardless. tools/convert_nsfw_model.py is kept as the record of the
+conversion recipe; see SETUP.md section 4 to restore the backend from git
+history if you ever want it back.
 
-TFLiteNsfwClassifier reads input size and dtypes off the model itself, so
-as long as the shapes/types above hold, no code changes are needed beyond
-dropping the file here. NsfwClassifierFactory falls back to
-StubNsfwClassifier (always scores 0, never blocks) whenever this file is
-absent - which is the state this repo ships in.
-
-This file itself (PLACE_MODEL_HERE.txt) is harmless to leave in the APK;
-delete it once nsfw.tflite is in place if you'd like.
-
-Recommended source model: GantMan/nsfw_model (MIT licensed), MobileNetV2
-variant - https://github.com/GantMan/nsfw_model. It's a 5-class softmax
-(drawings/hentai/neutral/porn/sexy), not a single sigmoid, but
-TFLiteNsfwClassifier already handles that (see its unsafeClassIndices
-param - defaults to summing hentai+porn+sexy). See tools/convert_nsfw_model.py
-for the exact conversion/quantization script and preprocessing details.
+This file itself (PLACE_MODEL_HERE.txt) is harmless to leave in the APK.

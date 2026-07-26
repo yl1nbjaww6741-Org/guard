@@ -55,7 +55,7 @@ cd guard
 The Gradle wrapper (`gradlew`, `gradle/wrapper/*`) is already committed and
 points at Gradle 8.9, which is what AGP 8.6.1 (used in the root
 `build.gradle.kts`) expects. First run will download Gradle 8.9 itself plus
-AGP/Kotlin/Compose/TFLite dependencies from Google's and Maven Central's
+AGP/Kotlin/Compose/ONNX Runtime dependencies from Google's and Maven Central's
 repositories - this needs a normal, unrestricted internet connection.
 
 Output APK: `app/build/outputs/apk/debug/app-debug.apk` (package id
@@ -63,10 +63,16 @@ Output APK: `app/build/outputs/apk/debug/app-debug.apk` (package id
 `applicationIdSuffix` so you can have both debug and release installed
 side by side).
 
-No `assets/nsfw.tflite` is shipped (see `app/src/main/assets/PLACE_MODEL_HERE.txt`),
-so `assembleDebug` succeeds with `StubNsfwClassifier` active (gate 7 always
-scores 0, nothing ever gets blocked, capture/inspection cascade otherwise
-runs normally so you can see it working in logs).
+`assets/320n.onnx` (gate 7's live model) is committed via Git LFS, so a
+checkout that fetched LFS builds a fully working APK. A checkout *without*
+LFS - `GIT_LFS_SKIP_SMUDGE=1`, or the `build` CI job, which skips LFS
+deliberately - leaves a 133-byte pointer file in its place; `assembleDebug`
+still succeeds, but the resulting APK runs with `StubNsfwClassifier` active
+(gate 7 always scores 0, nothing ever gets blocked, the rest of the cascade
+runs normally). `NO_CLASSIFIER` in the Activity tab's Debug log is how that
+state announces itself, and the `publish` CI job hard-fails rather than
+release such an APK - see "Verify LFS assets are real files, not pointers"
+in `.github/workflows/build.yml`.
 
 ### Getting a build without building it yourself
 
@@ -893,46 +899,21 @@ this) - the thresholds are a reasoned starting point, not a tuned one. If
 fires on ordinary dark browsing, the logged `avgLuma`/`stdDev` values are
 the next lead.
 
-## 4. Dropping in the real model
+## 4. The TFLite backend (removed)
 
-Put your quantized classifier at `app/src/main/assets/nsfw.tflite`. See
-`app/src/main/assets/PLACE_MODEL_HERE.txt` for the exact input/output
-contract `TFLiteNsfwClassifier` expects. Nothing else needs to change -
-`NsfwClassifierFactory` picks it up automatically on next build/install.
+Gate 7 originally shipped as a skeleton `TFLiteNsfwClassifier` reading a
+`assets/nsfw.tflite` you were expected to convert yourself (GantMan/nsfw_model
+MobileNetV2, via `tools/convert_nsfw_model.py`). That was superseded by
+section 5's NudeNet 320n ONNX detector, and the TFLite path has now been
+removed entirely: the asset was never committed, so the branch could not
+activate in any shipped build, while `libtensorflowlite_jni.so` was packaged
+into every APK regardless - ~14MB across the four ABIs that used to be built.
 
-Recommended source model and exact conversion steps (all run on your own
-machine - none of this works in a sandbox without normal internet access):
-
-1. Download the MobileNetV2 variant from
-   [GantMan/nsfw_model](https://github.com/GantMan/nsfw_model) (MIT
-   licensed) releases page - either a `.h5` file or a SavedModel directory.
-2. `pip install tensorflow pillow numpy`, then convert - no quantization
-   to start with, so no representative-images folder needed yet:
-   ```bash
-   python tools/convert_nsfw_model.py \
-     --model /path/to/downloaded/model \
-     --output app/src/main/assets/nsfw.tflite
-   ```
-   This gets you a plain float32 model - bigger and slower per inference
-   than a quantized one, but proves the whole pipeline (class taxonomy,
-   thresholding, cascade wiring) actually works before optimizing it.
-   Once that's confirmed, re-run with `--quantize dynamic` (still no
-   representative images, smaller/faster) or `--quantize int8` (needs a
-   ~100-500 image representative-images folder, smallest/fastest) - see
-   `tools/convert_nsfw_model.py --help` for all three modes.
-3. Rebuild (`git push` to trigger CI, or `./gradlew assembleDebug` locally)
-   and reinstall.
-4. **Calibrate before trusting it**: this model is a 5-class softmax
-   (drawings/hentai/neutral/porn/sexy), not a single NSFW score.
-   `TFLiteNsfwClassifier`'s `unsafeClassIndices` (default: hentai+porn+sexy)
-   decides what counts as "unsafe," and `nsfwThreshold` in the app's
-   settings decides how confident it needs to be. Test with your own
-   sample images spanning clearly-SFW, swimwear/underwear, explicit, and
-   hentai content before relying on the defaults - the "sexy" class
-   (index 4) in particular is a judgment call: it's included by default,
-   so swimwear/lingerie gets blocked too; drop it from
-   `DEFAULT_UNSAFE_CLASS_INDICES` in `TFLiteNsfwClassifier.kt` if you only
-   want explicit content (hentai+porn) blocked.
+`tools/convert_nsfw_model.py` is kept, since it is the only record of the
+conversion recipe. To restore the backend, recover `TFLiteNsfwClassifier.kt`
+and the two `org.tensorflow:*` dependencies from git history and re-add the
+branch in `NsfwClassifierFactory.create()` - it was the third and last link
+in that chain, after NudeNet and the legacy `nsfw.onnx`.
 
 ## 5. NudeNet 320n - detection instead of classification (live, gate 7 default)
 

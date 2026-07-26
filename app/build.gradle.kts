@@ -28,15 +28,31 @@ android {
         // Needed to run the throwaway NNAPI-engagement spike in
         // androidTest/ via `./gradlew connectedAndroidTest`.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // arm64 only. ONNX Runtime ships a ~28MB native library per ABI, so
+        // the default "every ABI" build spent ~95MB of a ~158MB APK on code
+        // this app can never execute: x86/x86_64 are emulator-only, and
+        // armeabi-v7a is 32-bit ARM, which no minSdk-30 device in this app's
+        // target range ships. Since distribution is a single sideloaded APK
+        // from a GitHub Release (see SETUP.md) rather than Play's per-device
+        // splits, every one of those bytes was downloaded and stored by the
+        // one real arm64 device that runs this.
+        //
+        // Add "x86_64" back here temporarily if you ever need to run this on
+        // an Android emulator - nothing else has to change.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     // assets/320n.onnx (gate 7's live model, see NudeNetDetector.kt) is
-    // committed via Git LFS. The legacy assets/nsfw.onnx/nsfw.tflite
-    // fallbacks are intentionally not shipped - NsfwClassifierFactory falls
-    // back to StubNsfwClassifier when none of the three are present. Avoid
-    // aapt compressing model assets - a compressed model can't be mmap'd.
+    // committed via Git LFS and is the only model shipped. The legacy
+    // assets/nsfw.onnx fallback is deliberately not committed (see
+    // assets/PLACE_MODEL_HERE.txt) - NsfwClassifierFactory falls back to
+    // StubNsfwClassifier if neither is present. Avoid aapt compressing model
+    // assets - a compressed model can't be mmap'd.
     androidResources {
-        noCompress += listOf("tflite", "onnx")
+        noCompress += listOf("onnx")
     }
 
     signingConfigs {
@@ -116,12 +132,15 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // TensorFlow Lite - legacy gate-7 backend, kept for existing
-    // assets/nsfw.tflite conversions. `tensorflow-lite` is the interpreter
-    // runtime; `tensorflow-lite-support` gives us TensorImage/TensorBuffer
-    // helpers for the fixed-size quantized input the NSFW model expects.
-    implementation("org.tensorflow:tensorflow-lite:2.16.1")
-    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    // No TensorFlow Lite. It was carried for TFLiteNsfwClassifier, a
+    // deliberately unimplemented skeleton for a hypothetical
+    // assets/nsfw.tflite that was never committed - so the code path could
+    // not activate in any shipped build, while libtensorflowlite_jni.so was
+    // packaged into every APK regardless. Gate 7 runs on ONNX Runtime below,
+    // which already serves both the live model and its legacy fallback. To
+    // restore the TFLite path, recover TFLiteNsfwClassifier.kt and these two
+    // dependencies from git history and re-add the branch in
+    // NsfwClassifierFactory.
 
     // ONNX Runtime Mobile - primary gate-7 backend (assets/320n.onnx, see
     // NudeNetDetector). This build includes the XNNPACK EP (CPU, thread-

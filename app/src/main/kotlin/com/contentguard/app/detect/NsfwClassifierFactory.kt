@@ -10,7 +10,6 @@ object NsfwClassifierFactory {
 
     const val NUDENET_MODEL_ASSET = NudeNetDetector.ASSET_NAME
     const val ONNX_MODEL_ASSET = "nsfw.onnx"
-    const val TFLITE_MODEL_ASSET = "nsfw.tflite"
     private const val TAG = "NsfwClassifierFactory"
 
     // Opt-in per NudeNetGatePolicy's doc comment - accepts the known
@@ -29,10 +28,12 @@ object NsfwClassifierFactory {
      * Prefers assets/320n.onnx (NudeNetDetector - label-set body-part
      * detection gate, see its class doc for why this replaced the old
      * whole-image SigLIP2 classifier), then falls back to the legacy
-     * assets/nsfw.onnx (OnnxNsfwClassifier) and assets/nsfw.tflite
-     * (TFLiteNsfwClassifier) in that order if only those are present, so
+     * assets/nsfw.onnx (OnnxNsfwClassifier) if only that is present, so
      * swapping the model file is the only thing needed to change backends
-     * - no caller-side changes.
+     * - no caller-side changes. The TFLite backend that used to sit third in
+     * this chain is gone: it was an unimplemented skeleton for an asset that
+     * was never committed, so it could not activate in any shipped build
+     * while still packaging libtensorflowlite_jni.so into every APK.
      */
     fun create(context: Context): NsfwClassifier {
         // Per-inference diagnostic logging in the classifier backends is
@@ -52,7 +53,7 @@ object NsfwClassifierFactory {
 
         // Every backend below catches Throwable, not Exception. Loading any
         // of these is the one place in the app that pulls in a native runtime
-        // (ONNX Runtime / TFLite), and a native load failure surfaces as
+        // (ONNX Runtime), and a native load failure surfaces as
         // UnsatisfiedLinkError or ExceptionInInitializerError - Errors, not
         // Exceptions. Catching only Exception meant such a failure propagated
         // straight out of create() and aborted ContentGuardService's whole
@@ -77,14 +78,6 @@ object NsfwClassifierFactory {
                 return OnnxNsfwClassifier(context, ONNX_MODEL_ASSET, verboseLogging = verboseLogging)
             } catch (t: Throwable) {
                 logLoadFailure(ONNX_MODEL_ASSET, t)
-            }
-        }
-
-        if (assetExists(context, TFLITE_MODEL_ASSET)) {
-            try {
-                return TFLiteNsfwClassifier(context, TFLITE_MODEL_ASSET)
-            } catch (t: Throwable) {
-                logLoadFailure(TFLITE_MODEL_ASSET, t)
             }
         }
 
