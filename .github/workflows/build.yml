@@ -44,10 +44,19 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           df -h /
 
+      # Deliberately WITHOUT lfs: true, unlike publish below. This job is a
+      # compile check whose APK is thrown away (see this job's own comment
+      # about never handing its output to publish), and compiling needs no
+      # model bytes at all - assets are packaged verbatim, so the LFS pointer
+      # files stand in fine and every Kotlin/resource error still surfaces.
+      # Fetching them here doubled this workflow's LFS bandwidth for a build
+      # nobody installs, and LFS bandwidth is a real, exhaustible budget: once
+      # it runs out, checkout itself fails ("This repository exceeded its LFS
+      # budget") and nothing builds at all until the budget is raised. Only
+      # publish, which produces the APK people actually install, needs the
+      # real model.
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          lfs: true
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -91,6 +100,10 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           df -h /
 
+      # The one checkout that genuinely needs LFS: this job's APK is the one
+      # that gets installed, and an APK carrying a 133-byte LFS pointer where
+      # assets/320n.onnx should be would load no classifier at all - gate 7
+      # would score every frame 0f and nothing would ever be blocked.
       - name: Checkout
         uses: actions/checkout@v4
         with:
