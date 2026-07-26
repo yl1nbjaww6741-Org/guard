@@ -25,11 +25,38 @@ class ScreenCapturer(
     private var lastCaptureAt = 0L
 
     /**
-     * Returns a downscaled software ARGB_8888 bitmap, or null if the frame
-     * was skipped - either our own throttle floor hasn't elapsed (drop,
-     * don't queue: gate 5 exists to protect the battery, not to guarantee
-     * every frame gets scored) or the platform call itself failed/was
-     * throttled.
+     * Why this isn't just a nullable Bitmap: "we deliberately skipped this
+     * frame to save battery" and "the platform refused to give us the
+     * screen" are completely different events that a null return collapsed
+     * into one. The first is the throttle working as designed and happens
+     * constantly; the second means the cascade is blind and, on an OEM skin
+     * that rate-limits or denies screenshots to accessibility services (see
+     * accessibility_service_config.xml), can persist. They were logged under
+     * a single GATE5_CAPTURE_THROTTLED_OR_FAILED line, so a log full of them
+     * could not distinguish "healthy and throttling" from "capturing nothing
+     * at all" without inferring it from the spacing of successful frames.
+     */
+    sealed interface CaptureResult {
+        /** A real frame. The caller owns [bitmap] and must recycle it. */
+        class Success(val bitmap: Bitmap) : CaptureResult
+
+        /** Dropped at our own throttle floor. Expected, cheap, not a problem. */
+        object Throttled : CaptureResult
+
+        /**
+         * The platform refused, or handed back a frame we couldn't use.
+         * [errorCode] is AccessibilityService's own ERROR_TAKE_SCREENSHOT_*
+         * constant, or null when the call succeeded but the buffer could not
+         * be wrapped.
+         */
+        class Failed(val errorCode: Int?) : CaptureResult
+    }
+
+    /**
+     * Returns a downscaled software ARGB_8888 bitmap, or the reason no frame
+     * was produced - see [CaptureResult]. Gate 5 exists to protect the
+     * battery, not to guarantee every frame gets scored, so a throttled frame
+     * is dropped rather than queued.
      *
      * [cropRegion], if given (in real screen pixel coordinates, same space
      * as AccessibilityNodeInfo bounds), is applied to the *native-resolution*
@@ -41,24 +68,44 @@ class ScreenCapturer(
      * first means a small region can stay at or near its native resolution
      * since it's very unlikely to itself exceed [longestEdgePx].
      */
-    suspend fun captureDownscaled(longestEdgePx: Int = TARGET_LONGEST_EDGE, cropRegion: Rect? = null): Bitmap? {
+    suspend fun captureDownscaled(longestEdgePx: Int = TARGET_LONGEST_EDGE, cropRegion: Rect? = null): CaptureResult {
         if (wouldThrottle()) {
-            return null
+            return CaptureResult.Throttled
         }
 
-        val result = takeScreenshotSuspending() ?: return null
+        val attempt = takeScreenshotSuspending()
+
+        // Stamped for a FAILED attempt too, not just a successful one. The
+        // throttle is a rate limit on how often we ask the platform for the
+        // screen, and a refused request cost just as much to make as an
+        // honoured one. Previously the stamp sat after the failure's early
+        // return, so a failure left the clock unmoved, wouldThrottle() stayed
+        // false, and the next admitted event retried immediately - turning a
+        // run of refusals into takeScreenshot() calls at the debouncer's
+        // 100ms event rate instead of once per captureThrottleMs, each one
+        // preceded by a full accessibility-tree walk. Worse, the platform's
+        // own limit (ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) is itself
+        // triggered by asking too fast, so the failure loop sustained itself.
+        // Cost of stamping: one transient failure now waits a full interval
+        // before retrying rather than retrying at once.
         lastCaptureAt = SystemClock.elapsedRealtime()
+
+        val result = when (attempt) {
+            is ScreenshotAttempt.Ok -> attempt.result
+            is ScreenshotAttempt.Error -> return CaptureResult.Failed(attempt.errorCode)
+        }
 
         val hardwareBuffer = result.hardwareBuffer
         try {
-            val hardwareBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, result.colorSpace) ?: return null
+            val hardwareBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, result.colorSpace)
+                ?: return CaptureResult.Failed(null)
             val softwareBitmap = try {
                 hardwareBitmap.copy(Bitmap.Config.ARGB_8888, false)
             } finally {
                 hardwareBitmap.recycle()
             }
             val cropped = if (cropRegion != null) cropSafely(softwareBitmap, cropRegion) else softwareBitmap
-            return downscale(cropped, longestEdgePx)
+            return CaptureResult.Success(downscale(cropped, longestEdgePx))
         } finally {
             hardwareBuffer.close()
         }
@@ -73,22 +120,29 @@ class ScreenCapturer(
      */
     fun wouldThrottle(): Boolean = SystemClock.elapsedRealtime() - lastCaptureAt < prefs.captureThrottleMs
 
-    private suspend fun takeScreenshotSuspending(): ScreenshotResult? =
+    /** Carries the platform's error code out of the callback, which a plain nullable result discarded. */
+    private sealed interface ScreenshotAttempt {
+        class Ok(val result: ScreenshotResult) : ScreenshotAttempt
+        class Error(val errorCode: Int) : ScreenshotAttempt
+    }
+
+    private suspend fun takeScreenshotSuspending(): ScreenshotAttempt =
         suspendCancellableCoroutine { cont ->
             service.takeScreenshot(
                 Display.DEFAULT_DISPLAY,
                 callbackExecutor,
                 object : TakeScreenshotCallback {
                     override fun onSuccess(result: ScreenshotResult) {
-                        if (cont.isActive) cont.resume(result, onCancellation = null)
+                        if (cont.isActive) cont.resume(ScreenshotAttempt.Ok(result), onCancellation = null)
                     }
 
                     override fun onFailure(errorCode: Int) {
-                        // Common and expected under our own throttling, and
-                        // also whenever ColorOS itself rate-limits or
-                        // denies the call - see accessibility_service_config.xml.
+                        // Happens whenever ColorOS itself rate-limits or denies
+                        // the call - see accessibility_service_config.xml. The
+                        // code is now carried out to the caller rather than
+                        // only reaching logcat, so the Debug log can name it.
                         Log.d(TAG, "takeScreenshot failed: errorCode=$errorCode")
-                        if (cont.isActive) cont.resume(null, onCancellation = null)
+                        if (cont.isActive) cont.resume(ScreenshotAttempt.Error(errorCode), onCancellation = null)
                     }
                 },
             )

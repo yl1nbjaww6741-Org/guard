@@ -795,9 +795,12 @@ class ContentGuardService : AccessibilityService() {
         // skipped outright. A browser still needs the walk between captures
         // - gates 4/4b match the tree's text per frame regardless of
         // capture - but not at full event rate: those text scans are paced
-        // to BROWSER_TEXT_SCAN_MIN_INTERVAL_MS, cutting scroll-time walk
-        // volume ~3x while keeping incognito/keyword detection well under
-        // half a second. The event-side *title* check in onAccessibilityEvent
+        // to prefs.browserTextScanIntervalMs, which derives from the
+        // capture-cadence setting (see PrefsRepository) so the slider governs
+        // this cost too - in a browser these walks outnumber captures roughly
+        // 7:1, so leaving them on a fixed floor made "Better battery" only
+        // half true. Bounded above so incognito/keyword detection stays well
+        // under half a second at every slider position. The event-side *title* check in onAccessibilityEvent
         // is untouched by this - it's a plain string match with no walk, so
         // title-based incognito detection stays instant.
         if (screenCapturer.wouldThrottle()) {
@@ -805,7 +808,7 @@ class ContentGuardService : AccessibilityService() {
                 exitSafe(pkg, "GATE5_CAPTURE_THROTTLED_PRE_SCAN")
                 return
             }
-            if (SystemClock.elapsedRealtime() - lastBrowserTextScanAt < BROWSER_TEXT_SCAN_MIN_INTERVAL_MS) {
+            if (SystemClock.elapsedRealtime() - lastBrowserTextScanAt < prefs.browserTextScanIntervalMs) {
                 exitSafe(pkg, "GATE4_TEXT_SCAN_THROTTLED")
                 return
             }
@@ -899,15 +902,31 @@ class ContentGuardService : AccessibilityService() {
         val cropRegion = unionOf(scan.imageBounds)
 
         val captureStartNanos = System.nanoTime()
-        val bitmap = screenCapturer.captureDownscaled(cropRegion = cropRegion)
+        val capture = screenCapturer.captureDownscaled(cropRegion = cropRegion)
         val captureMs = (System.nanoTime() - captureStartNanos) / 1_000_000
-        if (bitmap == null) {
-            if (prefs.verboseLogging) {
-                val line = "[$pkg] exit@GATE5_CAPTURE_THROTTLED_OR_FAILED"
-                Log.d(TAG, line)
-                DebugLogBuffer.add(TAG, line)
+        val bitmap = when (capture) {
+            // Routine and constant - the throttle doing its job. Verbose-only,
+            // like every other nothing-to-report gate exit.
+            is ScreenCapturer.CaptureResult.Throttled -> {
+                exitSafe(pkg, "GATE5_CAPTURE_THROTTLED")
+                return
             }
-            return
+            // Logged unconditionally, unlike the throttle above: this means
+            // the cascade is blind for this frame, and a sustained run of it
+            // (an OEM skin denying screenshots to accessibility services)
+            // means the app is silently protecting nothing while still
+            // looking healthy. That is exactly the class of failure worth
+            // seeing in the Debug log without having to enable verbose
+            // logging first. Safe to log every time now that a failed attempt
+            // advances the capture throttle (see ScreenCapturer), which bounds
+            // this to at most one line per captureThrottleMs.
+            is ScreenCapturer.CaptureResult.Failed -> {
+                val line = "[$pkg] exit@GATE5_CAPTURE_FAILED errorCode=${capture.errorCode ?: "unusable-buffer"}"
+                Log.w(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+                return
+            }
+            is ScreenCapturer.CaptureResult.Success -> capture.bitmap
         }
         prefs.recordScreenshot()
 
@@ -1196,12 +1215,6 @@ class ContentGuardService : AccessibilityService() {
         // between a Play auto-update batch's per-package broadcasts, short
         // enough that a just-installed browser is recognized within seconds.
         private const val REGISTRY_REFRESH_DEBOUNCE_MS = 5_000L
-
-        // Floor between gate-4/4b text scans in a browser when no capture
-        // will run - see processFrame's pre-scan gate. Well under the
-        // half-second a private tab needs to be caught in, far above the
-        // debouncer's 100ms event admission rate.
-        private const val BROWSER_TEXT_SCAN_MIN_INTERVAL_MS = 300L
 
         // Discovered via real-device logging (GATE_SETTINGS_GUARD_DEBUG,
         // since removed) that ColorOS's per-app battery-management page
