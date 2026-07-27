@@ -81,13 +81,19 @@ fun SecurityTab(
             CGCard {
                 SafeguardRow(label = "Screen watching", on = safeguards.accessibilityEnabled)
                 CGHint("ContentGuard reads screen content only while a monitored app is open. Nothing works without this.")
-                // Reaching this screen at all is gated - it's where
-                // accessibility would actually get turned off, regardless
-                // of whether it's currently on or off.
-                CGGatedButton(
+                // Deliberately not password-gated, unlike every other
+                // reach-a-system-screen button here: AccessibilityWatchdogService
+                // restores ContentGuardService (and anything opted into
+                // "Also persist" below) into enabled_accessibility_services
+                // the instant it's found missing, confirmed by direct
+                // real-device testing - so a password prompt in front of
+                // this specific screen blocks nothing real, it just adds
+                // friction to something the watchdog undoes anyway. Device
+                // admin has no equivalent self-healing mechanism, which is
+                // exactly why that gate below stays.
+                CGButton(
                     "Open accessibility settings",
-                    applyOrChallenge = applyOrChallenge,
-                    onConfirmed = onOpenAccessibilitySettings,
+                    onClick = onOpenAccessibilitySettings,
                     ghost = true,
                     small = true,
                     modifier = Modifier.padding(top = 12.dp),
@@ -292,8 +298,10 @@ private fun DelayBeforeUnlockCard(prefs: PrefsRepository, applyOrChallenge: Gate
                 CGHint(
                     "An anti-impulse cooldown: after entering the correct password, protection stays " +
                         "full-strength for the delay below before the change actually takes effect. Also " +
-                        "covers reaching Accessibility settings, Device admin, and the battery page's " +
-                        "Force-stop button - correct password starts the wait, it doesn't skip it.",
+                        "covers reaching Device admin and the battery page's Force-stop button - correct " +
+                        "password starts the wait, it doesn't skip it. Doesn't cover Accessibility " +
+                        "settings, which needs no password at all - the watchdog undoes any change " +
+                        "there instantly regardless.",
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }

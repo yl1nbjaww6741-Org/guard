@@ -484,9 +484,9 @@ class ContentGuardService : AccessibilityService() {
 
         // Keyed on the window's own title (from the TYPE_WINDOW_STATE_CHANGED
         // event), not a scan of all visible text - scanning all text was
-        // matching "Device admin apps" and "Accessibility" wherever those
-        // words appeared, including as search-suggestion chips on Settings'
-        // own search screen, which isn't the real screen at all.
+        // matching "Device admin apps" wherever that phrase appeared,
+        // including as a search-suggestion chip on Settings' own search
+        // screen, which isn't the real screen at all.
         if (packageName == SETTINGS_PACKAGE && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val screenTitle = event.text.joinToString(" ").lowercase()
             onGuardedSettingsScreen = GUARDED_SETTINGS_TITLE_MARKERS.any { screenTitle.contains(it) }
@@ -1208,7 +1208,17 @@ class ContentGuardService : AccessibilityService() {
         // title really is the app's own display label - unlike ColorOS's
         // separate per-app battery page, which needed a different fix
         // entirely (see OPLUS_BATTERY_PACKAGE below).
-        private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "accessibility", "contentguard")
+        //
+        // Deliberately no "accessibility" marker: confirmed via direct
+        // real-device testing that AccessibilityWatchdogService restores
+        // ContentGuardService's own entry in enabled_accessibility_services
+        // (and anything opted into SecurityTab's "Also persist") the moment
+        // it's found missing, so gating the Accessibility screen itself
+        // blocked nothing real - only added friction reaching a screen the
+        // watchdog immediately undoes anyway. Device admin has no such
+        // self-healing counterpart, which is exactly why it still needs
+        // this gate.
+        private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "contentguard")
 
         // One refresh per install batch instead of one per package - see
         // registerPackageChangeReceiver. Long enough to straddle the gaps

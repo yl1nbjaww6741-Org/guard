@@ -439,10 +439,12 @@ class PrefsRepository(context: Context) {
         }
 
     /**
-     * Anti-impulse cooldown for the OS-level guarded screens - Accessibility
-     * settings, Device admin apps, and the ColorOS per-app battery page
-     * with its own Force-stop button (see ContentGuardService's
-     * GATE_SETTINGS_GUARD). Deliberately separate from [PendingWeakenAction]:
+     * Anti-impulse cooldown for the OS-level guarded screens - Device admin
+     * apps and the ColorOS per-app battery page with its own Force-stop
+     * button (see ContentGuardService's GATE_SETTINGS_GUARD; Accessibility
+     * settings deliberately isn't one of these any more - the watchdog
+     * undoes any change there instantly regardless, so gating it bought
+     * nothing). Deliberately separate from [PendingWeakenAction]:
      * there's no in-app setting to defer here, since the actual weakening
      * (deactivating accessibility/admin, tapping Force stop) happens
      * entirely on that external OS screen, outside this app's control, the
