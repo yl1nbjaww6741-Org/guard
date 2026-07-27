@@ -147,6 +147,29 @@ class PrefsRepository(context: Context) {
         cachedWhitelist = null
     }
 
+    /**
+     * Flattened accessibility-service component names (same string form as
+     * Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES itself) that
+     * AccessibilityWatchdogService should restore alongside its own -
+     * e.g. a separate screen-time app's accessibility service, so it
+     * survives the same "hide apps"-style stripping ContentGuardService
+     * defends itself against. Empty by default: this only ever protects a
+     * service the user has explicitly opted into from SecurityTab, and
+     * only one already enabled in system Accessibility settings at the
+     * time they do so.
+     */
+    fun getExtraProtectedServices(): Set<String> =
+        cachedExtraProtectedServices
+            ?: (prefs.getStringSet(KEY_EXTRA_PROTECTED_SERVICES, null)?.toSet() ?: emptySet())
+                .also { cachedExtraProtectedServices = it }
+
+    fun setServiceProtected(component: String, protected: Boolean) {
+        val next = getExtraProtectedServices().toMutableSet()
+        if (protected) next.add(component) else next.remove(component)
+        prefs.edit().putStringSet(KEY_EXTRA_PROTECTED_SERVICES, next).apply()
+        cachedExtraProtectedServices = null
+    }
+
     fun getMonitoredSet(): Set<String> =
         cachedMonitored ?: (prefs.getStringSet(KEY_MONITORED, null)?.toSet() ?: emptySet()).also { cachedMonitored = it }
 
@@ -499,6 +522,12 @@ class PrefsRepository(context: Context) {
         // instant, same asymmetry as every other setting in this file.
         data class SetDelayBeforeUnlockEnabled(val enabled: Boolean) : PendingWeakenAction()
         data class SetDelayBeforeUnlockMinutes(val minutes: Int) : PendingWeakenAction()
+
+        // Turning persistence ON for another app's accessibility service is
+        // hardening (free, no challenge - see SecurityTab); turning it back
+        // OFF removes that protection, so it's the weakening move here,
+        // same asymmetry as SetWhitelisted/SetMonitored.
+        data class SetServiceProtected(val component: String, val protected: Boolean) : PendingWeakenAction()
     }
 
     /** A pending unlock as actually persisted: the action plus when it becomes eligible. */
@@ -585,6 +614,7 @@ class PrefsRepository(context: Context) {
             is PendingWeakenAction.SetPasswordHash -> prefs.edit().putString(KEY_PASSWORD_HASH, action.hash).apply()
             is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> delayBeforeUnlockEnabled = action.enabled
             is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> delayBeforeUnlockMinutes = action.minutes
+            is PendingWeakenAction.SetServiceProtected -> setServiceProtected(action.component, action.protected)
         }
     }
 
@@ -608,6 +638,7 @@ class PrefsRepository(context: Context) {
         is PendingWeakenAction.SetPasswordHash -> "SetPasswordHash"
         is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> "SetDelayBeforeUnlockEnabled"
         is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "SetDelayBeforeUnlockMinutes"
+        is PendingWeakenAction.SetServiceProtected -> "SetServiceProtected:$component"
     }
 
     private fun pendingTypeKey(index: Int) = "pending_action_type_$index"
@@ -669,6 +700,7 @@ class PrefsRepository(context: Context) {
         is PendingWeakenAction.SetPasswordHash -> "SetPasswordHash"
         is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> "SetDelayBeforeUnlockEnabled"
         is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "SetDelayBeforeUnlockMinutes"
+        is PendingWeakenAction.SetServiceProtected -> "SetServiceProtected"
     }
 
     // Encodes each action's params as a single delimited string - deliberately
@@ -693,6 +725,10 @@ class PrefsRepository(context: Context) {
         is PendingWeakenAction.SetPasswordHash -> hash
         is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> enabled.toString()
         is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> minutes.toString()
+        // Component names never contain "|" (valid Android package/class
+        // name characters are letters, digits, '.', '_', '/'), so this is
+        // safe with no escaping - same reasoning as SetWhitelisted above.
+        is PendingWeakenAction.SetServiceProtected -> "$component|$protected"
     }
 
     private fun decodePendingAction(type: String, param: String): PendingWeakenAction? = runCatching {
@@ -723,6 +759,10 @@ class PrefsRepository(context: Context) {
             "SetPasswordHash" -> PendingWeakenAction.SetPasswordHash(param)
             "SetDelayBeforeUnlockEnabled" -> PendingWeakenAction.SetDelayBeforeUnlockEnabled(param.toBoolean())
             "SetDelayBeforeUnlockMinutes" -> PendingWeakenAction.SetDelayBeforeUnlockMinutes(param.toInt())
+            "SetServiceProtected" -> {
+                val (component, flag) = param.split("|", limit = 2)
+                PendingWeakenAction.SetServiceProtected(component, flag.toBoolean())
+            }
             else -> null
         }
     }.getOrNull()
@@ -751,6 +791,8 @@ class PrefsRepository(context: Context) {
         private var cachedMonitored: Set<String>? = null
         @Volatile
         private var cachedExplicitKeywords: Set<String>? = null
+        @Volatile
+        private var cachedExtraProtectedServices: Set<String>? = null
 
         private const val STATS_FLUSH_INTERVAL_MS = 60_000L
 
@@ -759,6 +801,7 @@ class PrefsRepository(context: Context) {
         private const val KEY_WHITELIST = "whitelist_packages"
         private const val KEY_EXPLICIT_KEYWORDS = "explicit_keywords"
         private const val KEY_MONITORED = "monitored_packages"
+        private const val KEY_EXTRA_PROTECTED_SERVICES = "extra_protected_accessibility_services"
         private const val KEY_THRESHOLD = "nsfw_threshold"
         private const val KEY_DISMISS_ON_BLOCK = "dismiss_on_block"
         private const val KEY_SCREENSHOT_COUNT = "stats_screenshot_count"

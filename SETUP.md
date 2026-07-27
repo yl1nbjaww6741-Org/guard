@@ -177,6 +177,19 @@ ContentGuard's accessibility (not just hide the app), stop
 (`adb shell am stopservice com.contentguard.app.debug/com.contentguard.app.service.AccessibilityWatchdogService`),
 or it will just restore the setting again on its next check.
 
+#### Persisting other apps' accessibility services too
+
+The same watchdog can also restore a *different* app's accessibility
+service - e.g. a separate screen-time app - if it ever gets stripped out
+the same way. Security tab's "Also persist" card lists every accessibility
+service currently enabled in system settings (other than ContentGuard's
+own) and lets you opt individual ones in; turning one on is free, turning
+one back off goes through the same password gate as the whitelist/monitor
+toggles. It only ever protects a service already enabled in system
+Accessibility settings at the time you opt it in - there's nothing to
+persist otherwise, so enable the other app's accessibility service there
+first.
+
 ### Force-stop / uninstall protection (Device Admin)
 
 The Settings screen has an "Enable Protection" button under "Force-stop /

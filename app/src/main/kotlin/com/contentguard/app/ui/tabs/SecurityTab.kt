@@ -1,5 +1,8 @@
 package com.contentguard.app.ui.tabs
 
+import android.content.ComponentName
+import android.content.Context
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,13 +25,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.repeatOnLifecycle
 import com.contentguard.app.scope.PrefsRepository
+import com.contentguard.app.service.ContentGuardService
 import com.contentguard.app.ui.CGBottomNavClearance
 import com.contentguard.app.ui.CGButton
 import com.contentguard.app.ui.CGCard
@@ -130,6 +137,12 @@ fun SecurityTab(
                     modifier = Modifier.padding(top = 12.dp),
                 )
             }
+        }
+
+        item { CGEyebrow("Also persist") }
+
+        item {
+            PersistOtherAppsCard(prefs = prefs, applyOrChallenge = applyOrChallenge)
         }
 
         item { CGEyebrow("Password") }
@@ -252,6 +265,7 @@ private fun PrefsRepository.PendingWeakenAction.describeForPendingCard(): String
     is PrefsRepository.PendingWeakenAction.SetDelayBeforeUnlockEnabled ->
         if (enabled) "Turn on delay before unlock" else "Turn off delay before unlock"
     is PrefsRepository.PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "Delay before unlock → ${minutes}m"
+    is PrefsRepository.PendingWeakenAction.SetServiceProtected -> "Stop persisting $component"
 }
 
 private fun formatRemaining(ms: Long): String {
@@ -331,6 +345,113 @@ private fun formatDelayMinutes(minutes: Int): String = when {
     minutes >= 1440 && minutes % 1440 == 0 -> "${minutes / 1440}d"
     minutes >= 60 && minutes % 60 == 0 -> "${minutes / 60}h"
     else -> "${minutes}m"
+}
+
+private data class PersistableService(val component: String, val label: String)
+
+/**
+ * Extends AccessibilityWatchdogService's self-restore to other apps' own
+ * accessibility services - e.g. a separate screen-time app - so the same
+ * "hide apps"-style stripping that ContentGuardService defends itself
+ * against can't quietly turn those off either. Only services the user has
+ * already enabled in system Accessibility settings are listed (there's
+ * nothing to persist otherwise); opting one in here is hardening and free,
+ * opting one back out is the weakening move and goes through the same
+ * password + cooldown gate as the whitelist/monitored toggles.
+ */
+@Composable
+private fun PersistOtherAppsCard(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
+    val context = LocalContext.current
+    var candidates by remember { mutableStateOf(loadPersistableServices(context)) }
+    var protectedComponents by remember { mutableStateOf(prefs.getExtraProtectedServices()) }
+
+    // Re-scan on return to the foreground, same as refreshSafeguards() one
+    // level up - covers the user having just turned the other app's
+    // accessibility service on/off in system Settings.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                candidates = loadPersistableServices(context)
+                protectedComponents = prefs.getExtraProtectedServices()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    CGCard {
+        CGLabel("Also persist")
+        CGHint(
+            "Restores another app's own accessibility service the same way ContentGuard restores " +
+                "its own, if the OS or a \"hide apps\"-style action ever strips it. Only services " +
+                "already turned on in system Accessibility settings show up here - turn the other " +
+                "app's on there first, then persist it below.",
+        )
+        if (candidates.isEmpty()) {
+            Text(
+                "No other accessibility service is currently enabled.",
+                color = CGColor.Dim,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        } else {
+            Column(modifier = Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                candidates.forEach { service ->
+                    val isProtected = service.component in protectedComponents
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CGLabel(service.label)
+                        CGToggle(
+                            checked = isProtected,
+                            onCheckedChange = { newValue ->
+                                if (newValue) {
+                                    prefs.setServiceProtected(service.component, true)
+                                    protectedComponents = prefs.getExtraProtectedServices()
+                                } else {
+                                    applyOrChallenge(
+                                        true,
+                                        {},
+                                        PrefsRepository.PendingWeakenAction.SetServiceProtected(service.component, false),
+                                    ) {
+                                        prefs.setServiceProtected(service.component, false)
+                                        protectedComponents = prefs.getExtraProtectedServices()
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Every accessibility service currently enabled in system settings, other
+ * than ContentGuard's own - the same source (and same flattened string
+ * form) AccessibilityWatchdogService reads and restores, so a component
+ * captured here is guaranteed to match exactly what the watchdog compares
+ * against later, with no flattenToString/flattenToShortString mismatch risk.
+ */
+@Suppress("DEPRECATION")
+private fun loadPersistableServices(context: Context): List<PersistableService> {
+    val ownComponent = ComponentName(context, ContentGuardService::class.java).flattenToString()
+    val enabled = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+        .orEmpty()
+        .split(':')
+        .filter { it.isNotBlank() && !it.equals(ownComponent, ignoreCase = true) }
+
+    val pm = context.packageManager
+    return enabled.mapNotNull { flattened ->
+        val component = ComponentName.unflattenFromString(flattened) ?: return@mapNotNull null
+        val label = runCatching { pm.getApplicationLabel(pm.getApplicationInfo(component.packageName, 0)).toString() }
+            .getOrDefault(component.packageName)
+        PersistableService(component = flattened, label = label)
+    }.sortedBy { it.label.lowercase() }
 }
 
 /**

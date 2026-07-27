@@ -16,6 +16,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.contentguard.app.R
+import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.util.DebugLogBuffer
 
 /**
@@ -66,10 +67,17 @@ import com.contentguard.app.util.DebugLogBuffer
  * actually appear immediately after hiding the app) is the only way to
  * confirm which case this device falls into - not verified from a
  * sandbox with no real ColorOS device attached.
+ *
+ * Also restores whatever's in [PrefsRepository.getExtraProtectedServices] -
+ * other accessibility services (e.g. a separate screen-time app) the user
+ * has explicitly opted into persisting from SecurityTab. Same mechanism,
+ * same unconditional restore-if-missing behavior, just not limited to
+ * ContentGuardService's own component.
  */
 class AccessibilityWatchdogService : Service() {
 
     private var contentObserver: ContentObserver? = null
+    private val prefs by lazy { PrefsRepository(this) }
 
     override fun onCreate() {
         super.onCreate()
@@ -96,20 +104,28 @@ class AccessibilityWatchdogService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     private fun checkAndRestore() {
-        val serviceComponent = ComponentName(this, ContentGuardService::class.java)
-        val flattened = serviceComponent.flattenToString()
+        val ownComponent = ComponentName(this, ContentGuardService::class.java).flattenToString()
+        // Extra components are stored pre-flattened (see SecurityTab, which
+        // captures them straight out of this same settings string when the
+        // user opts a service in) - not reconstructed here, so there's no
+        // risk of a flattenToString/flattenToShortString mismatch against
+        // whatever form the OS actually stores.
+        val watched = setOf(ownComponent) + prefs.getExtraProtectedServices()
+
         val current = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
         val enabledComponents = current.split(':').filter { it.isNotBlank() }
+        val enabledLower = enabledComponents.map { it.lowercase() }.toSet()
 
-        if (enabledComponents.any { it.equals(flattened, ignoreCase = true) }) {
+        val missing = watched.filterNot { it.lowercase() in enabledLower }
+        if (missing.isEmpty()) {
             return
         }
 
-        val restored = (enabledComponents + flattened).joinToString(":")
+        val restored = (enabledComponents + missing).joinToString(":")
         try {
             Settings.Secure.putString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, restored)
             Settings.Secure.putInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-            val line = "restored $flattened to enabled_accessibility_services"
+            val line = "restored ${missing.joinToString(", ")} to enabled_accessibility_services"
             Log.i(TAG, line)
             DebugLogBuffer.add(TAG, line)
         } catch (e: SecurityException) {
