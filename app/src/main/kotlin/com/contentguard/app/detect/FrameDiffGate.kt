@@ -42,6 +42,14 @@ class FrameDiffGate {
         val skip: Boolean,
         val hammingDistance: Int,
         val skipCount: Int,
+        /**
+         * The dHash [evaluate] computed for this frame, for the caller to hand
+         * straight back to [recordRealResult] instead of having it hashed a
+         * second time. Null when evaluate returned before hashing (no cache
+         * entry for the package yet) or when hashing threw - in both cases
+         * recordRealResult falls back to computing it itself.
+         */
+        val hash: Long? = null,
     )
 
     private enum class Verdict { CLEAR, BLOCKED }
@@ -99,7 +107,7 @@ class FrameDiffGate {
         if (canSkip) {
             cached.skipCount++
         }
-        return GateOutcome(skip = canSkip, hammingDistance = distance, skipCount = cached.skipCount)
+        return GateOutcome(skip = canSkip, hammingDistance = distance, skipCount = cached.skipCount, hash = hash)
     }
 
     /**
@@ -108,10 +116,18 @@ class FrameDiffGate {
      * Silently drops the cache entry on failure rather than caching garbage
      * - equivalent to there being no prior frame, which is always the safe
      * (never-skip) state.
+     *
+     * [precomputedHash] should be [GateOutcome.hash] from this same frame's
+     * [evaluate] call. Hashing is two bitmap rescales plus a pixel read of the
+     * result, and it was being paid twice per frame for the same unchanged
+     * bitmap - once to compare against the cache, then again here to store
+     * what was just computed. Passing it through halves that. Null (no prior
+     * cache entry, or an evaluate that threw) still hashes here, since there
+     * genuinely is no value to reuse.
      */
-    fun recordRealResult(pkg: String, bitmap: Bitmap, blocked: Boolean) {
+    fun recordRealResult(pkg: String, bitmap: Bitmap, blocked: Boolean, precomputedHash: Long? = null) {
         try {
-            val hash = computeDHash(bitmap)
+            val hash = precomputedHash ?: computeDHash(bitmap)
             cache[pkg] = CachedFrame(
                 hash = hash,
                 verdict = if (blocked) Verdict.BLOCKED else Verdict.CLEAR,
@@ -135,13 +151,23 @@ class FrameDiffGate {
         try {
             val hashSource = Bitmap.createScaledBitmap(normalized, HASH_WIDTH, HASH_HEIGHT, true)
             try {
+                // One bulk read rather than HASH_WIDTH*HASH_HEIGHT getPixel()
+                // calls, each of which crosses into the bitmap's native pixel
+                // buffer separately and bounds-checks on its own. Every pixel
+                // is needed anyway, and each was previously fetched twice -
+                // once as its row's "right", once as the next comparison's
+                // "left" - so this is 144 native reads down to one.
+                val pixels = IntArray(HASH_WIDTH * HASH_HEIGHT)
+                hashSource.getPixels(pixels, 0, HASH_WIDTH, 0, 0, HASH_WIDTH, HASH_HEIGHT)
                 var hash = 0L
                 var bit = 0
                 for (y in 0 until HASH_HEIGHT) {
+                    val row = y * HASH_WIDTH
+                    var left = luminance(pixels[row])
                     for (x in 0 until HASH_WIDTH - 1) {
-                        val left = luminance(hashSource.getPixel(x, y))
-                        val right = luminance(hashSource.getPixel(x + 1, y))
+                        val right = luminance(pixels[row + x + 1])
                         if (left > right) hash = hash or (1L shl bit)
+                        left = right
                         bit++
                     }
                 }

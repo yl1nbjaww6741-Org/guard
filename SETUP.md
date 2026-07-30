@@ -531,8 +531,7 @@ of this specific trade.
 
 A full code review looking for battery opportunities found that
 `recheckStaticContent()`'s 2-second timer loop had no check for whether
-the screen was even on. `onAccessibilityEvent` is naturally quiet with the
-screen off (no window-state changes occur), but this loop is timer-driven
+the screen was even on. This loop is timer-driven
 and kept firing regardless - and accessibility services aren't Doze-
 throttled the way ordinary apps are, so this ran on schedule 24/7,
 including screen-off stretches (pocket, overnight charging), each tick
@@ -550,6 +549,93 @@ throttle doesn't cover this case, since it's shorter than this loop's own
 2000ms interval and so wouldn't actually suppress a screen-off capture
 attempt the way it suppresses genuinely redundant same-second ticks while
 the screen is in use.
+
+### ...and so does the event-driven path, which was the bigger half
+
+The fix above rested on a claim that turned out to be wrong: that
+`onAccessibilityEvent` is "naturally quiet with the screen off, since no
+window-state changes occur". That holds for window-state changes only. The
+service also subscribes to `typeWindowContentChanged`, and an app left in
+the foreground when the display goes off keeps firing those - a
+paused-but-open media app ticking its progress bar, a chat app rendering an
+incoming message, anything with an animation still attached to a window
+that was never torn down.
+
+Every one of those events ran the entire cascade with the screen off: the
+accessibility-tree walk (hundreds of binder calls into the foreground app),
+`takeScreenshot`, the skin prefilter, and on a hit the full ONNX inference -
+once per `captureThrottleMs`, for as long as the screen stayed off, to
+decide whether to draw a block over a display nobody is looking at. So the
+timer loop was parked overnight while the event path went on doing the
+expensive work beside it. Of everything in this section this is the only
+item that was not a trade at all: the cascade's sole output is an overlay
+over what is currently displayed, so with nothing displayed the work could
+not have had any observable effect either way.
+
+Fixed by gating the event path on screen state too, at two points: before
+the debouncer in `onAccessibilityEvent` (so the tree walk, capture and
+inference never start), and again at the top of `processFrame` (because
+`frameChannel` is CONFLATED, so one request can already be queued when the
+screen goes off). The overlay bookkeeping above those gates - lockout
+re-show, incognito detection, the settings guard - deliberately still runs;
+those are string and boolean checks, and leaving them alone keeps behavior
+identical to before.
+
+Screen state is read from a `@Volatile` mirror field rather than by calling
+`PowerManager.isInteractive` per event, since that's a binder call and this
+is the hottest path in the app. The mirror is seeded from `PowerManager`
+when the screen receiver is registered, flipped by `ACTION_SCREEN_ON`/`OFF`,
+and re-synced from `PowerManager` on every static-recheck tick. `isDisplayOn()`
+additionally re-verifies a "screen off" answer against `PowerManager` at most
+once a second: without that, a single dropped `ACTION_SCREEN_ON` could leave
+the app enabled, connected, receiving events and silently blocking nothing.
+The event path didn't depend on those broadcasts before this change, and
+caching the state shouldn't be what makes it start to.
+
+### System-UI events no longer pay for a `getWindows()` call to be discarded
+
+`isApplicationWindow(event.windowId)` walks `AccessibilityService.getWindows()`
+- a binder round trip that materializes an `AccessibilityWindowInfo` for
+every window on screen - and it ran at the top of `onAccessibilityEvent`,
+before any scope filtering. `com.android.systemui` fires
+`typeWindowStateChanged` for every notification-shade pull, quick-settings
+toggle and volume panel, and each one paid for that list only to be dropped
+at `GATE1_WHITELIST` a few lines later, since system UI is hard-excluded.
+
+Hard-excluded packages (system UI, and this app's own overlay) now return at
+the top of the handler instead. This is the same no-op reached sooner, not a
+behavior change: every branch in between is keyed either on a package a
+hard-excluded one can't be, or on state it can't hold - a lockout is only
+ever recorded against a package that was blocked, which requires it to have
+been monitored first. `isRealAppSwitch` lost its now-redundant
+`!isHardExcluded` term at the same time, so there's one place deciding what
+that exclusion means rather than two.
+
+The same reordering applies inside `recheckStaticContentTick`, where
+`isApplicationWindow` ran ahead of the in-process `onGuardedSettingsScreen`
+/ `isLockedOut` / `shouldMonitor` checks. All four are pure predicates
+guarding the same `trySend`, so the order doesn't affect the decision -
+it only decides whether the loop pays for a binder call every two seconds
+while the foreground app is one it would never have captured. The launcher
+is the common case: it's implicitly whitelisted, and it's where a screen-on
+device spends much of its idle time.
+
+### FrameDiffGate was hashing every frame twice
+
+The gate's own design has `evaluate()` hash the captured region to compare
+against the cache, then `recordRealResult()` store the result - and
+`recordRealResult` recomputed the identical hash for the identical,
+unmodified bitmap (the classifier only reads pixels). A dHash is two bitmap
+rescales plus a pixel read of the result, so the gate that exists to skip
+work was paying for half of its own bookkeeping twice.
+
+`GateOutcome` now carries the hash it computed and `recordRealResult` accepts
+it, falling back to hashing only when there genuinely is none to reuse - the
+first frame seen for a package, or an `evaluate()` that threw. Separately,
+the hash loop read its 72-pixel grid via `getPixel()` per pixel (144 native
+reads, each pixel fetched twice as it served as both a comparison's right
+operand and the next one's left); it now does one bulk `getPixels()` and
+carries the previous luminance across the row.
 
 ### Static recheck was also missing the IME-window check the event path already had
 
@@ -661,6 +747,10 @@ Every processed event logs exactly one `exit@GATE...` line (see
 `ContentGuardService.processFrame`), so you can see precisely how far each
 screen got through the cascade - `GATE1_WHITELIST` / `GATE2_DEBOUNCE` mean
 gate 1/2 stopped it, `GATE8_BLOCK` means it was blocked, etc.
+`GATE_SCREEN_OFF` means the display was off, so the cascade skipped a frame
+it could not have blocked anything on (see the screen-off sections above).
+Note these routine exits are gated behind the verbose-logging toggle;
+blocks and detections always log.
 
 ### Gate 4: private/incognito browsing is blocked outright, browser-agnostic
 

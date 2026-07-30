@@ -75,6 +75,42 @@ class ContentGuardService : AccessibilityService() {
     // parks entirely with the screen off instead of polling.
     private val screenStateChannel = Channel<Unit>(Channel.CONFLATED)
 
+    // Cached mirror of powerManager.isInteractive, so the event path can ask
+    // "is anything actually on screen?" with a field read instead of a binder
+    // call into PowerManagerService on every accessibility event.
+    //
+    // recheckStaticContent parking on screen-off only ever covered the
+    // *timer-driven* half of the cascade. The event-driven half had no screen
+    // check at all, and its own doc comment's assumption - that
+    // onAccessibilityEvent is "naturally quiet with the screen off, since no
+    // window-state changes occur" - only holds for window-state changes. We
+    // also subscribe to typeWindowContentChanged, which an app left in the
+    // foreground keeps firing with the display off: a paused-but-open media
+    // app ticking its progress bar, a chat app rendering an incoming message,
+    // anything with an animation still attached. Each one ran the full
+    // cascade - tree walk, takeScreenshot, skin prefilter, and on a hit the
+    // ONNX inference - once per captureThrottleMs, for as long as the screen
+    // stayed off, to decide whether to draw a block over a display nobody is
+    // looking at. That is the one place in this app where work was not merely
+    // redundant but could never have any observable effect.
+    //
+    // Written from three places, all agreeing: seeded from PowerManager when
+    // the receiver is registered, flipped by ACTION_SCREEN_ON/OFF, and
+    // re-synced from PowerManager on every static-recheck tick. That last one
+    // is what makes a missed broadcast self-healing rather than permanently
+    // fatal: the recheck loop parks on powerManager.isInteractive (never on
+    // this field), so it keeps ticking while the screen is genuinely on and
+    // corrects a wrongly-false value within one interval. A wrongly-true
+    // value costs battery, not correctness, and is corrected just as fast.
+    @Volatile
+    private var screenInteractive = true
+
+    // Rate-limits isDisplayOn()'s re-verification binder call - see there.
+    // Raced between the event path and the frame consumer; a lost update just
+    // costs one extra PowerManager query, never a wrong answer.
+    @Volatile
+    private var lastScreenStateReverifyAt = 0L
+
     private var lastForegroundPackage: String? = null
     private var settingsGuardUnlocked = false
     private var onGuardedSettingsScreen = false
@@ -373,8 +409,16 @@ class ContentGuardService : AccessibilityService() {
      */
     private fun registerScreenStateReceiver() {
         screenStateReceiver?.let { unregisterReceiver(it) }
+        // Seeded before the receiver goes live so the event path never runs
+        // on a default guess: this method runs on every (re)connect, which
+        // includes reconnects that happen while the screen is already off.
+        screenInteractive = powerManager.isInteractive
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                // Read off the action rather than re-querying PowerManager -
+                // the broadcast *is* the transition, and querying here could
+                // race a second transition that has already happened.
+                screenInteractive = intent.action != Intent.ACTION_SCREEN_OFF
                 screenStateChannel.trySend(Unit)
             }
         }
@@ -384,6 +428,42 @@ class ContentGuardService : AccessibilityService() {
             addAction(Intent.ACTION_SCREEN_OFF)
         }
         ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+    }
+
+    /**
+     * Is the display on? Answers from [screenInteractive] - a plain field
+     * read - whenever that says yes, which is the overwhelmingly common case
+     * for an event path that only runs while someone is using the device. A
+     * "no" is re-verified against PowerManager at most once per
+     * [SCREEN_STATE_REVERIFY_MS] before being trusted.
+     *
+     * That re-verification is the point of this method. Before the mirror
+     * existed, the event-driven cascade didn't depend on the screen
+     * broadcasts at all - only recheckStaticContent did, and a missed
+     * broadcast there cost the periodic backstop. Reading the mirror without
+     * this would extend that dependency to the whole cascade, so one dropped
+     * ACTION_SCREEN_ON could leave the app enabled, connected, receiving
+     * events and silently blocking nothing until the next reconnect. Events
+     * arriving while we believe the screen is off are by construction the
+     * rare case, so the binder call is bounded to about one a second and only
+     * in the state we could actually be wrong about.
+     *
+     * Nudges [screenStateChannel] on a correction: a broadcast lost here was
+     * lost for the recheck loop too, which would be parked on that same
+     * channel waiting for it.
+     */
+    private fun isDisplayOn(): Boolean {
+        if (screenInteractive) return true
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastScreenStateReverifyAt < SCREEN_STATE_REVERIFY_MS) return false
+        lastScreenStateReverifyAt = now
+        if (!powerManager.isInteractive) return false
+        screenInteractive = true
+        screenStateChannel.trySend(Unit)
+        val line = "SCREEN_STATE_RESYNCED - missed ACTION_SCREEN_ON, display is on"
+        Log.i(TAG, line)
+        DebugLogBuffer.add(TAG, line)
+        return true
     }
 
     private fun applyPendingWeakenActionIfDue() {
@@ -455,6 +535,23 @@ class ContentGuardService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val packageName = event.packageName?.toString() ?: return
 
+        // Hard-excluded packages (our own UI/overlay, and system UI chrome)
+        // already reached GATE1_WHITELIST and returned without doing anything
+        // - every branch between here and there is either keyed on a package
+        // this can't be (Settings, the ColorOS battery page, a browser) or on
+        // state a never-monitored package can't hold (a lockout is only ever
+        // recorded for a package that was blocked, which requires it to have
+        // been monitored). So this is the same no-op arrived at sooner.
+        //
+        // What it saves is the isApplicationWindow() call just below, which
+        // walks AccessibilityService.getWindows() - a binder round trip that
+        // materializes an AccessibilityWindowInfo for every window on screen.
+        // com.android.systemui fires typeWindowStateChanged for every
+        // notification-shade pull, quick-settings toggle and volume panel, and
+        // each one was paying for that list purely to discard the event a few
+        // lines later.
+        if (scopePolicy.isHardExcluded(packageName)) return
+
         // The on-screen keyboard opening/closing fires its own
         // TYPE_WINDOW_STATE_CHANGED with its own package - not a real app
         // switch. Without this check, that event set lastForegroundPackage
@@ -467,9 +564,11 @@ class ContentGuardService : AccessibilityService() {
             return
         }
 
+        // No isHardExcluded term - the early return at the top of this method
+        // already guarantees it's false by here, and repeating it would leave
+        // two places to keep in sync on what "a real app switch" excludes.
         val isRealAppSwitch = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            packageName != lastForegroundPackage &&
-            !scopePolicy.isHardExcluded(packageName)
+            packageName != lastForegroundPackage
 
         if (isRealAppSwitch) {
             lastForegroundPackage = packageName
@@ -595,6 +694,24 @@ class ContentGuardService : AccessibilityService() {
         // is exactly the case to skip.
         if (overlay.isVisible() && !isRealAppSwitch) return
 
+        // Display off: everything past this point exists to decide whether to
+        // draw a block over what's on screen, and nothing is on screen. See
+        // screenInteractive's comment for why the event path needs this check
+        // even though recheckStaticContent parks itself - an app left in the
+        // foreground goes on firing typeWindowContentChanged with the display
+        // off, and each of those events drove a full capture-and-classify
+        // cycle whose verdict could not have been observed either way.
+        //
+        // Placed after the lockout/incognito/settings-guard branches above,
+        // not before them: those are cheap string and boolean checks, and
+        // leaving them running keeps the overlay bookkeeping identical to
+        // before. Only the expensive half - the tree walk, the screenshot and
+        // the inference behind them - is skipped.
+        if (!isDisplayOn()) {
+            exitSafe(packageName, "GATE_SCREEN_OFF")
+            return
+        }
+
         if (!debouncer.shouldProcess(event)) {
             if (prefs.verboseLogging) Log.d(TAG, "[$packageName] exit@GATE2_DEBOUNCE")
             return
@@ -707,11 +824,9 @@ class ContentGuardService : AccessibilityService() {
      * with identical meaning (skip the rest of this tick, go round again).
      */
     private suspend fun recheckStaticContentTick() {
-        // Screen off: park the loop entirely rather than poll. Unlike
-        // onAccessibilityEvent (naturally quiet with the screen off, since
-        // no window-state changes occur), this loop is timer-driven, and
-        // accessibility services aren't Doze-throttled the way ordinary
-        // apps are - so a plain timer here would keep waking the CPU 24/7
+        // Screen off: park the loop entirely rather than poll. This loop is
+        // timer-driven, and accessibility services aren't Doze-throttled the
+        // way ordinary apps are - so a plain timer here would keep waking the CPU 24/7
         // through every pocket/overnight stretch just to find nothing on
         // screen to scan. There is no reason to run at all while the
         // display is off: nothing is capturable, and a delay-before-unlock
@@ -724,7 +839,12 @@ class ContentGuardService : AccessibilityService() {
         // (re)connect, so nothing is missed across the sleep. receive()
         // throwing on serviceScope cancellation is the intended shutdown
         // path (the while-isActive loop simply ends).
-        if (!powerManager.isInteractive) {
+        // Also re-syncs screenInteractive, which the event path reads. This
+        // loop is the self-healing path for that mirror: it parks on
+        // PowerManager rather than on the mirror, so it keeps ticking (and
+        // correcting) even if a screen broadcast were ever missed.
+        screenInteractive = powerManager.isInteractive
+        if (!screenInteractive) {
             // Nothing will accumulate while parked, so persist any
             // batched usage-stat deltas before the indefinite sleep -
             // this plus onDestroy bounds how long they stay memory-only.
@@ -745,7 +865,8 @@ class ContentGuardService : AccessibilityService() {
         // own throttle (1800ms, shorter than this interval) to make it cheap.
         delay(prefs.staticRecheckIntervalMs)
         applyPendingWeakenActionIfDue()
-        if (!powerManager.isInteractive) return
+        screenInteractive = powerManager.isInteractive
+        if (!screenInteractive) return
 
         // Same reason the event path skips while a block overlay is up
         // (see onAccessibilityEvent): re-capturing and re-classifying
@@ -765,6 +886,19 @@ class ContentGuardService : AccessibilityService() {
         @Suppress("DEPRECATION")
         root?.recycle()
         if (pkg == null) return
+        // Ordered cheapest-first, and deliberately ahead of the
+        // isApplicationWindow() call below: these three are in-process reads
+        // (a boolean field, a prefs map lookup, a set membership test) with no
+        // side effects, while isApplicationWindow walks getWindows() - a
+        // binder round trip that materializes an AccessibilityWindowInfo per
+        // on-screen window. Since all four are pure predicates guarding the
+        // same single trySend, evaluating them in either order reaches the
+        // same decision; this order just stops the loop paying for that binder
+        // call every couple of seconds while the foreground app is one it
+        // would never have captured anyway. The launcher is the common case
+        // here - it's implicitly whitelisted (see AppScopePolicy) and it's
+        // where a screen-on device spends much of its idle time.
+        if (onGuardedSettingsScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) return
         // Same defense onAccessibilityEvent already applies to the
         // event-driven path (see the IME-hijacking comment above) - it
         // was missing here. rootInActiveWindow isn't limited to
@@ -776,12 +910,21 @@ class ContentGuardService : AccessibilityService() {
         // typing, with no app ever opened. A keyboard's own window is
         // never content worth scoring regardless of scope mode.
         if (windowId != null && !isApplicationWindow(windowId)) return
-        if (onGuardedSettingsScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) return
         frameChannel.trySend(FrameRequest(pkg))
     }
 
     private suspend fun processFrame(request: FrameRequest) {
         val pkg = request.packageName
+
+        // Re-checked here, not just at the point of queueing: frameChannel is
+        // CONFLATED, so a request can sit in it while the consumer is busy
+        // with the previous frame, and the screen can go off in between. That
+        // leaves exactly one stale frame to capture and classify per
+        // screen-off, which is cheap to drop and pointless to keep.
+        if (!isDisplayOn()) {
+            exitSafe(pkg, "GATE_SCREEN_OFF")
+            return
+        }
 
         // When the capture throttle guarantees gate 5 would drop this frame
         // anyway, most of the tree walk below is wasted - it's hundreds of
@@ -1025,7 +1168,13 @@ class ContentGuardService : AccessibilityService() {
             // never be recorded as if it were a fresh observation, or a
             // stale hash could compound across cycles.
             if (prefs.frameDiffGateEnabled) {
-                frameDiffGate.recordRealResult(pkg, analysisBitmap, blocked)
+                // Reuses the hash evaluate() already computed for this exact
+                // bitmap - nothing between the two calls mutates it (the
+                // classifier only reads pixels), so re-hashing was pure
+                // duplicate work. Null on the first frame for a package, when
+                // evaluate() had no cache entry to compare against and so
+                // never hashed; recordRealResult computes it then.
+                frameDiffGate.recordRealResult(pkg, analysisBitmap, blocked, diffOutcome?.hash)
             }
 
             if (!blocked) {
@@ -1194,6 +1343,13 @@ class ContentGuardService : AccessibilityService() {
         // constant rather than the tunable interval, so the recovery path
         // can't fault on the same state the tick just faulted on.
         private const val RECHECK_ERROR_BACKOFF_MS = 5_000L
+
+        // How often isDisplayOn() will re-ask PowerManager while it believes
+        // the screen is off. Short enough that a dropped ACTION_SCREEN_ON
+        // costs at most a second of missed gating, long enough that a genuine
+        // screen-off with a chatty foreground app can't turn the saving this
+        // buys back into a binder call per event.
+        private const val SCREEN_STATE_REVERIFY_MS = 1_000L
 
         // Standard AOSP Settings package - the "Device admin apps" and
         // "Accessibility" screens are core fragments OEMs rarely
