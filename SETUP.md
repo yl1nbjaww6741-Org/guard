@@ -835,18 +835,32 @@ screen yet.
 
 Deliberately matches against a *new*, narrower text source -
 `NodeScanResult.inputFieldText` - rather than reusing gate 4's
-`visibleText` whole-page scan. `NodeInspector.scan()` now also collects
-text from nodes where `isEditable` is true (the framework's own signal for
-"this is a text input," not a className guess - works the same regardless
-of which concrete widget class a given browser uses for its address bar),
-kept in a separate field from the general page-text scan. Matching against
-the whole page instead would catch far more than intended: health/biology
-articles, sex-ed material, and ordinary news coverage all legitimately
-contain many of these words, and gate 4 already hit exactly this failure
-mode once (see above) before its root cause was found. A rendered
-WebView's page body is never exposed as an editable node's own text, so
-restricting to `inputFieldText` keeps this to what's actually being
-searched for.
+`visibleText` whole-page scan. Matching against the whole page instead
+would catch far more than intended: health/biology articles, sex-ed
+material, and ordinary news coverage all legitimately contain many of
+these words, and gate 4 already hit exactly this failure mode once (see
+above) before its root cause was found. A rendered WebView's page body is
+never exposed as an editable node's own text, so restricting to
+`inputFieldText` keeps this to what's actually being searched for.
+
+`inputFieldText` is sourced from `root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)`
+- a single OS-level lookup for whichever node currently has input focus -
+not from a manual walk over `isEditable` nodes. It used to be the latter,
+and that was the cause of a real "keyword blocker works inconsistently"
+report: `NodeInspector`'s walk is capped at `MAX_DEPTH` (12, sized for the
+unrelated image-node scan, not for locating one focused field), and a
+browser's address bar/search-suggestions UI can nest past that depth on
+some screens but not others depending on what's showing (a plain empty
+omnibox vs. a suggestions dropdown, say) - so the same keyword typed in
+the same browser would get blocked on one screen and silently pass on
+another, with nothing in the log to say why. `findFocus` has no depth cap
+of its own, so it finds the focused field regardless of how deep the tree
+nests, closing that gap. (This exact fix was tried once before to widen
+gate 4b to *every* app - not just browsers - for Reddit's own deeply-nested
+Compose search box, then reverted along with that broader scope change;
+the depth-cap bug it fixed is real independent of that scope decision, and
+resurfaces in any deeply-nested browser UI, so it's back here scoped to
+`inputFieldText` only.)
 
 `KeywordBlocklist.EXPLICIT_KEYWORDS` favors high-precision terms - known
 adult platform names (`pornhub`, `xvideos`, etc. - unambiguous by

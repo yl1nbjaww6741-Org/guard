@@ -7,9 +7,16 @@ data class NodeScanResult(
     val hasImages: Boolean,
     val imageBounds: List<Rect>,
     val visibleText: String,
-    // Text from editable nodes only (isEditable, e.g. an address bar or
-    // search box), separate from visibleText - see KeywordBlocklist for why
-    // search-intent matching deliberately doesn't use the whole-page text.
+    // What's currently focused and being typed - see KeywordBlocklist for
+    // why search-intent matching deliberately doesn't use the whole-page
+    // text. Sourced from findFocus(FOCUS_INPUT), NOT a walk over isEditable
+    // nodes: that walk is capped at MAX_DEPTH (sized for the unrelated
+    // image-node scan below) and real-device testing found it truncating
+    // before ever reaching a search box on a deeply-nested UI, silently
+    // dropping every keyword typed there - inconsistently, since a
+    // shallower screen in the same browser still matched fine. findFocus is
+    // a single OS-level lookup with no depth limit of its own, so it finds
+    // the focused field regardless of how deep the tree nests.
     val inputFieldText: String,
 )
 
@@ -56,9 +63,28 @@ object NodeInspector {
 
         val bounds = mutableListOf<Rect>()
         val text = StringBuilder()
-        val inputText = StringBuilder()
         var visited = 0
         var hasSubstantialContent = false
+
+        // inputFieldText's actual source - see that field's doc comment.
+        // Independent of the walk below (not subject to its MAX_DEPTH/
+        // MAX_NODES caps), so it isn't at risk of truncating before it
+        // reaches a deeply-nested field the way a manual isEditable walk did.
+        val focusedInput = try {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        } catch (e: Exception) {
+            null
+        }
+        val focusedInputText = if (focusedInput == null) {
+            ""
+        } else {
+            try {
+                if (focusedInput.isEditable) focusedInput.text?.toString().orEmpty() else ""
+            } finally {
+                @Suppress("DEPRECATION")
+                focusedInput.recycle()
+            }
+        }
 
         fun walk(node: AccessibilityNodeInfo, depth: Int) {
             if (depth > MAX_DEPTH || visited >= MAX_NODES) return
@@ -101,16 +127,6 @@ object NodeInspector {
             if (node.isVisibleToUser()) {
                 node.text?.let { if (it.isNotBlank()) text.append(it).append(' ') }
                 node.contentDescription?.let { if (it.isNotBlank()) text.append(it).append(' ') }
-
-                // isEditable (not a className check) is the framework-provided
-                // signal for "this is a text input," independent of whatever
-                // concrete widget class each browser actually uses for its
-                // address/search bar - and a WebView's rendered page body
-                // never sets this on the nodes it exposes, so this stays
-                // scoped to what's actually being typed, not page content.
-                if (node.isEditable) {
-                    node.text?.let { if (it.isNotBlank()) inputText.append(it).append(' ') }
-                }
             }
 
             for (i in 0 until node.childCount) {
@@ -130,7 +146,7 @@ object NodeInspector {
             hasImages = bounds.isNotEmpty() || hasSubstantialContent,
             imageBounds = bounds,
             visibleText = text.toString().trim(),
-            inputFieldText = inputText.toString().trim(),
+            inputFieldText = focusedInputText.trim(),
         )
     }
 }
