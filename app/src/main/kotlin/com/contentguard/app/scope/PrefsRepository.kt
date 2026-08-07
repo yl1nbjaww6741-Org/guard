@@ -261,6 +261,28 @@ class PrefsRepository(context: Context) {
             prefs.edit().putBoolean(KEY_VERBOSE_LOGGING, value).apply()
         }
 
+    /**
+     * Proof of life for ContentGuardService's live accessibility binding,
+     * stamped by its own heartbeat loop every HEARTBEAT_INTERVAL_MS - see
+     * ContentGuardService.heartbeatLoop. Exists because
+     * `enabled_accessibility_services` (what AccessibilityWatchdogService's
+     * ContentObserver watches) only tells you the service is *supposed* to
+     * be bound, not that it actually still is - real-device testing found a
+     * case where the setting stayed correct the entire time the live
+     * binding was dead (most likely the whole process having been killed
+     * by the OS/OEM without the accessibility subsystem cleanly deregistering
+     * it first), which left the ContentObserver with nothing to react to and
+     * the cascade silently dead until a full reboot. A stale heartbeat is
+     * what lets AccessibilityWatchdogService notice that case too and force
+     * a rebind even when nothing is actually missing from the enabled list -
+     * see its checkHeartbeatAndKick.
+     */
+    var lastHeartbeatAtMillis: Long
+        get() = prefs.getLong(KEY_LAST_HEARTBEAT_AT, 0L)
+        set(value) {
+            prefs.edit().putLong(KEY_LAST_HEARTBEAT_AT, value).apply()
+        }
+
     /** Includes the not-yet-flushed in-memory deltas, so same-process readers (the Home/Activity tabs) always see current totals. */
     fun getUsageStats(): UsageStats = UsageStats(
         screenshotCount = prefs.getInt(KEY_SCREENSHOT_COUNT, 0) + pendingScreenshotCount.get(),
@@ -818,6 +840,7 @@ class PrefsRepository(context: Context) {
         private const val KEY_PASSWORD_HASH = "password_hash"
         private const val KEY_CAPTURE_THROTTLE_MS = "capture_throttle_ms"
         private const val KEY_VERBOSE_LOGGING = "verbose_logging"
+        private const val KEY_LAST_HEARTBEAT_AT = "service_last_heartbeat_at_millis"
         private const val KEY_FRAME_DIFF_ENABLED = "frame_diff_gate_enabled"
         private const val KEY_FRAME_DIFF_HAMMING = "frame_diff_hamming_threshold"
         private const val KEY_FRAME_DIFF_MAX_SKIP_COUNT = "frame_diff_max_skip_count"

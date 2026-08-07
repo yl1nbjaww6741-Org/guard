@@ -125,5 +125,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- AlarmManager-driven backstop for AccessibilityWatchdogService's
+             own process being killed outright - see WatchdogAlarmReceiver's
+             doc comment. No intent-filter: only ever reached via the
+             explicit PendingIntent AccessibilityWatchdogService.scheduleWatchdogAlarm
+             builds, so exported=false is correct - nothing outside this app
+             has any business delivering to it. -->
+        <receiver
+            android:name=".service.WatchdogAlarmReceiver"
+            android:exported="false" />
+
     </application>
 </manifest>

@@ -265,6 +265,27 @@ class ContentGuardService : AccessibilityService() {
 
         serviceScope.launch { consumeFrames() }
         serviceScope.launch { recheckStaticContent() }
+        serviceScope.launch { heartbeatLoop() }
+    }
+
+    /**
+     * Stamps prefs.lastHeartbeatAtMillis every HEARTBEAT_INTERVAL_MS for as
+     * long as this live setup stands - see that field's doc comment for why
+     * it exists (AccessibilityWatchdogService's own ContentObserver has
+     * nothing to react to when the live binding dies without the
+     * `enabled_accessibility_services` string itself changing). Runs
+     * unconditionally, screen on or off - unlike recheckStaticContent this
+     * has nothing to do with what's on screen, only with proving the
+     * service's own coroutines are still scheduling work at all, so parking
+     * it with the display off would defeat the point: a dead process is
+     * exactly as dead overnight as it is at 2pm. A single Long SharedPreferences
+     * write every few minutes is not worth gating behind anything.
+     */
+    private suspend fun heartbeatLoop() {
+        while (coroutineContext.isActive) {
+            prefs.lastHeartbeatAtMillis = System.currentTimeMillis()
+            delay(HEARTBEAT_INTERVAL_MS)
+        }
     }
 
     /**
@@ -1238,5 +1259,13 @@ class ContentGuardService : AccessibilityService() {
         // SETTINGS_PACKAGE this can't be told apart by title at all; see
         // the content-based check at the call site instead.
         private const val OPLUS_BATTERY_PACKAGE = "com.oplus.battery"
+
+        // See heartbeatLoop and PrefsRepository.lastHeartbeatAtMillis. Cheap
+        // enough at this cadence to run indefinitely regardless of screen
+        // state; frequent enough that AccessibilityWatchdogService's own
+        // staleness threshold (HEARTBEAT_STALE_THRESHOLD_MS there, a
+        // multiple of this) can tell "dead" apart from "just hasn't ticked
+        // yet" within a reasonable window.
+        const val HEARTBEAT_INTERVAL_MS = 5 * 60_000L
     }
 }
