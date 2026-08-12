@@ -232,16 +232,29 @@ class PrefsRepository(context: Context) {
      * Not real battery-percentage accounting - Android doesn't expose that
      * to third-party apps, only the OS's own battery stats (Settings >
      * Battery, or `adb shell dumpsys batterystats`) have that. This is a
-     * proxy: counts of the two operations that actually cost real battery
-     * (screenshot capture, classifier inference), so relative load is
-     * visible without pretending to be a number this app can't actually
-     * measure. See SettingsActivity's "Activity since last reset" card.
+     * proxy: counts of the operations that actually cost real battery, so
+     * relative load is visible without pretending to be a number this app
+     * can't actually measure. See ActivityTab's "Activity since last reset"
+     * card.
+     *
+     * [nodeWalkCount] (an accessibility-tree walk - NodeInspector.scan())
+     * is tracked separately from, and is far cheaper than, screenshot
+     * capture and classifier inference - no bitmap, no native ONNX call,
+     * just binder calls into the foreground app across up to 400 nodes.
+     * Added specifically because gate 4b (KeywordBlocklist) now runs this
+     * walk in every monitored app, not just browsers, at a fixed 300-500ms
+     * pace independent of whether a capture happens - a real, if smaller,
+     * battery cost that [screenshotCount]/[inferenceCount] alone can't show
+     * at all, since neither of those changed. Without this counter, that
+     * cost would be invisible to this screen even though it's the whole
+     * reason this field exists.
      */
     data class UsageStats(
         val screenshotCount: Int,
         val inferenceCount: Int,
         val totalInferenceMs: Long,
         val blockCount: Int,
+        val nodeWalkCount: Int,
         val sinceMillis: Long,
     ) {
         val avgInferenceMs: Double get() = if (inferenceCount == 0) 0.0 else totalInferenceMs.toDouble() / inferenceCount
@@ -293,11 +306,13 @@ class PrefsRepository(context: Context) {
         inferenceCount = prefs.getInt(KEY_INFERENCE_COUNT, 0) + pendingInferenceCount.get(),
         totalInferenceMs = prefs.getLong(KEY_TOTAL_INFERENCE_MS, 0L) + pendingInferenceMs.get(),
         blockCount = prefs.getInt(KEY_BLOCK_COUNT, 0) + pendingBlockCount.get(),
+        nodeWalkCount = prefs.getInt(KEY_NODE_WALK_COUNT, 0) + pendingNodeWalkCount.get(),
         sinceMillis = prefs.getLong(KEY_STATS_SINCE, 0L),
     )
 
-    // recordScreenshot/recordInference fire once per capture cycle (every
-    // ~captureThrottleMs while a monitored app with images is on screen) -
+    // recordScreenshot/recordInference/recordNodeWalk fire once per capture/
+    // walk cycle (every ~captureThrottleMs for a capture, every
+    // ~textScanIntervalMs for a walk, while a monitored app is on screen) -
     // the hottest sustained write path in the app. Each SharedPreferences
     // apply() rewrites the ENTIRE prefs XML (whitelist, keywords, pending
     // unlocks and all) to flash, so writing per event meant two full-file
@@ -316,6 +331,17 @@ class PrefsRepository(context: Context) {
     fun recordInference(latencyMs: Long) {
         pendingInferenceCount.incrementAndGet()
         pendingInferenceMs.addAndGet(latencyMs)
+        maybeFlushUsageStats()
+    }
+
+    /**
+     * One per completed NodeInspector.scan() (a walk of the accessibility
+     * tree) - see [UsageStats.nodeWalkCount]'s doc comment for why this
+     * exists as its own counter rather than being folded into
+     * [screenshotCount]/[inferenceCount].
+     */
+    fun recordNodeWalk() {
+        pendingNodeWalkCount.incrementAndGet()
         maybeFlushUsageStats()
     }
 
@@ -338,12 +364,14 @@ class PrefsRepository(context: Context) {
         val inferences = pendingInferenceCount.getAndSet(0)
         val inferenceMs = pendingInferenceMs.getAndSet(0L)
         val blocks = pendingBlockCount.getAndSet(0)
-        if (screenshots == 0 && inferences == 0 && inferenceMs == 0L && blocks == 0) return
+        val nodeWalks = pendingNodeWalkCount.getAndSet(0)
+        if (screenshots == 0 && inferences == 0 && inferenceMs == 0L && blocks == 0 && nodeWalks == 0) return
         prefs.edit()
             .putInt(KEY_SCREENSHOT_COUNT, prefs.getInt(KEY_SCREENSHOT_COUNT, 0) + screenshots)
             .putInt(KEY_INFERENCE_COUNT, prefs.getInt(KEY_INFERENCE_COUNT, 0) + inferences)
             .putLong(KEY_TOTAL_INFERENCE_MS, prefs.getLong(KEY_TOTAL_INFERENCE_MS, 0L) + inferenceMs)
             .putInt(KEY_BLOCK_COUNT, prefs.getInt(KEY_BLOCK_COUNT, 0) + blocks)
+            .putInt(KEY_NODE_WALK_COUNT, prefs.getInt(KEY_NODE_WALK_COUNT, 0) + nodeWalks)
             .apply()
     }
 
@@ -352,11 +380,13 @@ class PrefsRepository(context: Context) {
         pendingInferenceCount.set(0)
         pendingInferenceMs.set(0L)
         pendingBlockCount.set(0)
+        pendingNodeWalkCount.set(0)
         prefs.edit()
             .putInt(KEY_SCREENSHOT_COUNT, 0)
             .putInt(KEY_INFERENCE_COUNT, 0)
             .putLong(KEY_TOTAL_INFERENCE_MS, 0L)
             .putInt(KEY_BLOCK_COUNT, 0)
+            .putInt(KEY_NODE_WALK_COUNT, 0)
             .putLong(KEY_STATS_SINCE, System.currentTimeMillis())
             .apply()
     }
@@ -807,6 +837,7 @@ class PrefsRepository(context: Context) {
         private val pendingInferenceCount = AtomicInteger(0)
         private val pendingInferenceMs = AtomicLong(0L)
         private val pendingBlockCount = AtomicInteger(0)
+        private val pendingNodeWalkCount = AtomicInteger(0)
         @Volatile
         private var lastStatsFlushAt = 0L
 
@@ -836,6 +867,7 @@ class PrefsRepository(context: Context) {
         private const val KEY_INFERENCE_COUNT = "stats_inference_count"
         private const val KEY_TOTAL_INFERENCE_MS = "stats_total_inference_ms"
         private const val KEY_BLOCK_COUNT = "stats_block_count"
+        private const val KEY_NODE_WALK_COUNT = "stats_node_walk_count"
         private const val KEY_STATS_SINCE = "stats_since_millis"
         private const val KEY_LOCKOUT_DURATION_MIN = "lockout_duration_min"
         private const val KEY_STRIKES_TO_LOCKOUT = "strikes_to_lockout"

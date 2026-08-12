@@ -64,7 +64,8 @@ fun ActivityTab(prefs: PrefsRepository) {
         item {
             CGSub(
                 "A load proxy, not a battery reading — Android hides that from apps. " +
-                    "These are the two operations that actually cost power.",
+                    "Screens and inferences are the operations that actually cost real power; " +
+                    "tree walks are far cheaper individually but run much more often.",
             )
         }
 
@@ -79,10 +80,21 @@ fun ActivityTab(prefs: PrefsRepository) {
         }
 
         item {
-            CGMetricsRow {
-                CGMetric(number = "${usageStats.screenshotCount}", unit = null, kicker = "Screens")
-                CGMetric(number = "${usageStats.inferenceCount}", unit = null, kicker = "Inferences")
-                CGMetric(number = "%.0f".format(usageStats.avgInferenceMs), unit = "ms", kicker = "Avg latency")
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                CGMetricsRow(shape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)) {
+                    CGMetric(number = "${usageStats.screenshotCount}", unit = null, kicker = "Screens")
+                    CGMetric(number = "${usageStats.inferenceCount}", unit = null, kicker = "Inferences")
+                    CGMetric(number = "%.0f".format(usageStats.avgInferenceMs), unit = "ms", kicker = "Avg latency")
+                }
+                // Separate row, deliberately not styled as a fourth peer to
+                // the row above - see UsageStats.nodeWalkCount's doc comment
+                // for why this is tracked at all (it's the operation gate
+                // 4b's app-wide scope made more frequent, and the only one
+                // of the four this card can't show as a real battery cost -
+                // it's much cheaper per-op than a screenshot or inference).
+                CGMetricsRow(shape = RoundedCornerShape(bottomStart = 14.dp, bottomEnd = 14.dp)) {
+                    CGMetric(number = "${usageStats.nodeWalkCount}", unit = null, kicker = "Tree walks (cheap)")
+                }
             }
         }
 

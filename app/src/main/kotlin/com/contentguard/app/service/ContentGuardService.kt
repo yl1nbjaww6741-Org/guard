@@ -842,6 +842,12 @@ class ContentGuardService : AccessibilityService() {
         // alike) - it's what the pre-scan gate above paces between-capture
         // text scans against.
         lastTextScanAt = SystemClock.elapsedRealtime()
+        // Counted separately from screenshots/inferences - see
+        // PrefsRepository.UsageStats.nodeWalkCount's doc comment for why:
+        // this is the operation gate 4b's app-wide scope made more frequent,
+        // and it's cheap enough that the screenshot/inference counters alone
+        // would never show it moving.
+        prefs.recordNodeWalk()
 
         // Fallback for when the window-title check in onAccessibilityEvent
         // didn't catch it (e.g. the title only changes on the initial
