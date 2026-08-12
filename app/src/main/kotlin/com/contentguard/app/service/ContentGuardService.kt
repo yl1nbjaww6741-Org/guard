@@ -81,7 +81,7 @@ class ContentGuardService : AccessibilityService() {
 
     // Only touched from the single consumeFrames coroutine, so no
     // synchronization needed - see processFrame's pre-scan gate.
-    private var lastBrowserTextScanAt = 0L
+    private var lastTextScanAt = 0L
 
     // Pending debounced registry refresh - see registerPackageChangeReceiver.
     // Only touched from onReceive, which always runs on the main thread.
@@ -664,10 +664,9 @@ class ContentGuardService : AccessibilityService() {
      * (derived from the user-tunable capture cadence in Settings, see
      * PrefsRepository), not a fixed constant. CONFLATED channel + ScreenCapturer's
      * own throttle mean redundant ticks are cheap while the screen is
-     * genuinely in use - they exit at GATE5_CAPTURE_THROTTLED_PRE_SCAN (or,
-     * for browsers, GATE5_CAPTURE_THROTTLED_OR_FAILED after the per-frame
-     * text scan gates 4/4b need) when a real event already triggered a
-     * capture recently. Skips entirely
+     * genuinely in use - they exit at GATE4_TEXT_SCAN_THROTTLED (or, once
+     * past that, GATE5_CAPTURE_THROTTLED) when a real event already
+     * triggered a capture/text scan recently. Skips entirely
      * while the screen is off (see the isInteractive check below) - that's
      * the loop's main real battery cost, since it otherwise runs on this
      * timer 24/7 regardless of whether anything is actually on screen to
@@ -805,34 +804,27 @@ class ContentGuardService : AccessibilityService() {
         val pkg = request.packageName
 
         // When the capture throttle guarantees gate 5 would drop this frame
-        // anyway, most of the tree walk below is wasted - it's hundreds of
-        // binder calls into the foreground app's process, and the debouncer
-        // admits an event every 100ms while captures happen at most every
-        // captureThrottleMs (1800ms default). Without this gate, most walks
-        // during a scroll ran to completion just to be discarded at GATE5.
-        //
-        // For a non-browser package everything the walk produces (hasImages,
-        // the crop region) is only ever consumed by a capture, so it's
-        // skipped outright. A browser still needs the walk between captures
-        // - gates 4/4b match the tree's text per frame regardless of
-        // capture - but not at full event rate: those text scans are paced
-        // to prefs.browserTextScanIntervalMs, which derives from the
-        // capture-cadence setting (see PrefsRepository) so the slider governs
-        // this cost too - in a browser these walks outnumber captures roughly
-        // 7:1, so leaving them on a fixed floor made "Better battery" only
-        // half true. Bounded above so incognito/keyword detection stays well
-        // under half a second at every slider position. The event-side *title* check in onAccessibilityEvent
-        // is untouched by this - it's a plain string match with no walk, so
-        // title-based incognito detection stays instant.
-        if (screenCapturer.wouldThrottle()) {
-            if (!IncognitoDetector.isBrowserPackage(pkg)) {
-                exitSafe(pkg, "GATE5_CAPTURE_THROTTLED_PRE_SCAN")
-                return
-            }
-            if (SystemClock.elapsedRealtime() - lastBrowserTextScanAt < prefs.browserTextScanIntervalMs) {
-                exitSafe(pkg, "GATE4_TEXT_SCAN_THROTTLED")
-                return
-            }
+        // anyway, the tree walk below is still worth running for gate 4b
+        // alone - explicit-keyword matching (scan.inputFieldText) runs in
+        // every monitored app now, not just browsers, so a search typed
+        // into Play Store, Reddit, or any other app's search box needs the
+        // walk regardless of whether an image capture happens this cycle.
+        // Only skip the walk when BOTH a capture would be throttled AND a
+        // text scan has already run recently enough - paced to
+        // prefs.textScanIntervalMs, which derives from the capture-cadence
+        // setting (see PrefsRepository) so the slider still governs this
+        // cost. Without this pacing, every debounced event (as often as
+        // every 100ms during a scroll) would re-walk the tree - hundreds of
+        // binder calls into the foreground app's process - just to recheck
+        // text that almost certainly hasn't changed since the last walk.
+        // The event-side *title* check in onAccessibilityEvent is untouched
+        // by this - it's a plain string match with no walk, so title-based
+        // incognito detection stays instant.
+        if (screenCapturer.wouldThrottle() &&
+            SystemClock.elapsedRealtime() - lastTextScanAt < prefs.textScanIntervalMs
+        ) {
+            exitSafe(pkg, "GATE4_TEXT_SCAN_THROTTLED")
+            return
         }
 
         val root = rootInActiveWindow
@@ -846,12 +838,10 @@ class ContentGuardService : AccessibilityService() {
             @Suppress("DEPRECATION")
             root.recycle()
         }
-        // Stamped after any completed walk in a browser (capture-bound or
-        // text-only alike) - it's what the pre-scan gate above paces
-        // between-capture text scans against.
-        if (IncognitoDetector.isBrowserPackage(pkg)) {
-            lastBrowserTextScanAt = SystemClock.elapsedRealtime()
-        }
+        // Stamped after any completed walk (capture-bound or text-only
+        // alike) - it's what the pre-scan gate above paces between-capture
+        // text scans against.
+        lastTextScanAt = SystemClock.elapsedRealtime()
 
         // Fallback for when the window-title check in onAccessibilityEvent
         // didn't catch it (e.g. the title only changes on the initial
@@ -885,18 +875,25 @@ class ContentGuardService : AccessibilityService() {
         }
 
         // Blocks on explicit search intent - what's typed into an address
-        // bar or search box - before any page/image ever loads. Matches
-        // against scan.inputFieldText specifically (editable nodes only),
+        // bar, search box, or any other text field, in any monitored app -
+        // before any page/image ever loads. Matches against
+        // scan.inputFieldText specifically (editable/focused nodes only),
         // not the whole-page visibleText above, so this doesn't inherit
         // gate 4's false-positive history from matching ordinary page
         // content. See KeywordBlocklist's doc comment. Checked before
         // GATE3 for the same reason as the incognito checks above - this
         // blocks outright regardless of whether an image is on screen.
-        val matchedExplicitKeyword = if (IncognitoDetector.isBrowserPackage(pkg)) {
-            KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
-        } else {
-            null
-        }
+        //
+        // Not restricted to IncognitoDetector.BROWSER_PACKAGES the way the
+        // content-keyword check above is - that restriction exists there
+        // because whole-tree text matching is false-positive-prone outside
+        // a known, tested set of browsers (see IncognitoDetector's doc
+        // comment). This gate only ever looks at a single focused, editable
+        // node - what's actively being typed, not incidental content - so
+        // the same risk doesn't apply, and restricting it to browsers only
+        // meant a search typed into Play Store, Reddit, or Instagram's own
+        // search box was never checked at all.
+        val matchedExplicitKeyword = KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
         if (matchedExplicitKeyword != null) {
             if (!overlay.isVisible()) {
                 val line = "[$pkg] exit@GATE4B_KEYWORD_BLOCKED keyword=\"$matchedExplicitKeyword\""

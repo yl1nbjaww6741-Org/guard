@@ -2,8 +2,25 @@
 <!--
   accessibilityEventTypes is deliberately narrow: window state changes (app
   switch / new screen), content changes (feed scroll settling, image loads),
-  and scroll events. We do NOT listen for typeViewClicked/typeViewFocused/etc
-  - every extra event type is extra wakeups on a battery-first design.
+  scroll events, and text changes. We do NOT listen for
+  typeViewClicked/typeViewFocused/etc - every extra event type is extra
+  wakeups on a battery-first design.
+
+  typeViewTextChanged was added specifically for gate 4b (KeywordBlocklist):
+  without it, nothing woke onAccessibilityEvent while someone was actively
+  typing a search term into an address bar or search box - typing an
+  EditText's content fires TYPE_VIEW_TEXT_CHANGED, not
+  TYPE_WINDOW_CONTENT_CHANGED, so gate 4b only ever got checked whenever
+  recheckStaticContent's periodic backstop next happened to fire (paced to
+  the capture-cadence setting, ~2s at the default). A keyword typed and
+  submitted faster than that window could slip through uncaught, and even
+  when it didn't, the multi-second lag before a block appeared was reported
+  as "the keyword blocker is working, but too slowly." Listening for this
+  event type directly means gate 4b runs within the ordinary event
+  debounce window (~100ms) of each keystroke instead of waiting on the
+  backstop - every other gate's behavior is unchanged, since
+  onAccessibilityEvent's existing gates (scope, debounce, overlay-visible)
+  apply to this event type exactly as they do to the others.
 
   canRetrieveWindowContent + flagRetrieveInteractiveWindows let
   NodeInspector walk the tree to look for image-bearing nodes before we ever
@@ -18,7 +35,7 @@
   "screenshot" toggle before assuming the API itself is broken.
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled|typeViewTextChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"

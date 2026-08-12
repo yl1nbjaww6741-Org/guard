@@ -871,7 +871,24 @@ actually type to search for adult content, easy to extend later based on
 real `GATE4B_KEYWORD_BLOCKED keyword="..."` log activity, the same
 diagnose-from-logs pattern gate 4 now follows.
 
-Restricted to `IncognitoDetector.BROWSER_PACKAGES` (same set gate 4 uses).
+Unlike gate 4's content-keyword check, *not* restricted to
+`IncognitoDetector.BROWSER_PACKAGES` - it runs in every monitored app. That
+restriction exists for gate 4 because matching whole-tree text is false-
+positive-prone outside a known, tested set of browsers (see gate 4's
+section above); this gate only ever looks at a single focused, editable
+node - what's actively being typed, not incidental content - so the same
+risk doesn't apply, and restricting it to browsers only meant a search
+typed into, say, Play Store's, Reddit's, or Instagram's own search box was
+never checked at all - the exact gap a real user report surfaced ("working
+on Chrome, nothing on Play Store/Reddit/Instagram"). (It was browser-
+restricted for a stretch in this project's history, reusing gate 4's
+package check for convenience since the original use case was address
+bars - that restriction, and a separate real bug in how `inputFieldText`
+itself was built, got tangled together and reverted/refixed more than
+once; see the `inputFieldText` section above for the node-detection half
+of that history. This is the settled state: unrestricted by app, robust
+node detection.)
+
 No dedicated on/off Settings toggle, same reasoning as gate 4 - but unlike
 gate 4, the keyword list itself is editable: `PrefsRepository.getExplicitKeywords()`
 starts from `KeywordBlocklist.EXPLICIT_KEYWORDS` until customized, at which

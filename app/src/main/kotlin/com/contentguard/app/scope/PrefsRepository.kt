@@ -65,28 +65,32 @@ class PrefsRepository(context: Context) {
         get() = captureThrottleMs + STATIC_RECHECK_MARGIN_MS
 
     /**
-     * Floor between gate-4/4b accessibility-tree walks in a browser when no
-     * capture will run - see ContentGuardService.processFrame's pre-scan gate.
+     * Floor between gate-4/4b accessibility-tree walks when no capture will
+     * run - see ContentGuardService.processFrame's pre-scan gate. Applies in
+     * every monitored app, not just browsers: gate 4b's explicit-keyword
+     * matching runs everywhere, so the walk that feeds it needs pacing
+     * everywhere too, the same reasoning that originally motivated this for
+     * browsers specifically.
      *
-     * Derived from [captureThrottleMs] rather than the fixed 300ms it used to
-     * be, because that constant made the capture-cadence slider only half
-     * true in exactly the app people browse in. In a browser those walks are
-     * the dominant cost, not the screenshots: a walk is hundreds of binder
-     * calls into the foreground app across up to 400 nodes, and real on-device
-     * logs showed roughly seven of them per successful capture while
-     * scrolling Chrome. Moving the slider toward "Better battery" cut
+     * Derived from [captureThrottleMs] rather than a fixed constant, because
+     * a fixed floor made the capture-cadence slider only half true in
+     * exactly the apps people browse/search in most. Those walks are the
+     * dominant cost there, not the screenshots: a walk is hundreds of binder
+     * calls into the foreground app across up to 400 nodes, and real
+     * on-device logs showed roughly seven of them per successful capture
+     * while scrolling Chrome. Moving the slider toward "Better battery" cut
      * screenshots and left that untouched.
      *
-     * [MAX_BROWSER_TEXT_SCAN_MS] is a hard ceiling, so this stays a battery
-     * trade and never becomes a detection one: gates 4/4b are what catch a
-     * private tab, and the design target throughout this cascade is catching
-     * one inside half a second. That ceiling, not the divisor, is what bounds
-     * the saving - at the slowest cadence this is a ~40% reduction in walk
-     * rate, not an unbounded one.
+     * [MAX_TEXT_SCAN_MS] is a hard ceiling, so this stays a battery trade
+     * and never becomes a detection one: gates 4/4b are what catch a private
+     * tab or a typed search term, and the design target throughout this
+     * cascade is catching one inside half a second. That ceiling, not the
+     * divisor, is what bounds the saving - at the slowest cadence this is a
+     * ~40% reduction in walk rate, not an unbounded one.
      */
-    val browserTextScanIntervalMs: Long
-        get() = (captureThrottleMs / BROWSER_TEXT_SCAN_DIVISOR)
-            .coerceIn(MIN_BROWSER_TEXT_SCAN_MS, MAX_BROWSER_TEXT_SCAN_MS)
+    val textScanIntervalMs: Long
+        get() = (captureThrottleMs / TEXT_SCAN_DIVISOR)
+            .coerceIn(MIN_TEXT_SCAN_MS, MAX_TEXT_SCAN_MS)
 
     /**
      * FrameDiffGate's own on/off switch - off by default, preserving
@@ -874,15 +878,15 @@ class PrefsRepository(context: Context) {
         // actual margin staticRecheckIntervalMs applies.
         const val STATIC_RECHECK_MARGIN_MS = 200L
 
-        // See browserTextScanIntervalMs. The divisor is chosen so the default
+        // See textScanIntervalMs. The divisor is chosen so the default
         // 1800ms cadence reproduces the previous hardcoded 300ms exactly,
         // making this a no-op for anyone who never moved the slider; the
         // bounds are what actually govern the range. The 500ms ceiling is the
         // load-bearing one - it keeps gate 4's "catch a private tab inside
         // half a second" property true at every slider position.
-        const val BROWSER_TEXT_SCAN_DIVISOR = 6L
-        const val MIN_BROWSER_TEXT_SCAN_MS = 300L
-        const val MAX_BROWSER_TEXT_SCAN_MS = 500L
+        const val TEXT_SCAN_DIVISOR = 6L
+        const val MIN_TEXT_SCAN_MS = 300L
+        const val MAX_TEXT_SCAN_MS = 500L
 
         // FrameDiffGate defaults - see FrameDiffGate's own class doc for
         // why these three specifically (similarity threshold, and the two
