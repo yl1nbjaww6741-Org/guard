@@ -835,18 +835,31 @@ screen yet.
 
 Deliberately matches against a *new*, narrower text source -
 `NodeScanResult.inputFieldText` - rather than reusing gate 4's
-`visibleText` whole-page scan. `NodeInspector.scan()` now also collects
-text from nodes where `isEditable` is true (the framework's own signal for
-"this is a text input," not a className guess - works the same regardless
-of which concrete widget class a given browser uses for its address bar),
-kept in a separate field from the general page-text scan. Matching against
-the whole page instead would catch far more than intended: health/biology
-articles, sex-ed material, and ordinary news coverage all legitimately
-contain many of these words, and gate 4 already hit exactly this failure
-mode once (see above) before its root cause was found. A rendered
-WebView's page body is never exposed as an editable node's own text, so
-restricting to `inputFieldText` keeps this to what's actually being
-searched for.
+`visibleText` whole-page scan. Matching against the whole page instead
+would catch far more than intended: health/biology articles, sex-ed
+material, and ordinary news coverage all legitimately contain many of
+these words, and gate 4 already hit exactly this failure mode once (see
+above) before its root cause was found. A rendered WebView's page body is
+never exposed as an editable node's own text, so restricting to
+`inputFieldText` keeps this to what's actually being searched for.
+
+`inputFieldText` is built from two sources, not just the tree walk it
+started as. Real-device testing (typing a keyword into Reddit's search
+box, and separately a user report that the gate wasn't firing in a
+browser at all) found the walk-only version silently missing the field
+someone was actually typing into, two different ways: (1) the walk only
+collected `isEditable` text from nodes gated on `isVisibleToUser()`, the
+same filter `visibleText` uses - but some search-bar implementations keep
+the actual input-handling `EditText` invisible/transparent while a
+separately-styled view renders the text on screen, so the node holding
+the live-typed text never passed that filter; (2) `MAX_DEPTH` (12,
+sized for the unrelated image-node scan) truncated the walk before it
+ever reached an input field nested deeper than that - routine on
+Compose-heavy UIs. `NodeInspector.scan()` now also calls
+`root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)` - an OS-level lookup
+with no depth limit and no visibility requirement - and folds its text in
+alongside whatever the walk itself finds, so a field missed by one of the
+walk's two limitations is still caught by the other lookup.
 
 `KeywordBlocklist.EXPLICIT_KEYWORDS` favors high-precision terms - known
 adult platform names (`pornhub`, `xvideos`, etc. - unambiguous by

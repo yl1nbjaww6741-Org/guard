@@ -7,9 +7,11 @@ data class NodeScanResult(
     val hasImages: Boolean,
     val imageBounds: List<Rect>,
     val visibleText: String,
-    // Text from editable nodes only (isEditable, e.g. an address bar or
-    // search box), separate from visibleText - see KeywordBlocklist for why
+    // Text from editable nodes (isEditable, e.g. an address bar or search
+    // box), separate from visibleText - see KeywordBlocklist for why
     // search-intent matching deliberately doesn't use the whole-page text.
+    // Built from two sources - see scan()'s findFocus(FOCUS_INPUT) lookup
+    // for why the depth-capped/visibility-gated walk alone isn't enough.
     val inputFieldText: String,
 )
 
@@ -59,6 +61,42 @@ object NodeInspector {
         val inputText = StringBuilder()
         var visited = 0
         var hasSubstantialContent = false
+
+        // Primary source for inputFieldText, not the walk below. Real-
+        // device investigation (Reddit's search box, see SETUP.md) found
+        // two ways the walk's own isEditable collection silently misses the
+        // field someone is actually typing into: (1) it's gated on
+        // isVisibleToUser() the same way visibleText is, but a real-device
+        // repro found a custom search-bar pattern where the input-handling
+        // EditText itself is invisible/transparent while a separately-
+        // styled view shows the text on screen; (2) MAX_DEPTH (sized for
+        // the unrelated image-node scan) is only 12 levels, and a
+        // Compose-heavy UI commonly nests its input field past that,
+        // truncating the walk before it ever reaches it. findFocus(FOCUS_INPUT)
+        // is an OS-level lookup with no depth limit and no visibility
+        // requirement, so it finds the same field reliably regardless of
+        // either failure mode. The walk's own isEditable collection below is
+        // kept too (not replaced) - some browsers legitimately expose the
+        // address bar as an ordinary visible/shallow node the walk already
+        // catches, and a second, unfocused editable field (rare, but
+        // possible) would only ever surface through the walk. Unioning both
+        // costs nothing extra to match against - KeywordBlocklist only cares
+        // whether any of its terms appear anywhere in the combined text.
+        val focusedInput = try {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        } catch (e: Exception) {
+            null
+        }
+        if (focusedInput != null) {
+            try {
+                if (focusedInput.isEditable) {
+                    focusedInput.text?.let { if (it.isNotBlank()) inputText.append(it).append(' ') }
+                }
+            } finally {
+                @Suppress("DEPRECATION")
+                focusedInput.recycle()
+            }
+        }
 
         fun walk(node: AccessibilityNodeInfo, depth: Int) {
             if (depth > MAX_DEPTH || visited >= MAX_NODES) return
