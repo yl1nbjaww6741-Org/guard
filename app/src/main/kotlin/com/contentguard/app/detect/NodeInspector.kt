@@ -24,6 +24,18 @@ object NodeInspector {
     private const val MAX_NODES = 400
     private const val MIN_NODE_SIZE_PX = 64
 
+    // Bounds the CPU cost of matching visibleText against the keyword lists
+    // (IncognitoDetector.CONTENT_KEYWORDS, KeywordBlocklist.EXPLICIT_KEYWORDS)
+    // on a dense screen - a long feed or article can otherwise push
+    // visibleText into the tens of KB, and every keyword match is a full
+    // scan of that string. A keyword is essentially always going to appear,
+    // if it appears at all, well within the first few thousand characters
+    // of on-screen content, so this trades away text far past what any
+    // real match needs rather than any actual detection ability. Doesn't
+    // affect hasImages/imageBounds or the walk's node/depth budget - only
+    // stops growing the text buffer once it's already generous.
+    private const val MAX_VISIBLE_TEXT_CHARS = 4_000
+
     // Used only to decide whether to bother capturing at all - deliberately
     // looser than the per-image heuristic below. Compose's accessibility
     // semantics merging (mergeDescendants) commonly collapses an image and
@@ -102,7 +114,7 @@ object NodeInspector {
             // to the user. Doesn't affect hasImages/imageBounds above -
             // those are geometry-only and already require a real size
             // regardless of this filter.
-            if (node.isVisibleToUser()) {
+            if (node.isVisibleToUser() && text.length < MAX_VISIBLE_TEXT_CHARS) {
                 node.text?.let { if (it.isNotBlank()) text.append(it).append(' ') }
                 node.contentDescription?.let { if (it.isNotBlank()) text.append(it).append(' ') }
             }

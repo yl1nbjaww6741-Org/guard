@@ -69,28 +69,41 @@ class PrefsRepository(context: Context) {
      * run - see ContentGuardService.processFrame's pre-scan gate. Applies in
      * every monitored app, not just browsers: gate 4b's explicit-keyword
      * matching runs everywhere, so the walk that feeds it needs pacing
-     * everywhere too, the same reasoning that originally motivated this for
-     * browsers specifically.
+     * everywhere too.
      *
-     * Derived from [captureThrottleMs] rather than a fixed constant, because
-     * a fixed floor made the capture-cadence slider only half true in
-     * exactly the apps people browse/search in most. Those walks are the
-     * dominant cost there, not the screenshots: a walk is hundreds of binder
-     * calls into the foreground app across up to 400 nodes, and real
-     * on-device logs showed roughly seven of them per successful capture
-     * while scrolling Chrome. Moving the slider toward "Better battery" cut
-     * screenshots and left that untouched.
+     * Independently user-tunable, not derived from [captureThrottleMs] the
+     * way it originally was. That derivation clamped this to a 300-500ms
+     * range regardless of where the capture-cadence slider sat, on the
+     * reasoning that gate 4/4b exist to catch something *typed* within half
+     * a second. Once gate 4b moved to matching rendered on-screen text
+     * instead of live keystrokes (see KeywordBlocklist's doc comment),
+     * that half-second target stopped applying here - on-screen content
+     * doesn't disappear the instant it renders the way a keystroke's
+     * urgency does, so this can run far less often without meaningfully
+     * hurting detection, in exchange for real battery savings: this walk
+     * is hundreds of binder calls into the foreground app across up to 400
+     * nodes, and real on-device logs showed roughly seven of them per
+     * successful capture while scrolling Chrome at the old 300ms floor.
+     * Default of [DEFAULT_TEXT_SCAN_MS] (3s) reflects that - a deliberately
+     * more relaxed starting point than the capture-cadence default, not
+     * just the old derived floor's ceiling. See RulesTab's "Text scan
+     * interval" slider - lower is stricter (weakening move, password-gated
+     * to raise), same convention as [captureThrottleMs].
      *
-     * [MAX_TEXT_SCAN_MS] is a hard ceiling, so this stays a battery trade
-     * and never becomes a detection one: gates 4/4b are what catch a private
-     * tab or an explicit-keyword match, and the design target throughout
-     * this cascade is catching one inside half a second. That ceiling, not
-     * the divisor, is what bounds the saving - at the slowest cadence this
-     * is a ~40% reduction in walk rate, not an unbounded one.
+     * Shared with gate 4's *content*-based incognito fallback
+     * (IncognitoDetector.matchingContentKeyword against the same walk's
+     * visibleText, since they're the same walk) - raising this slider also
+     * paces that fallback more loosely. Gate 4's primary detection (the
+     * window-title check in onAccessibilityEvent) is a plain string match
+     * on the title, not this walk, so it stays instant regardless of where
+     * this slider sits; only the fallback that catches what the title check
+     * misses gets slower.
      */
-    val textScanIntervalMs: Long
-        get() = (captureThrottleMs / TEXT_SCAN_DIVISOR)
-            .coerceIn(MIN_TEXT_SCAN_MS, MAX_TEXT_SCAN_MS)
+    var textScanIntervalMs: Long
+        get() = prefs.getLong(KEY_TEXT_SCAN_INTERVAL_MS, DEFAULT_TEXT_SCAN_MS)
+        set(value) {
+            prefs.edit().putLong(KEY_TEXT_SCAN_INTERVAL_MS, value.coerceIn(MIN_TEXT_SCAN_MS, MAX_TEXT_SCAN_MS)).apply()
+        }
 
     /**
      * FrameDiffGate's own on/off switch - off by default, preserving
@@ -553,6 +566,7 @@ class PrefsRepository(context: Context) {
     sealed class PendingWeakenAction {
         data class SetThreshold(val value: Float) : PendingWeakenAction()
         data class SetCaptureThrottleMs(val value: Long) : PendingWeakenAction()
+        data class SetTextScanIntervalMs(val value: Long) : PendingWeakenAction()
         data class RemoveKeyword(val keyword: String) : PendingWeakenAction()
         object ResetKeywordsToDefault : PendingWeakenAction()
         data class SetStrikesToLockout(val value: Int) : PendingWeakenAction()
@@ -660,6 +674,7 @@ class PrefsRepository(context: Context) {
         when (action) {
             is PendingWeakenAction.SetThreshold -> nsfwThreshold = action.value
             is PendingWeakenAction.SetCaptureThrottleMs -> captureThrottleMs = action.value
+            is PendingWeakenAction.SetTextScanIntervalMs -> textScanIntervalMs = action.value
             is PendingWeakenAction.RemoveKeyword -> removeExplicitKeyword(action.keyword)
             PendingWeakenAction.ResetKeywordsToDefault -> resetExplicitKeywordsToDefault()
             is PendingWeakenAction.SetStrikesToLockout -> strikesToLockout = action.value
@@ -684,6 +699,7 @@ class PrefsRepository(context: Context) {
     private fun PendingWeakenAction.slotKey(): String = when (this) {
         is PendingWeakenAction.SetThreshold -> "SetThreshold"
         is PendingWeakenAction.SetCaptureThrottleMs -> "SetCaptureThrottleMs"
+        is PendingWeakenAction.SetTextScanIntervalMs -> "SetTextScanIntervalMs"
         is PendingWeakenAction.RemoveKeyword -> "RemoveKeyword:$keyword"
         PendingWeakenAction.ResetKeywordsToDefault -> "ResetKeywordsToDefault"
         is PendingWeakenAction.SetStrikesToLockout -> "SetStrikesToLockout"
@@ -746,6 +762,7 @@ class PrefsRepository(context: Context) {
     private fun PendingWeakenAction.typeTag(): String = when (this) {
         is PendingWeakenAction.SetThreshold -> "SetThreshold"
         is PendingWeakenAction.SetCaptureThrottleMs -> "SetCaptureThrottleMs"
+        is PendingWeakenAction.SetTextScanIntervalMs -> "SetTextScanIntervalMs"
         is PendingWeakenAction.RemoveKeyword -> "RemoveKeyword"
         PendingWeakenAction.ResetKeywordsToDefault -> "ResetKeywordsToDefault"
         is PendingWeakenAction.SetStrikesToLockout -> "SetStrikesToLockout"
@@ -768,6 +785,7 @@ class PrefsRepository(context: Context) {
     private fun PendingWeakenAction.paramValue(): String = when (this) {
         is PendingWeakenAction.SetThreshold -> value.toString()
         is PendingWeakenAction.SetCaptureThrottleMs -> value.toString()
+        is PendingWeakenAction.SetTextScanIntervalMs -> value.toString()
         is PendingWeakenAction.RemoveKeyword -> keyword
         PendingWeakenAction.ResetKeywordsToDefault -> ""
         is PendingWeakenAction.SetStrikesToLockout -> value.toString()
@@ -793,6 +811,7 @@ class PrefsRepository(context: Context) {
         when (type) {
             "SetThreshold" -> PendingWeakenAction.SetThreshold(param.toFloat())
             "SetCaptureThrottleMs" -> PendingWeakenAction.SetCaptureThrottleMs(param.toLong())
+            "SetTextScanIntervalMs" -> PendingWeakenAction.SetTextScanIntervalMs(param.toLong())
             "RemoveKeyword" -> PendingWeakenAction.RemoveKeyword(param)
             "ResetKeywordsToDefault" -> PendingWeakenAction.ResetKeywordsToDefault
             "SetStrikesToLockout" -> PendingWeakenAction.SetStrikesToLockout(param.toInt())
@@ -875,6 +894,7 @@ class PrefsRepository(context: Context) {
         private const val KEY_LOCKOUT_PREFIX = "lockout_until_"
         private const val KEY_PASSWORD_HASH = "password_hash"
         private const val KEY_CAPTURE_THROTTLE_MS = "capture_throttle_ms"
+        private const val KEY_TEXT_SCAN_INTERVAL_MS = "text_scan_interval_ms"
         private const val KEY_VERBOSE_LOGGING = "verbose_logging"
         private const val KEY_LAST_HEARTBEAT_AT = "service_last_heartbeat_at_millis"
         private const val KEY_FRAME_DIFF_ENABLED = "frame_diff_gate_enabled"
@@ -910,15 +930,18 @@ class PrefsRepository(context: Context) {
         // actual margin staticRecheckIntervalMs applies.
         const val STATIC_RECHECK_MARGIN_MS = 200L
 
-        // See textScanIntervalMs. The divisor is chosen so the default
-        // 1800ms cadence reproduces the previous hardcoded 300ms exactly,
-        // making this a no-op for anyone who never moved the slider; the
-        // bounds are what actually govern the range. The 500ms ceiling is the
-        // load-bearing one - it keeps gate 4's "catch a private tab inside
-        // half a second" property true at every slider position.
-        const val TEXT_SCAN_DIVISOR = 6L
+        // See textScanIntervalMs. 3s default - deliberately more relaxed
+        // than captureThrottleMs's default, on the reasoning that on-screen
+        // text (what gate 4b now matches) doesn't need the same half-second
+        // response time a live keystroke used to. MIN preserves the old
+        // fast/aggressive floor (300ms) for anyone who wants the previous
+        // behavior back; MAX (15s) is generous headroom for battery -
+        // there's no structural half-second guarantee to protect here the
+        // way there was for the old derived version, only a slower-to-catch
+        // trade-off the slider makes explicit.
+        const val DEFAULT_TEXT_SCAN_MS = 3_000L
         const val MIN_TEXT_SCAN_MS = 300L
-        const val MAX_TEXT_SCAN_MS = 500L
+        const val MAX_TEXT_SCAN_MS = 15_000L
 
         // FrameDiffGate defaults - see FrameDiffGate's own class doc for
         // why these three specifically (similarity threshold, and the two

@@ -52,6 +52,7 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
     var threshold by remember { mutableFloatStateOf(prefs.nsfwThreshold) }
     var dismissOnBlock by remember { mutableStateOf(prefs.dismissOnBlock) }
     var captureThrottleMs by remember { mutableStateOf(prefs.captureThrottleMs) }
+    var textScanIntervalMs by remember { mutableStateOf(prefs.textScanIntervalMs) }
     var explicitKeywords by remember { mutableStateOf(prefs.getExplicitKeywords()) }
     var explicitKeywordsCustomized by remember { mutableStateOf(prefs.explicitKeywordsAreCustomized()) }
     var lockoutDurationMinutes by remember { mutableStateOf(prefs.lockoutDurationMinutes) }
@@ -123,6 +124,40 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                         }
                     },
                     valueRange = PrefsRepository.MIN_CAPTURE_THROTTLE_MS.toFloat()..PrefsRepository.MAX_CAPTURE_THROTTLE_MS.toFloat(),
+                    colors = SliderDefaults.colors(thumbColor = CGColor.Guard, activeTrackColor = CGColor.Guard, inactiveTrackColor = CGColor.Raise),
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    EndLabel("Faster detection")
+                    EndLabel("Better battery")
+                }
+            }
+        }
+
+        item {
+            CGCard {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    CGLabel("Text scan interval")
+                    CGVal("${textScanIntervalMs} ms")
+                }
+                CGHint(
+                    "How often on-screen text is re-read for blocked keywords (gate 4b), independent of " +
+                        "the capture interval above - this doesn't need a screenshot or the classifier, only " +
+                        "the accessibility tree. Rendered text doesn't need the same near-instant response a " +
+                        "live keystroke does, so this can safely run much less often.",
+                )
+                Slider(
+                    value = textScanIntervalMs.toFloat(),
+                    onValueChange = { textScanIntervalMs = it.toLong() },
+                    onValueChangeFinished = {
+                        val newValue = textScanIntervalMs
+                        val oldValue = prefs.textScanIntervalMs
+                        // Lower interval = more frequent rescans = stricter.
+                        applyOrChallenge(newValue > oldValue, { textScanIntervalMs = oldValue }, PrefsRepository.PendingWeakenAction.SetTextScanIntervalMs(newValue)) {
+                            prefs.textScanIntervalMs = newValue
+                        }
+                    },
+                    valueRange = PrefsRepository.MIN_TEXT_SCAN_MS.toFloat()..PrefsRepository.MAX_TEXT_SCAN_MS.toFloat(),
                     colors = SliderDefaults.colors(thumbColor = CGColor.Guard, activeTrackColor = CGColor.Guard, inactiveTrackColor = CGColor.Raise),
                     modifier = Modifier.padding(top = 12.dp),
                 )

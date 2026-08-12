@@ -256,6 +256,7 @@ private fun PendingUnlockCard(pendingUnlock: PrefsRepository.PendingUnlock, now:
 private fun PrefsRepository.PendingWeakenAction.describeForPendingCard(): String = when (this) {
     is PrefsRepository.PendingWeakenAction.SetThreshold -> "NSFW threshold → ${"%.2f".format(value)}"
     is PrefsRepository.PendingWeakenAction.SetCaptureThrottleMs -> "Capture throttle → ${value}ms"
+    is PrefsRepository.PendingWeakenAction.SetTextScanIntervalMs -> "Text scan interval → ${value}ms"
     is PrefsRepository.PendingWeakenAction.RemoveKeyword -> "Remove keyword \"$keyword\""
     PrefsRepository.PendingWeakenAction.ResetKeywordsToDefault -> "Reset keywords to default"
     is PrefsRepository.PendingWeakenAction.SetStrikesToLockout -> "Strikes to lockout → $value"

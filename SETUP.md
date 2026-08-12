@@ -588,6 +588,42 @@ bad configuration for no benefit. `ScreenCapturer` now takes a
 on every capture call, so a Settings change takes effect immediately, no
 service restart needed.
 
+### Text scan interval split off into its own slider, well above the capture-cadence range
+
+`textScanIntervalMs` (paces gate 4b's accessibility-tree walk - see that
+gate's own section below) started out *derived* from `captureThrottleMs`,
+clamped to a 300-500ms range regardless of where the capture-cadence
+slider sat. That derivation made sense while gate 4b matched live
+keystrokes - it existed specifically to guarantee catching one within half
+a second. Once gate 4b moved to matching rendered on-screen text instead
+(same section below), that urgency no longer applied: on-screen content
+doesn't need the same near-instant response a keystroke does, so tying
+this to the capture-cadence slider's narrow range was leaving a real,
+low-risk battery saving on the table - this walk is hundreds of binder
+calls into the foreground app, and real on-device logs showed roughly
+seven of them per successful capture while scrolling Chrome at the old
+300ms floor.
+
+Split into its own independent `PrefsRepository.textScanIntervalMs`
+slider - Rules tab's "Text scan interval" card, same
+weakening-needs-password convention as every other slider here (raising
+the interval = scanning less often = the weakening move). Default raised
+from the old floor's 300ms to 3000ms - a deliberate, explicit choice to
+start from "battery-conscious" rather than "as fast as the old derivation
+allowed," now that there's no half-second guarantee to protect. Range
+extended to 300ms-15000ms (previously 300-500ms) to give the slider room
+to actually matter.
+
+Also capped `NodeInspector`'s `visibleText` collection at
+`MAX_VISIBLE_TEXT_CHARS` (4000 chars) while here - a free efficiency win
+with no detection trade-off, unlike the slider above. A dense feed/article
+screen could otherwise push `visibleText` into the tens of KB, and every
+keyword match (`IncognitoDetector.CONTENT_KEYWORDS`,
+`KeywordBlocklist.EXPLICIT_KEYWORDS`) is a full scan of that string. A
+matching keyword is essentially always going to appear, if it appears at
+all, well within the first few thousand characters of on-screen content,
+so this bounds the worst case without touching real-world recall.
+
 ### WebView was polluting the crop region in browsers
 
 Real-world testing found explicit content in Chrome consistently scoring

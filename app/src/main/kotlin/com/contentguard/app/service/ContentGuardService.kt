@@ -809,16 +809,19 @@ class ContentGuardService : AccessibilityService() {
         // every monitored app, against whatever's rendered on screen, so it
         // needs the walk regardless of whether an image capture happens
         // this cycle. Only skip the walk when BOTH a capture would be
-        // throttled AND a text scan has already run recently enough - paced to
-        // prefs.textScanIntervalMs, which derives from the capture-cadence
-        // setting (see PrefsRepository) so the slider still governs this
-        // cost. Without this pacing, every debounced event (as often as
-        // every 100ms during a scroll) would re-walk the tree - hundreds of
-        // binder calls into the foreground app's process - just to recheck
-        // text that almost certainly hasn't changed since the last walk.
-        // The event-side *title* check in onAccessibilityEvent is untouched
-        // by this - it's a plain string match with no walk, so title-based
-        // incognito detection stays instant.
+        // throttled AND a text scan has already run recently enough - paced
+        // to prefs.textScanIntervalMs, its own independent Rules-tab slider
+        // (see PrefsRepository) rather than tied to the capture-cadence
+        // one - rendered text doesn't need the same near-instant response a
+        // live keystroke does, so it can be paced much more loosely without
+        // materially hurting detection. Without this pacing, every
+        // debounced event (as often as every 100ms during a scroll) would
+        // re-walk the tree - hundreds of binder calls into the foreground
+        // app's process - just to recheck text that almost certainly hasn't
+        // changed since the last walk. The event-side *title* check in
+        // onAccessibilityEvent is untouched by this - it's a plain string
+        // match with no walk, so title-based incognito detection stays
+        // instant.
         if (screenCapturer.wouldThrottle() &&
             SystemClock.elapsedRealtime() - lastTextScanAt < prefs.textScanIntervalMs
         ) {
