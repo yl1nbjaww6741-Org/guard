@@ -73,10 +73,19 @@ object KeywordBlocklist {
         "magnet:", ".torrent",
     )
 
-    /** [keywords] defaults to the built-in list; callers pass PrefsRepository's stored set instead when available. */
-    fun matchingKeyword(text: String, keywords: Set<String> = EXPLICIT_KEYWORDS): String? {
-        if (text.isBlank()) return null
-        val lower = text.lowercase()
-        return keywords.firstOrNull { lower.contains(it) }
+    /**
+     * [keywords] defaults to the built-in list; callers pass PrefsRepository's
+     * stored set instead when available.
+     *
+     * [lowerText] must already be lowercased by the caller, not raw text -
+     * this and [IncognitoDetector.matchingContentKeyword] are both called
+     * with the same `scan.visibleText` in a browser, and each doing its own
+     * `.lowercase()` on that string was pure duplicate work every walk.
+     * `ContentGuardService.processFrame` lowercases once and passes the
+     * result to both.
+     */
+    fun matchingKeyword(lowerText: String, keywords: Set<String> = EXPLICIT_KEYWORDS): String? {
+        if (lowerText.isBlank()) return null
+        return keywords.firstOrNull { lowerText.contains(it) }
     }
 }

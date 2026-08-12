@@ -851,6 +851,14 @@ class ContentGuardService : AccessibilityService() {
         // would never show it moving.
         prefs.recordNodeWalk()
 
+        // Lowercased once here, not inside each matcher - matchingContentKeyword
+        // below and KeywordBlocklist.matchingKeyword right after it are both
+        // called against this same string in a browser, and each doing its
+        // own .lowercase() on it was pure duplicate work every walk. Cheap
+        // either way now that visibleText is capped (see NodeInspector's
+        // MAX_VISIBLE_TEXT_CHARS), but free to only pay once.
+        val visibleTextLower = scan.visibleText.lowercase()
+
         // Fallback for when the window-title check in onAccessibilityEvent
         // didn't catch it (e.g. the title only changes on the initial
         // window-state-change and a private tab's *content* wasn't loaded
@@ -863,7 +871,7 @@ class ContentGuardService : AccessibilityService() {
         // screen at all, since capture (gates 5-7) structurally cannot see
         // into a FLAG_SECURE window anyway.
         val matchedContentKeyword = if (IncognitoDetector.isBrowserPackage(pkg)) {
-            IncognitoDetector.matchingContentKeyword(scan.visibleText)
+            IncognitoDetector.matchingContentKeyword(visibleTextLower)
         } else {
             null
         }
@@ -899,7 +907,7 @@ class ContentGuardService : AccessibilityService() {
         // every monitored app, so a Reddit post title, an Instagram
         // caption, or a Play Store listing matches exactly the same as a
         // browser tab does.
-        val matchedExplicitKeyword = KeywordBlocklist.matchingKeyword(scan.visibleText, prefs.getExplicitKeywords())
+        val matchedExplicitKeyword = KeywordBlocklist.matchingKeyword(visibleTextLower, prefs.getExplicitKeywords())
         if (matchedExplicitKeyword != null) {
             if (!overlay.isVisible()) {
                 val line = "[$pkg] exit@GATE4B_KEYWORD_BLOCKED keyword=\"$matchedExplicitKeyword\""

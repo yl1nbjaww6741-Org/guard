@@ -250,10 +250,17 @@ object IncognitoDetector {
     // why a real false-positive here (a stray "private tab"-style label
     // somewhere in the tree) was undiagnosable last time instead of being a
     // quick keyword-and-source lookup.
-    fun matchingContentKeyword(text: String): String? {
-        if (text.isBlank()) return null
-        val lower = text.lowercase()
-        return CONTENT_KEYWORDS.firstOrNull { lower.contains(it) }
+    //
+    // [lowerText] must already be lowercased by the caller - this and
+    // KeywordBlocklist.matchingKeyword are both called with the same
+    // scan.visibleText in a browser, and each doing its own .lowercase() on
+    // that string was pure duplicate work every walk. ContentGuardService.
+    // processFrame lowercases once and passes the result to both. Unlike
+    // that one, this is browser-scoped, but the same string is still passed
+    // to both when it's already been computed regardless.
+    fun matchingContentKeyword(lowerText: String): String? {
+        if (lowerText.isBlank()) return null
+        return CONTENT_KEYWORDS.firstOrNull { lowerText.contains(it) }
     }
 
     private fun containsAny(text: String, keywords: List<String>): Boolean {
