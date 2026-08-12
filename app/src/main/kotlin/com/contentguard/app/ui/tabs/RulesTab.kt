@@ -199,15 +199,16 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
             CGCard {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        CGLabel("Search terms")
+                        CGLabel("Blocked keywords")
                         Spacer(modifier = Modifier.width(6.dp))
                         CGVal("· ${explicitKeywords.size}")
                     }
                     CGGateChip("removing")
                 }
                 CGHint(
-                    "Blocked the instant one of these is typed anywhere - an address bar, a search " +
-                        "box, any text field - before any page loads. Adding is free; removing needs your password.",
+                    "Blocked the instant one of these appears anywhere on screen - a page, a post, a " +
+                        "caption, a title - in any app you monitor, whether you typed it or just scrolled " +
+                        "to it. Adding is free; removing needs your password.",
                 )
                 KeywordManager(
                     keywords = explicitKeywords,

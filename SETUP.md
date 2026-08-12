@@ -824,82 +824,84 @@ anyway. `RECEIVER_NOT_EXPORTED` is correct here (not
 broadcast only the OS itself can send, so no other app needs to be able to
 trigger this.
 
-### Gate 4b: keyword-based search blocking, on search intent not page content
+### Gate 4b: keyword-based blocking on rendered content, not just search intent
 
-`KeywordBlocklist.kt` blocks an app outright the moment an explicit search
-term is typed into an address bar, search box, or any other text field,
-before any page or image ever loads - same placement in `processFrame` as
-gate 4 above, checked before GATE3's image-content check, for the same
-reason: this should block regardless of whether an image is even on
-screen yet.
+`KeywordBlocklist.kt` blocks an app outright the moment an explicit-content
+keyword appears anywhere on screen - a page, a post, a caption, a title -
+whether reached by typing a search, tapping a link or thumbnail, or just
+scrolling into it. Same placement in `processFrame` as gate 4 above,
+checked before GATE3's image-content check, for the same reason: this
+should block regardless of whether an image is even on screen yet.
 
-Deliberately matches against a *new*, narrower text source -
-`NodeScanResult.inputFieldText` - rather than reusing gate 4's
-`visibleText` whole-page scan. Matching against the whole page instead
-would catch far more than intended: health/biology articles, sex-ed
-material, and ordinary news coverage all legitimately contain many of
-these words, and gate 4 already hit exactly this failure mode once (see
-above) before its root cause was found. A rendered WebView's page body is
-never exposed as an editable node's own text, so restricting to
-`inputFieldText` keeps this to what's actually being searched for.
+This gate has gone through three real designs, in order, each a direct
+response to a concrete failure the previous one hit:
 
-`inputFieldText` is built from two sources, not just the tree walk it
-started as. Real-device testing (typing a keyword into Reddit's search
-box, and separately a user report that the gate wasn't firing in a
-browser at all) found the walk-only version silently missing the field
-someone was actually typing into, two different ways: (1) the walk only
-collected `isEditable` text from nodes gated on `isVisibleToUser()`, the
-same filter `visibleText` uses - but some search-bar implementations keep
-the actual input-handling `EditText` invisible/transparent while a
-separately-styled view renders the text on screen, so the node holding
-the live-typed text never passed that filter; (2) `MAX_DEPTH` (12,
-sized for the unrelated image-node scan) truncated the walk before it
-ever reached an input field nested deeper than that - routine on
-Compose-heavy UIs. `NodeInspector.scan()` now also calls
-`root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)` - an OS-level lookup
-with no depth limit and no visibility requirement - and folds its text in
-alongside whatever the walk itself finds, so a field missed by one of the
-walk's two limitations is still caught by the other lookup.
+1. **Whole-page text, unscoped by app.** The original version matched
+   `EXPLICIT_KEYWORDS` against every visible node's text - the same
+   `NodeScanResult.visibleText` gate 4's content-check uses.
+2. **Editable-field-only, browser-restricted.** Matching whole-page text
+   with no further scoping is exactly what gate 4 (see above) already
+   proved false-positive-prone: health/biology articles, sex-ed material,
+   ordinary news coverage, and moderation-policy discussions can all
+   legitimately contain these words. So this gate was narrowed to match
+   only `NodeScanResult.inputFieldText` - text from editable/focused nodes,
+   i.e. what's actively being typed, not incidental page content - and
+   restricted to `IncognitoDetector.BROWSER_PACKAGES`, reusing gate 4's
+   package check for convenience since the original use case was address
+   bars. `inputFieldText` itself went through its own real-device bug
+   history at this stage (a depth-capped, visibility-gated walk silently
+   missing the field someone was actually typing into on Reddit and in at
+   least one browser - fixed by also sourcing it from
+   `root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)`, an OS-level lookup
+   with no depth limit or visibility requirement).
+3. **Back to whole-page text, unscoped by app - the current, settled
+   design.** The narrower version's own gap became the active complaint:
+   restricting to editable fields meant a post tapped rather than
+   searched for, or a search box outside a small hand-maintained browser
+   list (Play Store, Reddit, Instagram, ...), was never checked at all.
+   Explicit, informed choice to trade back some of design 2's precision
+   for design 1's coverage - full `EXPLICIT_KEYWORDS` list, matched against
+   `visibleText`, in every monitored app, not just browsers.
+   `inputFieldText` and its `findFocus` machinery were removed outright
+   (nothing else used it) rather than kept alongside the whole-page match,
+   since a superset of what it caught is now covered by (1). The
+   false-positive risk design 2 was built to avoid is real and accepted,
+   not overlooked - see `GATE4B_KEYWORD_BLOCKED keyword="..."` below for
+   how it's kept diagnosable.
 
 `KeywordBlocklist.EXPLICIT_KEYWORDS` favors high-precision terms - known
 adult platform names (`pornhub`, `xvideos`, etc. - unambiguous by
 themselves) and explicit-content genre phrases (`"xxx video"`, `"nude
 pics"`, ...) - over bare anatomical terms, which show up constantly in
-ordinary non-adult contexts and would make even this narrower scope noisy.
-Not exhaustive by design - a starting set of the terms someone would
-actually type to search for adult content, easy to extend later based on
-real `GATE4B_KEYWORD_BLOCKED keyword="..."` log activity, the same
-diagnose-from-logs pattern gate 4 now follows.
+ordinary non-adult contexts and would be far noisier still against
+whole-page text. Not exhaustive by design - a starting set of the terms
+most likely to indicate adult content, not an attempt to enumerate every
+possible adult site or slang term that exists. `ContentGuardService` logs
+`GATE4B_KEYWORD_BLOCKED keyword="..."` on every block, naming the exact
+term that matched - the same diagnose-from-logs pattern gate 4 already
+established, and the main defense against this design's accepted
+false-positive risk: a real false positive is a direct lookup (which term,
+which app) instead of a re-investigation.
 
-Unlike gate 4's content-keyword check, *not* restricted to
-`IncognitoDetector.BROWSER_PACKAGES` - it runs in every monitored app. That
-restriction exists for gate 4 because matching whole-tree text is false-
-positive-prone outside a known, tested set of browsers (see gate 4's
-section above); this gate only ever looks at a single focused, editable
-node - what's actively being typed, not incidental content - so the same
-risk doesn't apply, and restricting it to browsers only meant a search
-typed into, say, Play Store's, Reddit's, or Instagram's own search box was
-never checked at all - the exact gap a real user report surfaced ("working
-on Chrome, nothing on Play Store/Reddit/Instagram"). (It was browser-
-restricted for a stretch in this project's history, reusing gate 4's
-package check for convenience since the original use case was address
-bars - that restriction, and a separate real bug in how `inputFieldText`
-itself was built, got tangled together and reverted/refixed more than
-once; see the `inputFieldText` section above for the node-detection half
-of that history. This is the settled state: unrestricted by app, robust
-node detection.)
+Not restricted to `IncognitoDetector.BROWSER_PACKAGES` - runs in every
+monitored app, so a Reddit post title, an Instagram caption, or a Play
+Store listing matches exactly the same as a browser tab does.
 
 No dedicated on/off Settings toggle, same reasoning as gate 4 - but unlike
 gate 4, the keyword list itself is editable: `PrefsRepository.getExplicitKeywords()`
 starts from `KeywordBlocklist.EXPLICIT_KEYWORDS` until customized, at which
 point the stored set replaces the default rather than layering on top of
-it. The Settings screen's "Explicit search keywords" card (password-gated,
-same as every other Settings card) lets the developer add/remove terms and
-reset back to the built-in list. This is a real, accepted trade-off -
-clearing every keyword functionally disables the gate, the same way
-setting the NSFW threshold to 1.0 already can for gates 6/7 - kept
-editable anyway because a fixed, unreviewable list can't be tuned for
-false positives/negatives actually observed on a real device.
+it. The Settings screen's "Blocked keywords" card (password-gated, same as
+every other Settings card) lets the developer add/remove terms and reset
+back to the built-in list. This matters more here than it did for the
+narrower, input-field-only design: removing a keyword that turns out to
+match too broadly against rendered text (a term that also names a
+mainstream news topic, say) is the intended escape hatch for this design's
+accepted trade-off, not just a nice-to-have. Clearing every keyword still
+functionally disables the gate entirely, the same way setting the NSFW
+threshold to 1.0 already can for gates 6/7 - kept editable anyway because
+a fixed, unreviewable list can't be tuned for false positives/negatives
+actually observed on a real device.
 
 ### Gate 5b: structural FLAG_SECURE detection, browser-agnostic without keywords
 

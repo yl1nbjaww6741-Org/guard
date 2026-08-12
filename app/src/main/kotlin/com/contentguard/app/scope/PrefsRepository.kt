@@ -83,10 +83,10 @@ class PrefsRepository(context: Context) {
      *
      * [MAX_TEXT_SCAN_MS] is a hard ceiling, so this stays a battery trade
      * and never becomes a detection one: gates 4/4b are what catch a private
-     * tab or a typed search term, and the design target throughout this
-     * cascade is catching one inside half a second. That ceiling, not the
-     * divisor, is what bounds the saving - at the slowest cadence this is a
-     * ~40% reduction in walk rate, not an unbounded one.
+     * tab or an explicit-keyword match, and the design target throughout
+     * this cascade is catching one inside half a second. That ceiling, not
+     * the divisor, is what bounds the saving - at the slowest cadence this
+     * is a ~40% reduction in walk rate, not an unbounded one.
      */
     val textScanIntervalMs: Long
         get() = (captureThrottleMs / TEXT_SCAN_DIVISOR)

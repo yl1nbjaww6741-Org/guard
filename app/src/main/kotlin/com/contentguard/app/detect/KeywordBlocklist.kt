@@ -1,31 +1,39 @@
 package com.contentguard.app.detect
 
 /**
- * Gate 4b of the cascade: blocks on explicit *search intent* rather than
- * rendered content - matching known adult-content keywords against
- * [NodeScanResult.inputFieldText] (what's actually typed into an address
- * bar or search box), so a query gets blocked before any page or image
- * ever has a chance to load, the same way [IncognitoDetector] blocks a
- * private tab before capture ever runs.
+ * Gate 4b of the cascade: blocks on explicit content *rendered on screen*,
+ * not just what's typed - matching known adult-content keywords against
+ * [NodeScanResult.visibleText] (every visible node's text/contentDescription,
+ * concatenated), so a page/post/feed showing one of these terms gets
+ * blocked whether it was reached by typing a search, tapping a link or
+ * thumbnail, or just scrolling into it.
  *
- * Deliberately does *not* match against the whole page's visible text the
- * way [IncognitoDetector]'s content check does. That would catch far more
- * than intended: health/biology articles, sex-ed material, and ordinary
- * news coverage all legitimately contain many of these words, and gate 4
- * already hit exactly this failure mode once (see SETUP.md - Chrome got
- * fully blocked on ordinary browsing before its root cause was found).
- * Restricting matches to editable input fields keeps this to what someone
- * is actively searching for, not incidental page content.
+ * This is a deliberate, explicit trade of precision for coverage. An
+ * earlier version of this gate matched only [NodeScanResult]'s editable-
+ * field text (what's actively being typed) specifically *because* whole-
+ * page text matching is false-positive-prone: health/biology articles,
+ * sex-ed material, ordinary news coverage, and moderation-policy
+ * discussions can all legitimately contain these words, and gate 4 (see
+ * [IncognitoDetector]) already hit exactly this failure mode once with a
+ * much narrower keyword list (Chrome got fully blocked on ordinary
+ * browsing before its root cause was found - see SETUP.md). Switched to
+ * whole-page matching anyway, on the reasoning that catching content
+ * someone tapped or scrolled to (never typed) matters more than the
+ * narrower gate's precision - so a real false positive here is an
+ * accepted possibility, not a bug. [ContentGuardService] logs
+ * `GATE4B_KEYWORD_BLOCKED keyword="..."` on every block specifically so a
+ * false positive is a direct lookup instead of a re-investigation, the
+ * same diagnose-from-logs pattern gate 4 already established.
  *
  * [EXPLICIT_KEYWORDS] favors high-precision terms - known adult platform
  * names and explicit-content genre words - over bare anatomical terms,
- * which appear constantly in ordinary, non-adult contexts and would make
- * even the narrower input-field scope noisy. Not exhaustive by design: a
- * starting set of the terms someone would actually type to search for
- * adult content, not an attempt to enumerate every possible adult site or
- * slang term that exists - see [PrefsRepository.getExplicitKeywords] for
- * the editable, persisted set actually used at runtime (this constant is
- * only its default until customized).
+ * which appear constantly in ordinary, non-adult contexts and would be
+ * far noisier still against whole-page text. Not exhaustive by design: a
+ * starting set of the terms most likely to indicate adult content, not an
+ * attempt to enumerate every possible adult site or slang term that
+ * exists - see [PrefsRepository.getExplicitKeywords] for the editable,
+ * persisted set actually used at runtime (this constant is only its
+ * default until customized).
  *
  * No dedicated on/off Settings toggle, same reasoning as IncognitoDetector -
  * but unlike that gate, the keyword *content* itself is deliberately
@@ -34,7 +42,11 @@ package com.contentguard.app.detect
  * trade-off: clearing every keyword does functionally disable this gate,
  * same as setting the NSFW threshold to 1.0 already can for gates 6/7 -
  * kept editable anyway because a fixed, unreviewable list can't be tuned
- * for false positives/negatives the developer actually observes.
+ * for false positives/negatives the developer actually observes. Given
+ * the false-positive risk above, that editability matters more here than
+ * it did for the narrower input-field version - removing a keyword that
+ * turns out to be too broad (e.g. a term that also names a mainstream
+ * news topic) is the intended escape hatch, not just a nice-to-have.
  */
 object KeywordBlocklist {
 

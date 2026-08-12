@@ -805,12 +805,11 @@ class ContentGuardService : AccessibilityService() {
 
         // When the capture throttle guarantees gate 5 would drop this frame
         // anyway, the tree walk below is still worth running for gate 4b
-        // alone - explicit-keyword matching (scan.inputFieldText) runs in
-        // every monitored app now, not just browsers, so a search typed
-        // into Play Store, Reddit, or any other app's search box needs the
-        // walk regardless of whether an image capture happens this cycle.
-        // Only skip the walk when BOTH a capture would be throttled AND a
-        // text scan has already run recently enough - paced to
+        // alone - explicit-keyword matching (scan.visibleText) runs in
+        // every monitored app, against whatever's rendered on screen, so it
+        // needs the walk regardless of whether an image capture happens
+        // this cycle. Only skip the walk when BOTH a capture would be
+        // throttled AND a text scan has already run recently enough - paced to
         // prefs.textScanIntervalMs, which derives from the capture-cadence
         // setting (see PrefsRepository) so the slider still governs this
         // cost. Without this pacing, every debounced event (as often as
@@ -880,26 +879,24 @@ class ContentGuardService : AccessibilityService() {
             return
         }
 
-        // Blocks on explicit search intent - what's typed into an address
-        // bar, search box, or any other text field, in any monitored app -
-        // before any page/image ever loads. Matches against
-        // scan.inputFieldText specifically (editable/focused nodes only),
-        // not the whole-page visibleText above, so this doesn't inherit
-        // gate 4's false-positive history from matching ordinary page
-        // content. See KeywordBlocklist's doc comment. Checked before
-        // GATE3 for the same reason as the incognito checks above - this
-        // blocks outright regardless of whether an image is on screen.
+        // Blocks on explicit content rendered anywhere on screen, in any
+        // monitored app - a page, a post, a caption, a title - not just
+        // what's typed. Matches scan.visibleText (the same whole-page text
+        // the incognito content-check above uses) against the full
+        // EXPLICIT_KEYWORDS list. See KeywordBlocklist's doc comment for why
+        // this deliberately trades some of the narrower, input-field-only
+        // version's precision for catching content reached by tapping or
+        // scrolling, not just search - and for the false-positive risk that
+        // trade knowingly accepts. Checked before GATE3 for the same reason
+        // as the incognito check above - this blocks outright regardless of
+        // whether an image is on screen (a page can be explicit in text
+        // alone, before or without any image ever loading).
         //
-        // Not restricted to IncognitoDetector.BROWSER_PACKAGES the way the
-        // content-keyword check above is - that restriction exists there
-        // because whole-tree text matching is false-positive-prone outside
-        // a known, tested set of browsers (see IncognitoDetector's doc
-        // comment). This gate only ever looks at a single focused, editable
-        // node - what's actively being typed, not incidental content - so
-        // the same risk doesn't apply, and restricting it to browsers only
-        // meant a search typed into Play Store, Reddit, or Instagram's own
-        // search box was never checked at all.
-        val matchedExplicitKeyword = KeywordBlocklist.matchingKeyword(scan.inputFieldText, prefs.getExplicitKeywords())
+        // Not restricted to IncognitoDetector.BROWSER_PACKAGES - runs in
+        // every monitored app, so a Reddit post title, an Instagram
+        // caption, or a Play Store listing matches exactly the same as a
+        // browser tab does.
+        val matchedExplicitKeyword = KeywordBlocklist.matchingKeyword(scan.visibleText, prefs.getExplicitKeywords())
         if (matchedExplicitKeyword != null) {
             if (!overlay.isVisible()) {
                 val line = "[$pkg] exit@GATE4B_KEYWORD_BLOCKED keyword=\"$matchedExplicitKeyword\""

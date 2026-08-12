@@ -8,17 +8,21 @@
 
   typeViewTextChanged was added specifically for gate 4b (KeywordBlocklist):
   without it, nothing woke onAccessibilityEvent while someone was actively
-  typing a search term into an address bar or search box - typing an
-  EditText's content fires TYPE_VIEW_TEXT_CHANGED, not
+  typing - typing an EditText's content fires TYPE_VIEW_TEXT_CHANGED, not
   TYPE_WINDOW_CONTENT_CHANGED, so gate 4b only ever got checked whenever
   recheckStaticContent's periodic backstop next happened to fire (paced to
-  the capture-cadence setting, ~2s at the default). A keyword typed and
+  the capture-cadence setting, ~2s at the default). Text typed and
   submitted faster than that window could slip through uncaught, and even
   when it didn't, the multi-second lag before a block appeared was reported
   as "the keyword blocker is working, but too slowly." Listening for this
   event type directly means gate 4b runs within the ordinary event
   debounce window (~100ms) of each keystroke instead of waiting on the
-  backstop - every other gate's behavior is unchanged, since
+  backstop. Still worth keeping now that gate 4b matches rendered
+  visibleText rather than a dedicated input-field text source (see
+  KeywordBlocklist's doc comment) - a keyword typed into any field is still
+  part of that field's own displayed text, which visibleText's plain
+  node-by-node collection picks up the same as any other on-screen text, no
+  special-casing needed. Every other gate's behavior is unchanged, since
   onAccessibilityEvent's existing gates (scope, debounce, overlay-visible)
   apply to this event type exactly as they do to the others.
 
