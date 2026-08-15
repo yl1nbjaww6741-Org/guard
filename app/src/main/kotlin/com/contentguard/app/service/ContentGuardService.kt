@@ -171,7 +171,18 @@ class ContentGuardService : AccessibilityService() {
         // doc comment.
         applyPendingWeakenActionIfDue()
 
-        Log.i(TAG, "connected: mode=${prefs.mode} threshold=${prefs.nsfwThreshold}")
+        // Was Log.i-only (logcat, adb required) until this line's absence
+        // turned out to matter: HEARTBEAT_STALE recoveries prove
+        // AccessibilityWatchdogService (a live timer in this same process)
+        // is what notices and fixes a dead ContentGuardService binding, not
+        // a process restart - so a device with no adb access had no way to
+        // see a reconnect happen at all, only its symptom (a heartbeat gap)
+        // several minutes later via the watchdog's own line. Paired with
+        // onDestroy/onInterrupt below now also writing here, the Debug log
+        // card shows the full teardown/reconnect cycle with no adb needed.
+        val connectedLine = "connected: mode=${prefs.mode} threshold=${prefs.nsfwThreshold}"
+        Log.i(TAG, connectedLine)
+        DebugLogBuffer.add(TAG, connectedLine)
     }
 
     /**
@@ -1182,7 +1193,9 @@ class ContentGuardService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        Log.w(TAG, "onInterrupt")
+        val line = "onInterrupt"
+        Log.w(TAG, line)
+        DebugLogBuffer.add(TAG, line)
     }
 
     /**
@@ -1193,8 +1206,20 @@ class ContentGuardService : AccessibilityService() {
      * [oneTimeSetupDone] and the receiver handles: whatever this method
      * undoes, initializeOnce has to be allowed to do again, or the cascade
      * stays permanently dead while the service still looks connected.
+     *
+     * Logged unconditionally, first thing - previously this teardown left no
+     * trace anywhere reachable without adb, which is the actual reason "the
+     * log isn't logging" for the common case here: HEARTBEAT_STALE proves
+     * AccessibilityWatchdogService (same process) stays alive and ticking
+     * while this happens, so it's this service's live binding dying, not a
+     * process restart - CrashLog/ContentGuardApplication's restart-gap line
+     * (which only fires on an actual fresh process) never had a chance to
+     * catch it. This line is what actually marks the moment it happens.
      */
     override fun onDestroy() {
+        val line = "onDestroy - live setup torn down"
+        Log.w(TAG, line)
+        DebugLogBuffer.add(TAG, line)
         super.onDestroy()
         if (::overlay.isInitialized && overlay.isVisible()) overlay.hide()
         if (::passwordGuardOverlay.isInitialized && passwordGuardOverlay.isVisible()) passwordGuardOverlay.hide()
