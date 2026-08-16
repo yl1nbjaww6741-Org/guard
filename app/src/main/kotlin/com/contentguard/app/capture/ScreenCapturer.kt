@@ -11,6 +11,7 @@ import android.view.Display
 import androidx.annotation.RequiresApi
 import com.contentguard.app.scope.PrefsRepository
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.Executor
 import kotlin.math.max
 
@@ -126,27 +127,62 @@ class ScreenCapturer(
         class Error(val errorCode: Int) : ScreenshotAttempt
     }
 
-    private suspend fun takeScreenshotSuspending(): ScreenshotAttempt =
-        suspendCancellableCoroutine { cont ->
-            service.takeScreenshot(
-                Display.DEFAULT_DISPLAY,
-                callbackExecutor,
-                object : TakeScreenshotCallback {
-                    override fun onSuccess(result: ScreenshotResult) {
-                        if (cont.isActive) cont.resume(ScreenshotAttempt.Ok(result), onCancellation = null)
-                    }
+    /**
+     * Found from a real-device report: keyword blocking and NSFW blocking
+     * (both only reachable through ContentGuardService.processFrame, fed by
+     * its single consumeFrames consumer coroutine) went permanently dead
+     * while everything evaluated directly in onAccessibilityEvent - the
+     * settings-guard password prompt, incognito's title check - kept working
+     * fine for the rest of the process's life. That specific split, with no
+     * crash and no service teardown anywhere in the log, points at exactly
+     * one place: this suspendCancellableCoroutine had no timeout, so if the
+     * platform ever fails to invoke *either* TakeScreenshotCallback method
+     * for a given takeScreenshot() call - plausible on an OEM skin under
+     * whatever background-management pressure killed the callback - the
+     * coroutine suspends forever. Since this is the only thing consumeFrames
+     * is ever suspended on inside processFrame, that one lost callback
+     * permanently wedges the sole consumer of frameChannel: every request
+     * after it sits unread on the CONFLATED channel forever, and every gate
+     * downstream of capture (4B's placement notwithstanding - see below)
+     * stops firing for good, silently, with nothing to log because nothing
+     * ever throws.
+     *
+     * withTimeoutOrNull bounds the wait instead: generous enough (well over
+     * any real capture, which normally completes in well under a second) to
+     * never fire on a merely slow device, but finite, so a lost callback
+     * becomes an ordinary CaptureResult.Failed - same as any other refusal -
+     * instead of an unrecoverable, undetectable hang. A callback that
+     * eventually does arrive after the timeout is a safe no-op: cont.isActive
+     * is false once withTimeoutOrNull has cancelled it, so both resume calls
+     * below simply skip.
+     */
+    private suspend fun takeScreenshotSuspending(): ScreenshotAttempt {
+        val attempt = withTimeoutOrNull(SCREENSHOT_CALLBACK_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                service.takeScreenshot(
+                    Display.DEFAULT_DISPLAY,
+                    callbackExecutor,
+                    object : TakeScreenshotCallback {
+                        override fun onSuccess(result: ScreenshotResult) {
+                            if (cont.isActive) cont.resume(ScreenshotAttempt.Ok(result), onCancellation = null)
+                        }
 
-                    override fun onFailure(errorCode: Int) {
-                        // Happens whenever ColorOS itself rate-limits or denies
-                        // the call - see accessibility_service_config.xml. The
-                        // code is now carried out to the caller rather than
-                        // only reaching logcat, so the Debug log can name it.
-                        Log.d(TAG, "takeScreenshot failed: errorCode=$errorCode")
-                        if (cont.isActive) cont.resume(ScreenshotAttempt.Error(errorCode), onCancellation = null)
-                    }
-                },
-            )
+                        override fun onFailure(errorCode: Int) {
+                            // Happens whenever ColorOS itself rate-limits or denies
+                            // the call - see accessibility_service_config.xml. The
+                            // code is now carried out to the caller rather than
+                            // only reaching logcat, so the Debug log can name it.
+                            Log.d(TAG, "takeScreenshot failed: errorCode=$errorCode")
+                            if (cont.isActive) cont.resume(ScreenshotAttempt.Error(errorCode), onCancellation = null)
+                        }
+                    },
+                )
+            }
         }
+        if (attempt != null) return attempt
+        Log.w(TAG, "takeScreenshot callback never fired within ${SCREENSHOT_CALLBACK_TIMEOUT_MS}ms - treating as failed")
+        return ScreenshotAttempt.Error(ERROR_TAKESCREENSHOT_CALLBACK_TIMEOUT)
+    }
 
     private fun cropSafely(bitmap: Bitmap, region: Rect): Bitmap {
         val left = region.left.coerceIn(0, bitmap.width - 1)
@@ -189,5 +225,18 @@ class ScreenCapturer(
         // default (still 1800ms) and MIN/MAX for the slider's range.
 
         const val TARGET_LONGEST_EDGE = 640
+
+        // See takeScreenshotSuspending's doc comment. Generous relative to a
+        // real capture (normally well under 1s even on a loaded device) so
+        // this can never false-positive on ordinary slowness - it exists
+        // purely to bound the one failure mode that isn't ordinary slowness
+        // at all: the platform never calling back.
+        private const val SCREENSHOT_CALLBACK_TIMEOUT_MS = 10_000L
+
+        // Deliberately outside AccessibilityService's own ERROR_TAKE_SCREENSHOT_*
+        // range (small positive ints) so GATE5_CAPTURE_FAILED errorCode=...
+        // in the Debug log unambiguously names *this* failure - a lost
+        // callback - rather than looking like an OS-reported error code.
+        private const val ERROR_TAKESCREENSHOT_CALLBACK_TIMEOUT = -1
     }
 }

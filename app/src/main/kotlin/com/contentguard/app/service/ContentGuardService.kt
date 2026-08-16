@@ -39,6 +39,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -647,16 +648,39 @@ class ContentGuardService : AccessibilityService() {
      * screenshot bitmaps), and NodeInspector's tree walk is recursive - so
      * OutOfMemoryError, UnsatisfiedLinkError and StackOverflowError are all
      * reachable here, and none of them is an Exception. One of those on one
-     * bad frame must cost that frame, not the whole cascade. CancellationException
-     * is rethrown: that one isn't a failure, it's serviceScope being cancelled
-     * in onDestroy, and swallowing it would make this loop uncancellable.
+     * bad frame must cost that frame, not the whole cascade.
+     *
+     * withTimeout wraps processFrame itself, not just its individual
+     * suspend points (see ScreenCapturer.takeScreenshotSuspending's own
+     * timeout fix for the specific hang a real-device report traced to) -
+     * a defensive backstop against any *other* suspend point in the gate
+     * cascade someday hanging the same way: a permanently-suspended
+     * coroutine here throws nothing at all, so without a bound, that one
+     * request wedges the sole consumer of frameChannel forever, silently
+     * killing every gate downstream of capture (4B/5/5B/6/7/8) for the rest
+     * of the process's life while gates evaluated directly in
+     * onAccessibilityEvent (GATE_SETTINGS_GUARD, incognito's title check)
+     * keep working fine - exactly the split that report showed, with
+     * nothing in any log to explain it because nothing ever threw.
+     *
+     * A timeout here is a TimeoutCancellationException, a CancellationException
+     * subtype - which the catch below must NOT treat the same as
+     * serviceScope actually being cancelled in onDestroy, or a single slow
+     * frame would silently end this loop exactly like the bug being fixed.
+     * coroutineContext.isActive distinguishes them: still true means only
+     * this frame's own withTimeout fired, not the outer scope, so it's safe
+     * to log and move on to the next request; false means the real
+     * cancellation from onDestroy, which must propagate to actually end the
+     * loop.
      */
     private suspend fun consumeFrames() {
         for (request in frameChannel) {
             try {
-                processFrame(request)
+                withTimeout(PROCESS_FRAME_TIMEOUT_MS) { processFrame(request) }
             } catch (e: CancellationException) {
-                throw e
+                if (!coroutineContext.isActive) throw e
+                Log.e(TAG, "processFrame timed out for ${request.packageName}", e)
+                DebugLogBuffer.add(TAG, "[${request.packageName}] CASCADE_TIMEOUT after ${PROCESS_FRAME_TIMEOUT_MS}ms")
             } catch (t: Throwable) {
                 Log.e(TAG, "cascade error for ${request.packageName}", t)
                 DebugLogBuffer.add(TAG, "[${request.packageName}] CASCADE_ERROR ${t.javaClass.simpleName}: ${t.message}")
@@ -1251,6 +1275,14 @@ class ContentGuardService : AccessibilityService() {
         // constant rather than the tunable interval, so the recovery path
         // can't fault on the same state the tick just faulted on.
         private const val RECHECK_ERROR_BACKOFF_MS = 5_000L
+
+        // See consumeFrames' doc comment. Well above any real frame - the
+        // capture timeout alone (ScreenCapturer.SCREENSHOT_CALLBACK_TIMEOUT_MS,
+        // 10s) already accounts for the slowest single suspend point in the
+        // cascade, so this only needs enough headroom on top of that for the
+        // tree walk plus classifier inference to genuinely finish, not to
+        // itself become a tight bound.
+        private const val PROCESS_FRAME_TIMEOUT_MS = 20_000L
 
         // Standard AOSP Settings package - the "Device admin apps" and
         // "Accessibility" screens are core fragments OEMs rarely
