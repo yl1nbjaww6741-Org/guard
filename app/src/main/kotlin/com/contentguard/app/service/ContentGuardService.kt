@@ -672,6 +672,18 @@ class ContentGuardService : AccessibilityService() {
      * to log and move on to the next request; false means the real
      * cancellation from onDestroy, which must propagate to actually end the
      * loop.
+     *
+     * Known limit, so nobody mistakes this for a total guarantee: coroutine
+     * cancellation is cooperative, and withTimeout is a scoped coroutine
+     * that does not return until its body actually completes. It can
+     * therefore only unstick a body that reaches a *suspension* point -
+     * which is what the capture hang above was, and what any withContext /
+     * delay / channel wait in this cascade would be. It cannot interrupt a
+     * plain blocking call, and there is one on this path:
+     * nsfwClassifier.scoreNsfw is a synchronous native ONNX call, not a
+     * suspend fun. If that ever hung, this timeout would not fire and the
+     * consumer would still wedge. No evidence it ever has - noted because
+     * the fix's reach genuinely stops there, not as a to-do.
      */
     private suspend fun consumeFrames() {
         for (request in frameChannel) {

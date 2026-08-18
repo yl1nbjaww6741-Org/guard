@@ -49,7 +49,6 @@ object CrashLog {
 
     private const val FILE_NAME = "crash_log.txt"
     private const val TAG = "CrashLog"
-    private val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
     fun install(context: Context) {
         val appContext = context.applicationContext
@@ -69,6 +68,11 @@ object CrashLog {
     }
 
     private fun persist(context: Context, thread: Thread, throwable: Throwable) {
+        // Built here rather than held as a shared field: SimpleDateFormat is
+        // not thread-safe, and two threads crashing at once is precisely the
+        // chaotic case this handler has to stay reliable in. Allocating one
+        // per crash costs nothing at most-once-per-process-death.
+        val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
         val report = buildString {
             append(timestampFormat.format(Date()))
             append(" FATAL EXCEPTION (")
@@ -84,8 +88,8 @@ object CrashLog {
 
     /**
      * Reads and clears any crash [install] left behind, mirroring it into
-     * [DebugLogBuffer] under the CRASH tag. Safe to call every app start -
-     * a no-op once there's nothing pending.
+     * [DebugLogBuffer] under this class's own tag. Safe to call every app
+     * start - a no-op once there's nothing pending.
      */
     fun drainPersistedCrash(context: Context) {
         val file = File(context.filesDir, FILE_NAME)

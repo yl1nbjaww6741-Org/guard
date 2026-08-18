@@ -151,10 +151,21 @@ class ScreenCapturer(
      * any real capture, which normally completes in well under a second) to
      * never fire on a merely slow device, but finite, so a lost callback
      * becomes an ordinary CaptureResult.Failed - same as any other refusal -
-     * instead of an unrecoverable, undetectable hang. A callback that
-     * eventually does arrive after the timeout is a safe no-op: cont.isActive
-     * is false once withTimeoutOrNull has cancelled it, so both resume calls
-     * below simply skip.
+     * instead of an unrecoverable, undetectable hang.
+     *
+     * A late-arriving onSuccess - the callback the timeout gave up on, then
+     * delivered anyway - is NOT simply a no-op, and skipping the resume is
+     * not enough on its own. ScreenshotResult owns a HardwareBuffer, and the
+     * only place that closes it is captureDownscaled's own finally block,
+     * which is reached only via a resumed Ok. A result dropped on the floor
+     * therefore leaks a full-screen graphics buffer (multiple MB of native
+     * memory per screenshot) - and it would leak once per capture for as
+     * long as the platform keeps losing callbacks, i.e. exactly the sustained
+     * failure this timeout exists to survive. So both paths that can strand a
+     * result close it explicitly: the !isActive branch (timeout already
+     * fired), and resume's onCancellation (cancelled in the race between the
+     * isActive check and delivery). onFailure carries no buffer and needs
+     * neither.
      */
     private suspend fun takeScreenshotSuspending(): ScreenshotAttempt {
         val attempt = withTimeoutOrNull(SCREENSHOT_CALLBACK_TIMEOUT_MS) {
@@ -164,7 +175,18 @@ class ScreenCapturer(
                     callbackExecutor,
                     object : TakeScreenshotCallback {
                         override fun onSuccess(result: ScreenshotResult) {
-                            if (cont.isActive) cont.resume(ScreenshotAttempt.Ok(result), onCancellation = null)
+                            // See this method's doc comment: nothing downstream
+                            // will ever close this buffer if the continuation
+                            // is already gone, so close it here rather than
+                            // leak it.
+                            if (!cont.isActive) {
+                                result.hardwareBuffer.close()
+                                return
+                            }
+                            cont.resume(
+                                ScreenshotAttempt.Ok(result),
+                                onCancellation = { result.hardwareBuffer.close() },
+                            )
                         }
 
                         override fun onFailure(errorCode: Int) {
