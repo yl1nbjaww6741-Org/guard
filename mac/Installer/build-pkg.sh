@@ -43,17 +43,20 @@ VERSION="1.0.0"
 BUILD_DIR="build/Release"
 PKG_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "==> Building ContentGuardAgent and ContentGuardDaemon"
+echo "==> Building ContentGuardAgent, ContentGuardDaemon, ContentGuardRelease"
 xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardAgent -configuration Release
 xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardDaemon -configuration Release
+xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardRelease -configuration Release
 
 echo "==> Signing binaries with the self-signed ContentGuard Signing identity"
 codesign --force --sign "$SIGNING_IDENTITY" --options runtime "$BUILD_DIR/ContentGuardAgent.app"
 codesign --force --sign "$SIGNING_IDENTITY" --options runtime "$BUILD_DIR/ContentGuardDaemon"
+codesign --force --sign "$SIGNING_IDENTITY" --options runtime "$BUILD_DIR/ContentGuardRelease"
 
 echo "==> Verifying signatures"
 codesign --verify --verbose "$BUILD_DIR/ContentGuardAgent.app"
 codesign --verify --verbose "$BUILD_DIR/ContentGuardDaemon"
+codesign --verify --verbose "$BUILD_DIR/ContentGuardRelease"
 
 echo "==> Confirming code requirement matches what's in profiles/pppc.mobileconfig"
 AGENT_REQUIREMENT="$(codesign --display -r - "$BUILD_DIR/ContentGuardAgent.app" 2>&1 | sed -n 's/^designated => //p')"
@@ -68,6 +71,7 @@ mkdir -p "$PKG_ROOT/Installer/pkg-root/usr/local/var/lib/contentguard"
 
 cp -R "$BUILD_DIR/ContentGuardAgent.app" "$PKG_ROOT/Installer/pkg-root/usr/local/bin/"
 cp "$BUILD_DIR/ContentGuardDaemon" "$PKG_ROOT/Installer/pkg-root/usr/local/bin/"
+cp "$BUILD_DIR/ContentGuardRelease" "$PKG_ROOT/Installer/pkg-root/usr/local/bin/contentguard-release"
 cp "$PKG_ROOT/Model/nudenet_640m.onnx" "$PKG_ROOT/Installer/pkg-root/usr/local/share/contentguard/"
 
 pkgbuild --root "$PKG_ROOT/Installer/pkg-root" \

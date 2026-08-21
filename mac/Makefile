@@ -11,8 +11,10 @@
 build:
 	xcodebuild -project ContentGuard.xcodeproj -scheme ContentGuardAgent -configuration Release
 	xcodebuild -project ContentGuard.xcodeproj -scheme ContentGuardDaemon -configuration Release
+	xcodebuild -project ContentGuard.xcodeproj -scheme ContentGuardRelease -configuration Release
 	codesign --force --sign "ContentGuard Signing" --options runtime build/Release/ContentGuardAgent.app
 	codesign --force --sign "ContentGuard Signing" --options runtime build/Release/ContentGuardDaemon
+	codesign --force --sign "ContentGuard Signing" --options runtime build/Release/ContentGuardRelease
 
 # Full build -> sign -> package, producing Installer/ContentGuard-1.0.0.pkg.
 # See Installer/build-pkg.sh's header comment for why this pkg is unsigned
@@ -40,6 +42,7 @@ uninstall:
 	sudo launchctl bootout gui/$$(id -u)/com.contentguard.agent 2>/dev/null || true
 	sudo rm -rf /usr/local/bin/ContentGuardAgent.app
 	sudo rm -f /usr/local/bin/ContentGuardDaemon
+	sudo rm -f /usr/local/bin/contentguard-release
 	sudo rm -rf /usr/local/share/contentguard
 	sudo rm -rf /usr/local/var/log/contentguard
 	sudo rm -rf /usr/local/var/lib/contentguard

@@ -17,6 +17,9 @@ echo "==> ContentGuard postinstall: fixing permissions"
 chown root:wheel /usr/local/bin/ContentGuardDaemon
 chmod 755 /usr/local/bin/ContentGuardDaemon
 
+chown root:wheel /usr/local/bin/contentguard-release
+chmod 755 /usr/local/bin/contentguard-release
+
 chown -R root:wheel /usr/local/bin/ContentGuardAgent.app
 chmod -R a+rX /usr/local/bin/ContentGuardAgent.app
 
