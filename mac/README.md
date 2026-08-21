@@ -14,9 +14,9 @@ checklist before moving on:
 | Phase | What | Status |
 |---|---|---|
 | 0 | First-boot Mac setup: accounts, FileVault, Find My Mac, dev tools, WARP | done - accounts, Find My Mac, dev tools, Zero Trust/WARP all verified. FileVault and the admin account rename deliberately deferred; must land before Phase 5. |
-| 1 | Fleet MDM on Fly.io, enrollment, `.mobileconfig` profiles | **in progress** - Fleet deployed, Mac enrolled and confirmed supervised, 3 of 4 profiles pushed (PPPC pending Phase 2), Fleet Premium purchased and Recovery Lock enabled. Last step before Phase 2: the six verification tests, then lock the WARP switch. |
+| 1 | Fleet MDM on Fly.io, enrollment, `.mobileconfig` profiles | **done** - Fleet deployed, Mac enrolled and confirmed supervised, all 3 non-Phase-2 profiles pushed and verified (PPPC pending Phase 2), Fleet Premium purchased, Recovery Lock set and reboot-tested, all six verification tests passed, WARP switch locked, Gateway NSFW category block and DoH-provider IP blocklist both configured. FileVault, the admin account rename, and rotating the tunnel connector token are deliberately deferred to Phase 5's pre-lockdown checklist. |
 | 2 | Native AI blocker: `ContentGuardAgent` (capture + NudeNet) + `ContentGuardDaemon` (tamper anchor) | not started - **first step is `docs/PHASE_2_SIGNING_TEST.md`**, before writing any agent/daemon code, since its outcome (self-signed cert vs. \$99/year Apple Developer ID) decides the signing strategy for everything else in this phase |
-| 3 | Santa app execution control (LOCKDOWN mode) | not started |
+| 3 | Santa app execution control | not started - **deliberately MONITOR/blocklist mode, not the original spec's LOCKDOWN** (see `profiles/README.md`'s note on `forceAdminPasswordForAppInstallation`) - standard users install freely, the Phase 2 content blocker is the real backstop against NSFW content regardless of app, and Santa's job narrows to denylisting specific known-bad tools (Tor Browser, etc.) rather than gatekeeping everything |
 | 4 | Cloudflare Worker (ratchet, Santa sync, profile generation) + web dashboard | not started |
 | 5 | Lockdown: demote to standard, seal admin credentials in the vault | not started |
 
