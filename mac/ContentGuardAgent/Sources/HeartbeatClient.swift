@@ -16,7 +16,7 @@ final class HeartbeatClient {
     var modelHash: String = ""
 
     func start() {
-        connect()
+        connectSocket()
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now(), repeating: ContentGuardConfig.heartbeatIntervalSeconds)
         t.setEventHandler { [weak self] in
@@ -40,7 +40,14 @@ final class HeartbeatClient {
 
     // MARK: - Connection management
 
-    private func connect() {
+    // Named connectSocket(), not connect() - a same-named instance method
+    // shadows the global Darwin connect(2) call used inside it, and Swift's
+    // unqualified name lookup inside a class prefers the local member over
+    // the module-level C function regardless of differing arity, which
+    // turns the call below into a compile error rather than silently doing
+    // the wrong thing. Renaming avoids the ambiguity outright rather than
+    // qualifying every call site as Darwin.connect(...).
+    private func connectSocket() {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             scheduleReconnect()
@@ -78,7 +85,7 @@ final class HeartbeatClient {
         // not a permanent condition worth backing off from.
         t.schedule(deadline: .now() + ContentGuardConfig.heartbeatIntervalSeconds)
         t.setEventHandler { [weak self] in
-            self?.connect()
+            self?.connectSocket()
         }
         t.resume()
         reconnectTimer = t
@@ -100,7 +107,7 @@ final class HeartbeatClient {
 
     private func trySend(_ message: IPCMessage) {
         guard let connection else {
-            connect()
+            connectSocket()
             return
         }
         do {

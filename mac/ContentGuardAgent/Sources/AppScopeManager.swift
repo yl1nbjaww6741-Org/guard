@@ -27,13 +27,17 @@ protocol AppScopeManagerDelegate: AnyObject {
     func appScopeManagerDidUpdateScope(_ manager: AppScopeManager)
 }
 
-final class AppScopeManager {
+// NSObject subclass, not a plain Swift class - #selector()/@objc-based
+// NotificationCenter target-action (used below) only works on types the
+// Objective-C runtime can dispatch to, which requires NSObject inheritance.
+final class AppScopeManager: NSObject {
     weak var delegate: AppScopeManagerDelegate?
 
     private(set) var excludedApplications: [SCRunningApplication] = []
     private var latestContent: SCShareableContent?
 
-    init() {
+    override init() {
+        super.init()
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleAppLifecycleChange),
@@ -76,6 +80,27 @@ final class AppScopeManager {
         return latestContent.windows.filter { window in
             guard let owner = window.owningApplication else { return false }
             return excludedBundleIDs.contains(owner.bundleIdentifier)
+        }
+    }
+
+    /// NSWorkspace posts launch/terminate notifications synchronously on the
+    /// main thread, but refresh() has to be async (SCShareableContent's own
+    /// API is async) - so this just kicks off a Task rather than doing the
+    /// refresh inline. Marked @objc because #selector() in init() above
+    /// requires it.
+    @objc private func handleAppLifecycleChange(_ notification: Notification) {
+        Task {
+            do {
+                try await refresh()
+                delegate?.appScopeManagerDidUpdateScope(self)
+            } catch {
+                // Best-effort: on a transient SCShareableContent failure,
+                // keep whatever excludedApplications/latestContent state we
+                // already had rather than clearing it. A stale-but-nonempty
+                // safe list is the safer failure mode here - it never
+                // widens what gets excluded from capture, only narrows it
+                // back toward "cover more, not less" if it's wrong.
+            }
         }
     }
 }
