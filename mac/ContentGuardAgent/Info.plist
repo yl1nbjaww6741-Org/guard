@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.contentguard.agent</string>
+    <key>CFBundleName</key>
+    <string>ContentGuardAgent</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleExecutable</key>
+    <string>ContentGuardAgent</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <!--
+      Keeps this out of the Dock and Cmd+Tab app switcher - it's a
+      background agent, not something the user interacts with directly.
+      Also set programmatically in main.swift via
+      NSApplication.setActivationPolicy(.accessory) as a belt-and-suspenders
+      measure.
+    -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>ContentGuard uses Accessibility access as part of its content-blocking overlay.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>ContentGuard scans on-screen content locally, on-device, to detect and block explicit imagery. Nothing captured ever leaves this Mac.</string>
+</dict>
+</plist>
