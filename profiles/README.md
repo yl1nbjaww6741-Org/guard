@@ -11,7 +11,7 @@ partly off these).
 | `pppc.mobileconfig` | **Placeholder** | `__BUNDLE_ID__`/`__CODE_REQUIREMENT__` get filled in once Phase 2 builds and signs `ContentGuardAgent`. Push as-is for now - it matches nothing until then. |
 | `chrome-policy.mobileconfig` | Ready to push | |
 | `dns.mobileconfig` | Ready to push | `ServerURL` is this org's real Gateway DoH endpoint, read from `warp-cli settings` in Phase 0. Re-check that value if Gateway config ever changes. |
-| `system-extension.mobileconfig` | **Placeholder** | `__CLOUDFLARE_TEAM_ID__`/`__CLOUDFLARE_WARP_EXTENSION_BUNDLE_ID__` need pulling from the Mac (`codesign`/`systemextensionsctl` - see the profile's own comment) before this does anything. Santa's entry gets added here in Phase 3. |
+| `system-extension.mobileconfig` | **Placeholder, and won't apply to WARP** | Checked on the real Mac in Phase 1: WARP's packet tunnel runs as a Network (App) Extension, not a System Extension - `systemextensionsctl list` shows 0 extensions even with WARP connected, so this payload type doesn't govern it. Cloudflare's Team ID (`68WVV388M8`) is recorded in the profile's comment for reference only. This profile's real first use is Santa in Phase 3, whose EndpointSecurity component does use System Extensions - `__SANTA_TEAM_ID__`/`__SANTA_EXTENSION_BUNDLE_ID__` get filled in then. |
 
 ## Known open risk: `allowScreenshotsAndScreenRecording` vs. Phase 2
 

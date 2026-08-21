@@ -30,31 +30,33 @@
             <key>PayloadDisplayName</key>
             <string>ContentGuard System Extensions Payload</string>
             <!--
-              __CLOUDFLARE_TEAM_ID__ and __CLOUDFLARE_WARP_EXTENSION_BUNDLE_ID__
-              are placeholders on purpose - rather than guess Cloudflare's
-              real Apple Developer Team ID from memory (getting this wrong
-              means the rule silently matches nothing), pull the real
-              values from the WARP client already installed on the Mac:
+              Checked during Phase 1 (verified on the actual Mac, not
+              guessed): `systemextensionsctl list` shows 0 extensions even
+              with WARP installed and connected. Cloudflare WARP's packet
+              tunnel provider runs as a plain Network (App) Extension, not
+              a macOS System Extension - a different, older mechanism that
+              this payload type (com.apple.system-extension-policy)
+              doesn't govern. So there's nothing to pre-approve for WARP
+              here; it already works without it.
 
-                codesign -dv --verbose=4 "/Applications/Cloudflare WARP.app" 2>&1 | grep TeamIdentifier
-                systemextensionsctl list
+              Cloudflare's Team ID, confirmed via
+              `codesign -dv --verbose=4 "/Applications/Cloudflare WARP.app"`
+              on the real system, for reference in case a future WARP
+              version does add a System Extension: 68WVV388M8
 
-              systemextensionsctl list shows the actual activated network
-              extension's bundle identifier - use that, not the parent
-              app's bundle ID. Fill both placeholders in below and re-push
-              before this payload does anything.
-
-              Santa's system extension gets its own entry here in Phase 3,
-              once it's installed and its real Team ID/bundle ID are known
-              - add a second array entry under the same team ID key (or a
-              new key, if Santa's Team ID differs from Cloudflare's, which
-              it will) rather than replacing this one.
+              This payload's actual first use is Santa in Phase 3 - its
+              EndpointSecurity component genuinely does use the System
+              Extensions framework and needs exactly this pre-approval.
+              Once Santa's installed, pull its real Team ID/bundle ID the
+              same way (codesign + systemextensionsctl list, which WILL
+              show an entry once Santa's extension activates) and fill in
+              AllowedSystemExtensions below, then re-push.
             -->
             <key>AllowedSystemExtensions</key>
             <dict>
-                <key>__CLOUDFLARE_TEAM_ID__</key>
+                <key>__SANTA_TEAM_ID__</key>
                 <array>
-                    <string>__CLOUDFLARE_WARP_EXTENSION_BUNDLE_ID__</string>
+                    <string>__SANTA_EXTENSION_BUNDLE_ID__</string>
                 </array>
             </dict>
         </dict>
