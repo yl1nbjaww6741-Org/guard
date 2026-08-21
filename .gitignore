@@ -18,3 +18,16 @@ app/release/
 # Except the shared debug keystore, committed on purpose so every
 # CI/dev machine signs debug builds identically - see build.gradle.kts.
 !app/debug.keystore
+
+## macOS / Xcode (mac/ContentGuard.xcodeproj and friends)
+# The .xcodeproj itself (project.pbxproj) IS committed - that's the shared
+# project definition. Everything below is per-machine/per-user churn that
+# shouldn't be, same reasoning as .idea/ above for Android Studio.
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+DerivedData/
+mac/build/
+mac/Installer/pkg-root/
+mac/Installer/*.pkg
