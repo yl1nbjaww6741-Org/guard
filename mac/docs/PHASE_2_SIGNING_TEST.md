@@ -1,5 +1,19 @@
 # Self-signed certificate test (do this before building Phase 2 for real)
 
+**Result: self-signed passed all three tests, run on the real Mac.
+Skipping the Apple Developer ID.** Certificate is `"ContentGuard
+Signing"` in the login keychain, code requirement
+`identifier "<bundle id>" and certificate root = H"cda6539309367d134e61fb248ba54c7e1386268e"`
+(swap `<bundle id>` for the real one, e.g. `com.contentguard.agent` -
+the certificate root hash stays the same regardless of bundle ID, since
+it's bound to the cert, not the app). Test A (Accessibility) and Test B
+(Screen Recording) were both silently granted and shown as "configured
+by a profile" with the toggle locked against manual changes - Test B
+didn't even need the standard-user click-to-approve step the original
+test envisioned. Test C confirmed the code requirement survives a
+rebuild unchanged. Full transcript of this run isn't reproduced here;
+this file stays as the reusable test procedure for reference.
+
 Goal: determine whether a self-signed code-signing certificate works for
 PPPC (MDM permission locking) before paying $99/year for an Apple
 Developer ID. Run this at the **start** of Phase 2, before building the
