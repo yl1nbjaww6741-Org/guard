@@ -37,6 +37,15 @@ struct HeartbeatData: Codable {
     let captureActive: Bool
     let modelHash: String
     let framesProcessed: Int
+
+    /// The agent's own PID. The daemon doesn't launch the agent (launchd
+    /// does, per LaunchAgents/com.contentguard.agent.plist) so it has no
+    /// parent-process relationship to observe an exit through - this is how
+    /// EscalationManager registers a kqueue EVFILT_PROC/NOTE_EXIT watch on
+    /// the right process once it learns which PID is currently the agent,
+    /// which is what makes the crash-vs-kill signal distinction possible at
+    /// all (see EscalationManager.swift).
+    let pid: Int32
 }
 
 struct BlackoutData: Codable {
