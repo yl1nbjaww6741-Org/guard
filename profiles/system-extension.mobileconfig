@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadDisplayName</key>
+    <string>ContentGuard System Extensions</string>
+    <key>PayloadIdentifier</key>
+    <string>com.contentguard.systemextensions</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>67E087E9-E4E3-4FD2-8E53-E4AC22EB2A96</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.system-extension-policy</string>
+            <key>PayloadIdentifier</key>
+            <string>com.contentguard.systemextensions.payload</string>
+            <key>PayloadUUID</key>
+            <string>44CEB2EF-0FAE-4255-B585-38EC26EF0EB1</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>ContentGuard System Extensions Payload</string>
+            <!--
+              __CLOUDFLARE_TEAM_ID__ and __CLOUDFLARE_WARP_EXTENSION_BUNDLE_ID__
+              are placeholders on purpose - rather than guess Cloudflare's
+              real Apple Developer Team ID from memory (getting this wrong
+              means the rule silently matches nothing), pull the real
+              values from the WARP client already installed on the Mac:
+
+                codesign -dv --verbose=4 "/Applications/Cloudflare WARP.app" 2>&1 | grep TeamIdentifier
+                systemextensionsctl list
+
+              systemextensionsctl list shows the actual activated network
+              extension's bundle identifier - use that, not the parent
+              app's bundle ID. Fill both placeholders in below and re-push
+              before this payload does anything.
+
+              Santa's system extension gets its own entry here in Phase 3,
+              once it's installed and its real Team ID/bundle ID are known
+              - add a second array entry under the same team ID key (or a
+              new key, if Santa's Team ID differs from Cloudflare's, which
+              it will) rather than replacing this one.
+            -->
+            <key>AllowedSystemExtensions</key>
+            <dict>
+                <key>__CLOUDFLARE_TEAM_ID__</key>
+                <array>
+                    <string>__CLOUDFLARE_WARP_EXTENSION_BUNDLE_ID__</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>

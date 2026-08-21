@@ -1,0 +1,39 @@
+# Fly.io app config for Fleet's MySQL backend.
+#
+# This app has NO public services on purpose - it's only reachable from
+# other apps in the same Fly organization over the private 6PN network, at
+# contentguard-fleet-mysql.internal:3306. Fleet is the only thing that
+# should ever talk to it.
+#
+# First-time setup (see ../README.md for the full walkthrough):
+#   fly apps create contentguard-fleet-mysql
+#   fly volumes create fleet_mysql_data --app contentguard-fleet-mysql --region <region> --size 10
+#   fly secrets set --app contentguard-fleet-mysql \
+#     MYSQL_ROOT_PASSWORD=<generate a long random one> \
+#     MYSQL_DATABASE=fleet \
+#     MYSQL_USER=fleet \
+#     MYSQL_PASSWORD=<generate a different long random one>
+#   fly deploy --app contentguard-fleet-mysql --config mac/fleet/mysql/fly.toml
+
+app = "contentguard-fleet-mysql"
+primary_region = "iad"  # pick whichever Fly region is closest to you; every app in this stack should use the same one
+
+[build]
+  image = "mysql:8.0"
+
+[env]
+  # MYSQL_ROOT_PASSWORD / MYSQL_DATABASE / MYSQL_USER / MYSQL_PASSWORD come
+  # from `fly secrets set` above, not from here - never put real
+  # credentials in a committed fly.toml.
+
+[mounts]
+  source = "fleet_mysql_data"
+  destination = "/var/lib/mysql"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+# Deliberately no [[services]] block - nothing public, nothing even
+# reachable from other Fly orgs. Fleet reaches this over the private
+# network by hostname alone.

@@ -13,8 +13,8 @@ checklist before moving on:
 
 | Phase | What | Status |
 |---|---|---|
-| 0 | First-boot Mac setup: accounts, FileVault, Find My Mac, dev tools, WARP | **this directory** - see `docs/PHASE_0_SETUP.md` |
-| 1 | Fleet MDM on Fly.io, enrollment, `.mobileconfig` profiles | not started |
+| 0 | First-boot Mac setup: accounts, FileVault, Find My Mac, dev tools, WARP | done - accounts, Find My Mac, dev tools, Zero Trust/WARP all verified. FileVault and the admin account rename deliberately deferred; must land before Phase 5. |
+| 1 | Fleet MDM on Fly.io, enrollment, `.mobileconfig` profiles | **in progress** - see `fleet/README.md` and `../profiles/` |
 | 2 | Native AI blocker: `ContentGuardAgent` (capture + NudeNet) + `ContentGuardDaemon` (tamper anchor) | not started |
 | 3 | Santa app execution control (LOCKDOWN mode) | not started |
 | 4 | Cloudflare Worker (ratchet, Santa sync, profile generation) + web dashboard | not started |

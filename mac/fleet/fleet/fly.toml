@@ -1,0 +1,56 @@
+# Fly.io app config for the Fleet server itself.
+#
+# No public services here either - Fleet is reachable ONLY at
+# contentguard-fleet.internal:8080 over Fly's private network. The
+# contentguard-fleet-tunnel app (../tunnel/fly.toml) is the only thing
+# that talks to it, and it's the only thing with a route to the public
+# internet (via the Cloudflare Tunnel it runs). This is what "no open
+# ports" in the plan actually means in Fly terms: Fleet's own app has no
+# [[services]] block, so nothing public reaches it directly, ever.
+#
+# First-time setup (see ../README.md for the full walkthrough - do this
+# AFTER mysql and redis are deployed and reachable):
+#   fly apps create contentguard-fleet
+#   fly secrets set --app contentguard-fleet \
+#     FLEET_MYSQL_PASSWORD=<same value as MYSQL_PASSWORD in mysql/fly.toml> \
+#     FLEET_REDIS_PASSWORD=<same value as REDIS_PASSWORD in redis/fly.toml> \
+#     FLEET_SERVER_PRIVATE_KEY=<32+ random chars - `openssl rand -hex 32`>
+#   fly deploy --app contentguard-fleet --config mac/fleet/fleet/fly.toml
+
+app = "contentguard-fleet"
+primary_region = "iad"  # match mysql/fly.toml and redis/fly.toml - same region, same private network
+
+[build]
+  image = "fleetdm/fleet:latest"
+
+[env]
+  FLEET_MYSQL_ADDRESS = "contentguard-fleet-mysql.internal:3306"
+  FLEET_MYSQL_DATABASE = "fleet"
+  FLEET_MYSQL_USERNAME = "fleet"
+  # FLEET_MYSQL_PASSWORD comes from `fly secrets set` above.
+
+  FLEET_REDIS_ADDRESS = "contentguard-fleet-redis.internal:6379"
+  # FLEET_REDIS_PASSWORD comes from `fly secrets set` above.
+
+  # FLEET_SERVER_PRIVATE_KEY comes from `fly secrets set` above - Fleet
+  # uses this to encrypt sensitive data at rest (e.g. the APNs cert
+  # private key once you upload it in step 1.2). Losing it after the
+  # APNs cert is uploaded means re-doing 1.2 from scratch, so keep a copy
+  # somewhere durable (it's a good candidate for the Phase 5 vault too).
+
+  FLEET_SERVER_ADDRESS = "0.0.0.0:8080"
+  FLEET_SERVER_TLS = "false"  # TLS is terminated at Cloudflare's edge by the Tunnel; the hop from tunnel to Fleet stays inside Fly's private network as plain HTTP
+  FLEET_LOGGING_JSON = "true"
+
+# Runs `fleet prepare db` (schema migrations) before every deploy -
+# idempotent, safe to run on every release including the first.
+[deploy]
+  release_command = "fleet prepare db --no-prompt"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"
+
+# Deliberately no [[services]] block - see the comment at the top of this
+# file. Fleet's UI/API is reachable only via contentguard-fleet.internal
+# from the tunnel app, never on the public internet directly.

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadDisplayName</key>
+    <string>ContentGuard Restrictions</string>
+    <key>PayloadIdentifier</key>
+    <string>com.contentguard.restrictions</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>02C634B6-1924-4ADC-9E63-600C318508A9</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.applicationaccess</string>
+            <key>PayloadIdentifier</key>
+            <string>com.contentguard.restrictions.payload</string>
+            <key>PayloadUUID</key>
+            <string>9E25880A-CCAF-4034-B1BC-1AF9D59008A5</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>ContentGuard Restrictions Payload</string>
+
+            <key>allowCloudPrivateRelay</key>
+            <false/>
+            <key>allowEraseContentAndSettings</key>
+            <false/>
+            <key>allowAirDrop</key>
+            <false/>
+            <key>allowLocalUserCreation</key>
+            <false/>
+            <key>allowAccountModification</key>
+            <false/>
+            <key>allowUIConfigurationProfileInstallation</key>
+            <false/>
+            <key>allowStartupDiskModification</key>
+            <false/>
+            <key>forceAdminPasswordForAppInstallation</key>
+            <true/>
+            <key>allowScreenshotsAndScreenRecording</key>
+            <false/>
+            <key>forceBypassScreenCaptureAlert</key>
+            <true/>
+        </dict>
+    </array>
+</dict>
+</plist>

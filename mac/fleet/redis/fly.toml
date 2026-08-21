@@ -1,0 +1,32 @@
+# Fly.io app config for Fleet's Redis cache (live query results, sessions).
+#
+# Same story as mysql/fly.toml - no public services, only reachable at
+# contentguard-fleet-redis.internal:6379 from other apps in this Fly org.
+#
+# First-time setup (see ../README.md for the full walkthrough):
+#   fly apps create contentguard-fleet-redis
+#   fly volumes create fleet_redis_data --app contentguard-fleet-redis --region <same region as mysql/fleet> --size 1
+#   fly secrets set --app contentguard-fleet-redis REDIS_PASSWORD=<generate a long random one>
+#   fly deploy --app contentguard-fleet-redis --config mac/fleet/redis/fly.toml
+
+app = "contentguard-fleet-redis"
+primary_region = "iad"  # match mysql/fly.toml and fleet/fly.toml
+
+[build]
+  image = "redis:7-alpine"
+
+[env]
+  # REDIS_PASSWORD comes from `fly secrets set` above.
+
+[processes]
+  app = "sh -c 'redis-server --requirepass \"$REDIS_PASSWORD\" --appendonly yes --dir /data'"
+
+[mounts]
+  source = "fleet_redis_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+# Deliberately no [[services]] block, same reasoning as mysql/fly.toml.

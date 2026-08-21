@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadDisplayName</key>
+    <string>ContentGuard PPPC</string>
+    <key>PayloadIdentifier</key>
+    <string>com.contentguard.pppc</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>B0A08588-E1F7-4F1A-8417-D0E8830CC3C7</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.TCC.configuration-profile-policy</string>
+            <key>PayloadIdentifier</key>
+            <string>com.contentguard.pppc.payload</string>
+            <key>PayloadUUID</key>
+            <string>05571ECB-F3D8-4E02-AA78-1E0B6354451F</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>ContentGuard PPPC Payload</string>
+            <!--
+              __BUNDLE_ID__ and __CODE_REQUIREMENT__ are placeholders -
+              this profile is a no-op until Phase 2 builds and signs
+              ContentGuardAgent. Once it's signed with a real Developer ID:
+
+                codesign --display -r - /path/to/ContentGuardAgent.app
+
+              copy the string after "designated => ", replace both
+              placeholders below with the real bundle ID
+              (com.contentguard.agent) and that code requirement, and
+              re-push this profile through Fleet. Until then, leave it
+              pushed as-is with the placeholders in - Fleet/macOS will
+              just never match anything to it, which is fine.
+            -->
+            <key>Services</key>
+            <dict>
+                <key>Accessibility</key>
+                <array>
+                    <dict>
+                        <key>Identifier</key>
+                        <string>__BUNDLE_ID__</string>
+                        <key>IdentifierType</key>
+                        <string>bundleID</string>
+                        <key>CodeRequirement</key>
+                        <string>__CODE_REQUIREMENT__</string>
+                        <key>Authorization</key>
+                        <string>Allow</string>
+                    </dict>
+                </array>
+                <key>ScreenCapture</key>
+                <array>
+                    <dict>
+                        <key>Identifier</key>
+                        <string>__BUNDLE_ID__</string>
+                        <key>IdentifierType</key>
+                        <string>bundleID</string>
+                        <key>CodeRequirement</key>
+                        <string>__CODE_REQUIREMENT__</string>
+                        <key>Authorization</key>
+                        <string>AllowStandardUserToSetSystemService</string>
+                    </dict>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>

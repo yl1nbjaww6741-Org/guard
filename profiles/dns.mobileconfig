@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadDisplayName</key>
+    <string>ContentGuard DNS</string>
+    <key>PayloadIdentifier</key>
+    <string>com.contentguard.dns</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>77719039-F4FC-4942-897E-C9D5377F167C</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.dnsSettings.managed</string>
+            <key>PayloadIdentifier</key>
+            <string>com.contentguard.dns.payload</string>
+            <key>PayloadUUID</key>
+            <string>68090043-DF48-45C1-B25D-57AE2756B857</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>ContentGuard DNS Payload</string>
+            <!--
+              ServerURL below is this org's actual Cloudflare Gateway DoH
+              endpoint, read from `warp-cli settings` during Phase 0
+              ("Resolve via: 442630b07c6b3eed257dfed98b49cfcd.cloudflare-gateway.com").
+              If that endpoint ever changes (e.g. Gateway location or org
+              config changes), re-check `warp-cli settings` on the Mac and
+              update this before re-pushing.
+            -->
+            <key>DNSSettings</key>
+            <dict>
+                <key>DNSProtocol</key>
+                <string>HTTPS</string>
+                <key>ServerURL</key>
+                <string>https://442630b07c6b3eed257dfed98b49cfcd.cloudflare-gateway.com/dns-query</string>
+            </dict>
+            <key>ProhibitDisablement</key>
+            <true/>
+        </dict>
+    </array>
+</dict>
+</plist>

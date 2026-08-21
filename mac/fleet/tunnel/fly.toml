@@ -1,0 +1,33 @@
+# Fly.io app running cloudflared - the only piece of this stack with any
+# route to the public internet, and even that's outbound-only (cloudflared
+# dials out to Cloudflare's edge; nothing dials in). This is what makes
+# Fleet reachable at fleet.yourdomain.com with no open ports anywhere in
+# Fly.
+#
+# Create the tunnel itself in the Cloudflare Zero Trust dashboard first
+# (Networks > Tunnels > Create a tunnel > Cloudflared), which gives you a
+# connector token - that's TUNNEL_TOKEN below. Point the tunnel's Public
+# Hostname at http://contentguard-fleet.internal:8080 in that same
+# dashboard flow (see ../README.md for the full walkthrough).
+#
+# First-time setup:
+#   fly apps create contentguard-fleet-tunnel
+#   fly secrets set --app contentguard-fleet-tunnel TUNNEL_TOKEN=<the connector token from the Cloudflare dashboard>
+#   fly deploy --app contentguard-fleet-tunnel --config mac/fleet/tunnel/fly.toml
+
+app = "contentguard-fleet-tunnel"
+primary_region = "iad"  # match the other three apps - same region, same private network
+
+[build]
+  image = "cloudflare/cloudflared:latest"
+
+[processes]
+  app = "sh -c 'cloudflared tunnel --no-autoupdate run --token \"$TUNNEL_TOKEN\"'"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+# No [[services]] block, and no volume - this process holds no state of
+# its own and needs no inbound listener; the tunnel connection is
+# entirely outbound to Cloudflare.

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadDisplayName</key>
+    <string>ContentGuard Chrome Policy</string>
+    <key>PayloadIdentifier</key>
+    <string>com.contentguard.chrome</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>6ECA9AC0-F965-4483-8362-5B12E50392E8</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.ManagedClient.preferences</string>
+            <key>PayloadIdentifier</key>
+            <string>com.contentguard.chrome.payload</string>
+            <key>PayloadUUID</key>
+            <string>56450B06-03B6-4F67-8CF6-95716E896A8F</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>ContentGuard Chrome Policy Payload</string>
+            <key>PayloadContent</key>
+            <dict>
+                <key>com.google.Chrome</key>
+                <dict>
+                    <key>Forced</key>
+                    <array>
+                        <dict>
+                            <key>mcx_preference_settings</key>
+                            <dict>
+                                <key>DeveloperToolsAvailability</key>
+                                <integer>2</integer>
+                                <key>IncognitoModeAvailability</key>
+                                <integer>1</integer>
+                                <key>BrowserGuestModeEnabled</key>
+                                <false/>
+                                <key>ExtensionInstallBlocklist</key>
+                                <array>
+                                    <string>*</string>
+                                </array>
+                                <key>DnsOverHttpsMode</key>
+                                <string>off</string>
+                                <key>BrowserSignin</key>
+                                <integer>0</integer>
+                            </dict>
+                        </dict>
+                    </array>
+                </dict>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>
