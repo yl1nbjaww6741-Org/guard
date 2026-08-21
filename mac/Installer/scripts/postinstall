@@ -1,0 +1,53 @@
+#!/bin/bash
+# pkgbuild postinstall script for com.contentguard.pkg (the app-files
+# component). Runs as root, after this component's files are laid down -
+# but package installation order across components in a single
+# productbuild --distribution run isn't guaranteed here, so this script
+# does NOT assume the LaunchDaemons/LaunchAgents plist components have
+# already been installed. It only fixes ownership/permissions on the files
+# this component owns and gets the daemon/agent running if their plists
+# are already in place; if they're not yet (e.g. a future re-ordering of
+# the distribution), the daemon/agent simply start on next login/boot via
+# RunAtLoad instead, which is a fine fallback, not a failure.
+
+set -u
+
+echo "==> ContentGuard postinstall: fixing permissions"
+
+chown root:wheel /usr/local/bin/ContentGuardDaemon
+chmod 755 /usr/local/bin/ContentGuardDaemon
+
+chown -R root:wheel /usr/local/bin/ContentGuardAgent.app
+chmod -R a+rX /usr/local/bin/ContentGuardAgent.app
+
+chown -R root:wheel /usr/local/share/contentguard
+chmod -R a+rX /usr/local/share/contentguard
+
+# world-writable on purpose: HeartbeatMonitor.swift chmod(0o666)s the
+# socket itself at bind time, but the containing directory needs to exist
+# and be writable up front for the very first bind to succeed, and for the
+# log/state dirs the agent (running as the logged-in user, not root)
+# writes into.
+mkdir -p /usr/local/var/log/contentguard /usr/local/var/lib/contentguard
+chown root:wheel /usr/local/var/log/contentguard /usr/local/var/lib/contentguard
+chmod 1777 /usr/local/var/log/contentguard /usr/local/var/lib/contentguard
+
+echo "==> ContentGuard postinstall: loading launchd jobs (if their plists are present)"
+
+if [ -f /Library/LaunchDaemons/com.contentguard.daemon.plist ]; then
+    chown root:wheel /Library/LaunchDaemons/com.contentguard.daemon.plist
+    chmod 644 /Library/LaunchDaemons/com.contentguard.daemon.plist
+    launchctl bootstrap system /Library/LaunchDaemons/com.contentguard.daemon.plist 2>/dev/null || true
+fi
+
+CONSOLE_USER="$(stat -f%Su /dev/console)"
+if [ -f /Library/LaunchAgents/com.contentguard.agent.plist ] && [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
+    chown root:wheel /Library/LaunchAgents/com.contentguard.agent.plist
+    chmod 644 /Library/LaunchAgents/com.contentguard.agent.plist
+    CONSOLE_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || true)"
+    if [ -n "$CONSOLE_UID" ]; then
+        launchctl bootstrap "gui/$CONSOLE_UID" /Library/LaunchAgents/com.contentguard.agent.plist 2>/dev/null || true
+    fi
+fi
+
+exit 0

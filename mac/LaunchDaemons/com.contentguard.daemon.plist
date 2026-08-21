@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.contentguard.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/ContentGuardDaemon</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <!--
+      Plain true, not a dict with SuccessfulExit/Crashed keys - this is the
+      root-owned tamper anchor, it should come back no matter how or why it
+      exited. Bare `true` covers every exit reason, which is the point.
+    -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/contentguard/daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/contentguard/daemon.log</string>
+    <!--
+      Root-only. The daemon needs to bind a socket other users can write to
+      (chmod 0666, handled at bind time in HeartbeatMonitor.swift) but the
+      daemon's own process, its logs, and this job definition itself should
+      not be user-writable.
+    -->
+    <key>UserName</key>
+    <string>root</string>
+</dict>
+</plist>

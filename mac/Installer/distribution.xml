@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>ContentGuard</title>
+    <!--
+      No <license> or <welcome>/<readme> panes - this only ever gets run
+      by the same person who built it, via `sudo installer -pkg ... -target /`
+      on the command line, which doesn't show the GUI panes anyway. They're
+      only relevant if this pkg is ever double-clicked in Finder instead;
+      left out for now rather than filled with placeholder text.
+    -->
+    <options customize="never" require-scripts="false" rootVolumeOnly="true"/>
+
+    <!--
+      All three components are required - there's no supported partial
+      install. Installing the app files without the launchd plists (or
+      vice versa) leaves ContentGuard built but not running, which is
+      worse than not installed: it'd be silently not protecting anything
+      while looking installed. choices-outline enforces all three always
+      being selected together by not exposing any choice UI at all
+      (customize="never" above already prevents deselection).
+    -->
+    <choices-outline>
+        <line choice="com.contentguard.pkg"/>
+        <line choice="com.contentguard.daemon.plist"/>
+        <line choice="com.contentguard.agent.plist"/>
+    </choices-outline>
+
+    <choice id="com.contentguard.pkg" title="ContentGuard Agent + Daemon" visible="false">
+        <pkg-ref id="com.contentguard.pkg"/>
+    </choice>
+    <choice id="com.contentguard.daemon.plist" title="ContentGuard Daemon launchd job" visible="false">
+        <pkg-ref id="com.contentguard.daemon.plist"/>
+    </choice>
+    <choice id="com.contentguard.agent.plist" title="ContentGuard Agent launchd job" visible="false">
+        <pkg-ref id="com.contentguard.agent.plist"/>
+    </choice>
+
+    <!--
+      File names match what build-pkg.sh's three pkgbuild invocations
+      actually produce, resolved relative to --package-path Installer
+      (passed to productbuild above).
+    -->
+    <pkg-ref id="com.contentguard.pkg" version="1.0.0" onConclusion="none">contentguard-app.pkg</pkg-ref>
+    <pkg-ref id="com.contentguard.daemon.plist" version="1.0.0" onConclusion="none">daemon-plist.pkg</pkg-ref>
+    <pkg-ref id="com.contentguard.agent.plist" version="1.0.0" onConclusion="none">agent-plist.pkg</pkg-ref>
+</installer-gui-script>

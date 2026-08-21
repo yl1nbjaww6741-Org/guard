@@ -1,0 +1,40 @@
+#!/bin/bash
+# pkgbuild preinstall script for com.contentguard.pkg (the app-files
+# component). Runs as root, before the new files are laid down.
+#
+# Purpose: if ContentGuardAgent/ContentGuardDaemon are already running (an
+# upgrade install, not a first install), unload them first. Without this,
+# `cp`-ing a new binary over one that's currently running works fine on
+# disk (macOS lets you replace a running executable's inode) but leaves the
+# *old* code resident in memory until the next restart, and can leave the
+# daemon's Unix socket in a half-upgraded state. Unloading first, then
+# postinstall reloading the freshly-installed versions, means an upgrade
+# always ends up actually running the new code.
+#
+# Deliberately does not error out if the jobs aren't loaded yet (first
+# install) - `launchctl bootout` on a job that isn't loaded just fails
+# silently past `|| true`, which is the correct behavior here, not a bug
+# to fix.
+
+set -u
+
+echo "==> ContentGuard preinstall: unloading any existing agent/daemon jobs"
+
+launchctl bootout system/com.contentguard.daemon 2>/dev/null || true
+
+# The agent runs in the logged-in user's GUI session, not root's. Root can
+# still bootout a job in another user's session by targeting gui/<uid>
+# explicitly - `id -u` of the console user, resolved the same way the
+# daemon itself resolves it (see ContentGuardDaemon/Sources/main.swift's
+# currentConsoleUsername(), which uses SCDynamicStoreCopyConsoleUser; this
+# script uses `stat -f%Su /dev/console` as the shell-scriptable equivalent
+# since it can't link CoreFoundation).
+CONSOLE_USER="$(stat -f%Su /dev/console)"
+if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
+    CONSOLE_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || true)"
+    if [ -n "$CONSOLE_UID" ]; then
+        launchctl bootout "gui/$CONSOLE_UID/com.contentguard.agent" 2>/dev/null || true
+    fi
+fi
+
+exit 0

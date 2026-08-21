@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.contentguard.agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!--
+          The inner executable of the .app bundle, not just the app bundle
+          path itself - launching it this way (rather than via `open`) is
+          what let PPPC's bundleID-based CodeRequirement matching correctly
+          attribute permissions to com.contentguard.agent specifically,
+          confirmed during the Phase 2 signing test using the identical
+          launch pattern.
+        -->
+        <string>/usr/local/bin/ContentGuardAgent.app/Contents/MacOS/ContentGuardAgent</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <!--
+      Plain true, matching the daemon's own reasoning: this needs to come
+      back after any exit, clean or not - EscalationManager on the daemon
+      side is what decides whether repeated relaunches mean "probably a
+      bug" or "probably tampering" (see EscalationManager.swift), not
+      launchd's own throttling.
+    -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/contentguard/agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/contentguard/agent.log</string>
+    <!--
+      No UserName key - LaunchAgents run as whichever user's session
+      launchd loaded them into automatically. Runs as the logged-in user,
+      never root - this is deliberate: the agent needs a real GUI session
+      for NSPanel/ScreenCaptureKit/NSWorkspace, which root does not have
+      (see FallbackCover.swift's doc comment on why the daemon can't do
+      this job itself).
+    -->
+</dict>
+</plist>
