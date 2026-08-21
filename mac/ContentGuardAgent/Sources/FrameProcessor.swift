@@ -164,7 +164,16 @@ final class FrameProcessor {
                 let y = min(height - 1, gy * height / 8)
                 let offset = y * bytesPerRow + x * 4 // BGRA
                 let b = buffer[offset], g = buffer[offset + 1], r = buffer[offset + 2]
-                let luminance = UInt8((Int(r) * 299 + Int(g) * 587 + Int(b) * 114) / 1000)
+                // Split into separate typed sub-expressions - the one-liner
+                // version of this (all three Int(...) conversions,
+                // multiplications, and the division in one expression) is
+                // valid Swift but hits a real compiler limitation: the
+                // type-checker gives up on it as too expensive to resolve,
+                // rather than getting the arithmetic wrong.
+                let rWeighted = Int(r) * 299
+                let gWeighted = Int(g) * 587
+                let bWeighted = Int(b) * 114
+                let luminance = UInt8((rWeighted + gWeighted + bWeighted) / 1000)
                 luminances.append(luminance)
             }
         }
