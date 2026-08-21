@@ -27,6 +27,6 @@ primary_region = "iad"  # match mysql/fly.toml and fleet/fly.toml
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  memory = "256mb"  # Fly's floor - plenty for one host's worth of live-query/session caching
 
 # Deliberately no [[services]] block, same reasoning as mysql/fly.toml.

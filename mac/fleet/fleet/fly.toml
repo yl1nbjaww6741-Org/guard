@@ -48,8 +48,14 @@ primary_region = "iad"  # match mysql/fly.toml and redis/fly.toml - same region,
   release_command = "fleet prepare db --no-prompt"
 
 [[vm]]
-  size = "shared-cpu-2x"
-  memory = "2gb"
+  size = "shared-cpu-1x"
+  memory = "1gb"
+  # Sized for managing ONE Mac, not a real fleet - Fleet's own docs assume
+  # hundreds/thousands of hosts and recommend much more. If the dashboard
+  # feels sluggish or `fly logs` shows OOM kills once this is running,
+  # bump back up with `fly scale vm shared-cpu-2x --memory 2048 --app
+  # contentguard-fleet` rather than fighting it - this is a cost-saving
+  # bet, not a hard requirement.
 
 # Deliberately no [[services]] block - see the comment at the top of this
 # file. Fleet's UI/API is reachable only via contentguard-fleet.internal
