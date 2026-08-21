@@ -7,11 +7,40 @@ partly off these).
 
 | Profile | Status | Notes |
 |---|---|---|
-| `restrictions.mobileconfig` | Ready to push | See the flag below about `allowScreenshotsAndScreenRecording` before Phase 2. |
+| `restrictions.mobileconfig` | Ready to push (v2) | `forceAdminPasswordForAppInstallation` deliberately set `false`, not the original spec's `true` - see below. Also see the flag below about `allowScreenshotsAndScreenRecording` before Phase 2. |
 | `pppc.mobileconfig` | **Placeholder** | `__BUNDLE_ID__`/`__CODE_REQUIREMENT__` get filled in once Phase 2 builds and signs `ContentGuardAgent`. Push as-is for now - it matches nothing until then. |
 | `chrome-policy.mobileconfig` | Ready to push | |
 | `dns.mobileconfig` | Ready to push | `ServerURL` is this org's real Gateway DoH endpoint, read from `warp-cli settings` in Phase 0. Re-check that value if Gateway config ever changes. |
 | `system-extension.mobileconfig` | **Placeholder, and won't apply to WARP** | Checked on the real Mac in Phase 1: WARP's packet tunnel runs as a Network (App) Extension, not a System Extension - `systemextensionsctl list` shows 0 extensions even with WARP connected, so this payload type doesn't govern it. Cloudflare's Team ID (`68WVV388M8`) is recorded in the profile's comment for reference only. This profile's real first use is Santa in Phase 3, whose EndpointSecurity component does use System Extensions - `__SANTA_TEAM_ID__`/`__SANTA_EXTENSION_BUNDLE_ID__` get filled in then. |
+
+## Deliberate deviation: `forceAdminPasswordForAppInstallation = false`
+
+The original spec had this `true`. Changed to `false` mid-Phase-1 for a
+reason that only makes sense combined with two other deliberate
+decisions already made: Santa stays in MONITOR/blocklist mode (Phase 3,
+not LOCKDOWN/allowlist), and the Phase 2 content-capture blocker catches
+NSFW content regardless of which app displayed it - same model the
+Android app already uses successfully. Given that, gating installation
+behind admin/vault friction was adding cost without covering a threat
+the other two layers don't already cover for the actual goal (blocking
+NSFW content) - so standard users (post-Phase 5) install freely.
+
+**Known gap this leaves, on purpose, not by oversight**: a freely
+installed tool that doesn't display NSFW content but instead targets
+the enforcement stack itself (killing `ContentGuardDaemon`, revoking
+Screen Recording, disabling WARP) produces nothing for the content
+blocker to catch, and MONITOR-mode Santa won't stop it running unless
+it's already denylisted. The compensating control for *this specific
+gap* is Phase 2's daemon being designed as tamper-resistant on its own
+(fails closed on permission loss, escalates to a hard lock on
+kill-loops rather than just dying) - not this restriction, and not
+Santa. If Phase 2's daemon doesn't hold up to that standard in practice,
+this decision is worth revisiting.
+
+If you ever switch Santa to LOCKDOWN (allowlist), `false` here becomes
+strictly safer than `true` - free installation is harmless once
+execution itself is the actual gate. It's the blocklist choice that
+makes this a real tradeoff rather than a free win.
 
 ## Known open risk: `allowScreenshotsAndScreenRecording` vs. Phase 2
 

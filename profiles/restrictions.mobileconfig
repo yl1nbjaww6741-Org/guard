@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>02C634B6-1924-4ADC-9E63-600C318508A9</string>
     <key>PayloadVersion</key>
-    <integer>1</integer>
+    <integer>2</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>9E25880A-CCAF-4034-B1BC-1AF9D59008A5</string>
             <key>PayloadVersion</key>
-            <integer>1</integer>
+            <integer>2</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Restrictions Payload</string>
 
@@ -44,8 +44,23 @@
             <false/>
             <key>allowStartupDiskModification</key>
             <false/>
+            <!--
+              Deliberately false, not the original spec's true - see
+              profiles/README.md. Standard users (post-Phase 5) install
+              freely; Santa (Phase 3, kept in MONITOR/blocklist mode per
+              a separate deliberate decision) governs execution, and the
+              Phase 2 content-capture blocker catches NSFW content
+              regardless of which app displayed it, matching how the
+              Android app already works. Known gap this combination
+              doesn't cover: a freely-installed tool that doesn't display
+              NSFW content but instead targets the enforcement stack
+              itself (killing the daemon, revoking Screen Recording,
+              etc.) - mitigated by Phase 2's daemon being designed
+              tamper-resistant on its own (fails closed, escalates on
+              kill-loops), not by this key or by Santa.
+            -->
             <key>forceAdminPasswordForAppInstallation</key>
-            <true/>
+            <false/>
             <key>allowScreenshotsAndScreenRecording</key>
             <false/>
             <key>forceBypassScreenCaptureAlert</key>
