@@ -14,8 +14,8 @@ checklist before moving on:
 | Phase | What | Status |
 |---|---|---|
 | 0 | First-boot Mac setup: accounts, FileVault, Find My Mac, dev tools, WARP | done - accounts, Find My Mac, dev tools, Zero Trust/WARP all verified. FileVault and the admin account rename deliberately deferred; must land before Phase 5. |
-| 1 | Fleet MDM on Fly.io, enrollment, `.mobileconfig` profiles | **in progress** - see `fleet/README.md` and `../profiles/` |
-| 2 | Native AI blocker: `ContentGuardAgent` (capture + NudeNet) + `ContentGuardDaemon` (tamper anchor) | not started |
+| 1 | Fleet MDM on Fly.io, enrollment, `.mobileconfig` profiles | **in progress** - Fleet deployed, Mac enrolled and confirmed supervised, 3 of 4 profiles pushed (PPPC pending Phase 2). Recovery Lock needs a Fleet Premium decision (see `fleet/README.md`) - not yet resolved. |
+| 2 | Native AI blocker: `ContentGuardAgent` (capture + NudeNet) + `ContentGuardDaemon` (tamper anchor) | not started - **first step is `docs/PHASE_2_SIGNING_TEST.md`**, before writing any agent/daemon code, since its outcome (self-signed cert vs. \$99/year Apple Developer ID) decides the signing strategy for everything else in this phase |
 | 3 | Santa app execution control (LOCKDOWN mode) | not started |
 | 4 | Cloudflare Worker (ratchet, Santa sync, profile generation) + web dashboard | not started |
 | 5 | Lockdown: demote to standard, seal admin credentials in the vault | not started |
