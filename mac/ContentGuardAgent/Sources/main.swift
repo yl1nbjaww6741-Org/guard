@@ -25,12 +25,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             processor.delegate = self
             frameProcessor = processor
         } catch {
-            // No usable classifier - this is exactly the "uncertain/error"
-            // case the whole design fails closed on. Cover every display
-            // immediately and stay covered, rather than starting up in a
-            // state where frames are captured but never actually evaluated.
-            NSLog("ContentGuardAgent: classifier failed to load (\(error)) - failing closed")
-            overlayManager.cover()
+            // No usable classifier - genuinely "uncertain/error", the case
+            // the whole design fails closed on - but NOT by covering the
+            // screen here anymore. That used to call overlayManager.cover()
+            // directly, and a real install found the hard way why that was
+            // wrong: nothing on the agent's side ever calls the matching
+            // .clear(), so a PERSISTENT failure (e.g. a missing permission
+            // for this exact install path) combined with KeepAlive=true
+            // meant every relaunch re-covered the screen with no way out -
+            // a real lockout, confirmed on the real Mac, not a hypothetical.
+            // The daemon's own fail-closed mechanism (missing heartbeat +
+            // a risky app running -> FallbackCover's pmset displaysleepnow,
+            // already confirmed working AND actually escapable via a
+            // password) is the real backstop for this now - the agent
+            // failing to start capturing means it also won't be sending
+            // heartbeats, which the daemon will notice on its own. Just log
+            // loudly and let heartbeatClient.start() below report
+            // modelHash="" / a dead frameProcessor honestly rather than
+            // silently hiding the failure.
+            NSLog("ContentGuardAgent: classifier failed to load (\(error)) - no local cover, daemon's heartbeat-based fail-closed is the backstop")
         }
 
         heartbeatClient.start()
@@ -40,9 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try await captureManager.start()
                 heartbeatClient.captureActive = true
             } catch {
-                NSLog("ContentGuardAgent: capture failed to start (\(error)) - failing closed")
+                // Same reasoning as above - no overlayManager.cover() here
+                // either. captureActive stays false, which means no
+                // heartbeat will ever report real capture activity, and
+                // the daemon's grace-window check is what fails closed.
+                NSLog("ContentGuardAgent: capture failed to start (\(error)) - no local cover, daemon's heartbeat-based fail-closed is the backstop")
                 heartbeatClient.captureActive = false
-                overlayManager.cover()
             }
         }
     }
