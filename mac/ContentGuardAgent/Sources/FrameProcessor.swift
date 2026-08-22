@@ -66,6 +66,13 @@ final class FrameProcessor {
         lastFrameHash[displayID] = hash
 
         let skinRatio = skinPixelRatio(of: thumbnail)
+        // TEMPORARY diagnostic logging (Phase 2 detection testing) - remove
+        // once the pipeline is confirmed working end-to-end against real
+        // content. Logs every frame that reaches this point, whether or
+        // not it clears the prefilter, so a false negative can be
+        // distinguished between "never reached the classifier" and "the
+        // classifier scored it too low."
+        NSLog("ContentGuardAgent: [debug] skinRatio=\(skinRatio) threshold=\(skinRatioPrefilterThreshold)")
         guard skinRatio >= skinRatioPrefilterThreshold else {
             // Below threshold -> skip the full classifier. This IS a load
             // shedder, not an acquitter: the threshold is deliberately
@@ -85,8 +92,9 @@ final class FrameProcessor {
             let result = try classifier.classify(scaledForModel)
             switch result {
             case .clean:
-                break
+                NSLog("ContentGuardAgent: [debug] classify() -> .clean")
             case .detected(let detectionClass, let confidence, _):
+                NSLog("ContentGuardAgent: [debug] classify() -> .detected class=\(detectionClass) confidence=\(confidence)")
                 guard confidence >= ContentGuardConfig.detectionConfidenceThreshold else {
                     // Below the confirmation gate - a single borderline
                     // frame shouldn't cost 10 minutes, per the original
@@ -101,6 +109,7 @@ final class FrameProcessor {
                 report(detectionClass: detectionClass, confidence: confidence, displayID: displayID)
             }
         } catch {
+            NSLog("ContentGuardAgent: [debug] classify() threw \(error) - failing closed")
             // Classifier itself errored (model load issue, inference
             // failure, etc) - this IS an error case, and per the spec,
             // errors fail closed.
