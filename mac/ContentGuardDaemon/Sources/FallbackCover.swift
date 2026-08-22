@@ -10,20 +10,33 @@
 // root-owned process from popping up windows that could spoof legitimate
 // system UI for credential phishing). So `attemptDirectWindowCover()` below
 // is expected to fail, and is written to detect that failure rather than
-// silently do nothing - the real, reliable mechanism is
-// `lockScreenViaCGSession`, which runs the same `CGSession -suspend` binary
-// the Lock Screen menu item itself uses, as the target user via `sudo -u`
-// (root can do this; it's exactly the privilege escalation direction that's
-// allowed, unlike the reverse). This needs confirming empirically once
-// running on the real Mac - flagged, not assumed, same as everything else
-// uncertain in this build.
+// silently do nothing.
+//
+// The reliable mechanism, `lockScreenViaDisplaySleep`, was NOT what this
+// file originally assumed. It first tried CGSession -suspend (the same
+// binary the classic Lock Screen menu item used) - confirmed, empirically,
+// on the real Mac, to no longer exist anywhere on disk
+// (`sudo find ... -iname CGSession` came back completely empty). Apple
+// removed that standalone utility all the way back in Big Sur (2020) -
+// this was broken from the moment it was written, just never actually run
+// until now. The real, currently-working mechanism is `pmset
+// displaysleepnow`, which requires no Accessibility permission and no
+// per-user session scripting (unlike the AppleScript/System Events
+// alternative, which needs Accessibility granted to whatever runs the
+// osascript command - another fragile TCC dependency this project has
+// spent a lot of effort fighting elsewhere, not worth introducing here
+// too). Its one real dependency: "Require password immediately after
+// sleep or screen saver begins" must be enabled in System Settings ->
+// Lock Screen, or this just dims the display without actually locking
+// anything - needs adding to the Phase 0/setup checklist, not yet
+// verified as enabled on the real Mac.
 
 import Foundation
 import CoreGraphics
 
 enum FallbackCoverMethod {
     case directWindow
-    case cgSessionLock
+    case displaySleepLock
 }
 
 final class FallbackCover {
@@ -41,10 +54,14 @@ final class FallbackCover {
 
     func show() {
         guard !isShowing else { return }
-        guard let username = consoleUsername() else {
+        guard consoleUsername() != nil else {
             // No one logged in at the console - nothing to cover. Not an
             // error, just a no-op state worth being explicit about rather
-            // than silently succeeding at nothing.
+            // than silently succeeding at nothing. (The username itself
+            // isn't needed below anymore - pmset displaysleepnow is a
+            // system-wide action, not tied to a specific user session like
+            // the old sudo -u CGSession approach was - but "is anyone
+            // actually logged in" is still a meaningful guard.)
             return
         }
 
@@ -54,8 +71,8 @@ final class FallbackCover {
             return
         }
 
-        lockScreenViaCGSession(username: username)
-        activeMethod = .cgSessionLock
+        lockScreenViaDisplaySleep()
+        activeMethod = .displaySleepLock
         isShowing = true
     }
 
@@ -64,16 +81,14 @@ final class FallbackCover {
         switch activeMethod {
         case .directWindow:
             hideDirectWindowCover()
-        case .cgSessionLock, .none:
-            // CGSession-based locking has no programmatic "unlock" - once
-            // the screen is locked, only the user's own password (or an
-            // admin's, at the login window) unlocks it. That's the correct
-            // behavior here, not a limitation to work around: the whole
-            // point of falling back to a real screen lock is that it's not
-            // something the daemon can casually undo either. isShowing
-            // reflects "did we, the daemon, decide this state should end,"
-            // not "is the screen literally unlocked right now" - those are
-            // different things once this path is taken.
+        case .displaySleepLock, .none:
+            // No programmatic "unlock" here either, same reasoning as the
+            // CGSession approach this replaced: once the display's asleep
+            // and password-on-wake is enforced, only the user's own
+            // password (or an admin's, at the login window) gets back in.
+            // isShowing reflects "did we, the daemon, decide this state
+            // should end," not "is the screen literally unlocked right
+            // now" - those are different things once this path is taken.
             break
         }
         isShowing = false
@@ -111,25 +126,22 @@ final class FallbackCover {
         // has a real window to tear down.
     }
 
-    /// The reliable fallback: locks the screen the same way the Lock Screen
-    /// menu item does, run as the target user via sudo -u (a root process
-    /// dropping privilege to run as a specific user is the normal, allowed
-    /// direction - this is not a security hole, it mirrors what launchd
-    /// itself does to run per-user LaunchAgents).
-    private func lockScreenViaCGSession(username: String) {
+    /// The reliable fallback, confirmed actually present and callable on
+    /// the real Mac (see the module doc comment for why this isn't
+    /// CGSession anymore). System-wide action, no need to run as a
+    /// specific user or drop root privilege the way the old approach did.
+    private func lockScreenViaDisplaySleep() {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        process.arguments = [
-            "-u", username,
-            "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession",
-            "-suspend",
-        ]
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+        process.arguments = ["displaysleepnow"]
         do {
             try process.run()
+            NSLog("ContentGuardDaemon: FallbackCover triggered pmset displaysleepnow")
         } catch {
             // If even this fails, there's genuinely nothing left to try
-            // locally - this should be logged loudly by whatever calls
-            // show(), since it means the fail-closed guarantee has a hole.
+            // locally - loud logging matters here specifically, since it
+            // means the fail-closed guarantee has a hole.
+            NSLog("ContentGuardDaemon: FallbackCover FAILED to run pmset displaysleepnow: \(error)")
         }
     }
 }
