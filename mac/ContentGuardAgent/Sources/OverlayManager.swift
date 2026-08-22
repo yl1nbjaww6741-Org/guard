@@ -37,21 +37,36 @@ final class OverlayManager {
         Set(panels.values.map(\.windowNumber))
     }
 
+    /// Dispatches to the main thread internally rather than trusting every
+    /// caller to already be on it - found the hard way: FrameProcessor
+    /// runs its pipeline on a background queue, and its delegate callback
+    /// called this directly, which crashed (SIGTRAP) the instant a real
+    /// detection fired, since NSPanel/NSView/CALayer are AppKit and AppKit
+    /// is not thread-safe. Same story for the CaptureManager.start()
+    /// failure path in main.swift's un-annotated Task block. Guaranteeing
+    /// main-thread execution here, once, is more robust than auditing
+    /// every current and future call site.
     func cover() {
-        isCovering = true
-        for panel in panels.values {
-            panel.ignoresMouseEvents = false
-            panel.contentView?.layer?.backgroundColor = NSColor.black.cgColor
-            panel.alphaValue = 1.0
-            panel.orderFrontRegardless()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isCovering = true
+            for panel in self.panels.values {
+                panel.ignoresMouseEvents = false
+                panel.contentView?.layer?.backgroundColor = NSColor.black.cgColor
+                panel.alphaValue = 1.0
+                panel.orderFrontRegardless()
+            }
         }
     }
 
     func clear() {
-        isCovering = false
-        for panel in panels.values {
-            panel.ignoresMouseEvents = true
-            panel.alphaValue = 0.0
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isCovering = false
+            for panel in self.panels.values {
+                panel.ignoresMouseEvents = true
+                panel.alphaValue = 0.0
+            }
         }
     }
 
