@@ -62,6 +62,7 @@ extension AppDelegate: CaptureManagerDelegate {
 
 extension AppDelegate: FrameProcessorDelegate {
     func frameProcessor(_ processor: FrameProcessor, didDetect detection: BlackoutData, on displayID: CGDirectDisplayID) {
+        NSLog("ContentGuardAgent: BLACKOUT triggered - class=\(detection.detectionClass) confidence=\(detection.confidence) display=\(displayID)")
         overlayManager.cover()
         heartbeatClient.sendBlackout(detection)
     }
