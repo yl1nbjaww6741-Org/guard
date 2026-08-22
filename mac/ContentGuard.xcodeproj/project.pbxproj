@@ -15,6 +15,8 @@
 		8003D040303881EB00C6CE01 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D03B303881EB00C6CE01 /* main.swift */; };
 		8003D041303881EB00C6CE01 /* BlackoutTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D037303881EB00C6CE01 /* BlackoutTimer.swift */; };
 		8003D042303881EB00C6CE01 /* FallbackCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D039303881EB00C6CE01 /* FallbackCover.swift */; };
+		8003D0593039787000C6CE01 /* onnxruntime in Frameworks */ = {isa = PBXBuildFile; productRef = 8003D0583039787000C6CE01 /* onnxruntime */; };
+		8003D05B3039787000C6CE01 /* onnxruntime_extensions in Frameworks */ = {isa = PBXBuildFile; productRef = 8003D05A3039787000C6CE01 /* onnxruntime_extensions */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -97,6 +99,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8003D05B3039787000C6CE01 /* onnxruntime_extensions in Frameworks */,
+				8003D0593039787000C6CE01 /* onnxruntime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -205,6 +209,8 @@
 			);
 			name = ContentGuardAgent;
 			packageProductDependencies = (
+				8003D0583039787000C6CE01 /* onnxruntime */,
+				8003D05A3039787000C6CE01 /* onnxruntime_extensions */,
 			);
 			productName = ContentGuardAgent;
 			productReference = 80A0DCFD303878CB00840C36 /* ContentGuardAgent.app */;
@@ -242,6 +248,9 @@
 			);
 			mainGroup = 80A0DCF4303878CB00840C36;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				8003D0573039787000C6CE01 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 80A0DCF4303878CB00840C36;
 			projectDirPath = "";
@@ -597,6 +606,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		8003D0573039787000C6CE01 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/microsoft/onnxruntime-swift-package-manager";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.24.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		8003D0583039787000C6CE01 /* onnxruntime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8003D0573039787000C6CE01 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */;
+			productName = onnxruntime;
+		};
+		8003D05A3039787000C6CE01 /* onnxruntime_extensions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 8003D0573039787000C6CE01 /* XCRemoteSwiftPackageReference "onnxruntime-swift-package-manager" */;
+			productName = onnxruntime_extensions;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 80A0DCF5303878CB00840C36 /* Project object */;
 }
