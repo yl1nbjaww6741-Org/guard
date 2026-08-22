@@ -5,17 +5,26 @@
 // Honest flag before anything else: the ONNX Runtime API calls below are
 // real, confirmed against the current onnxruntime-swift-package-manager SPM
 // package (microsoft/onnxruntime-swift-package-manager, "onnxruntime"
-// product) - not guessed. What's still genuinely unconfirmed, and can only
-// be confirmed once the real model file exists to inspect (e.g. via
-// Netron): the exact input/output tensor names (inputName/outputName
-// below), the output tensor's layout (assumed here to be the standard
-// YOLOv8-export [1, 4+numClasses, numAnchors] shape), and the full ordered
-// class-label list (fullClassLabels below, filled in from NudeNet's
-// commonly-published label set but not yet checked against this specific
-// export). parseDetections() fails closed (throws
-// .unexpectedOutputShape) rather than silently misreading a wrong layout,
-// so a mismatch here surfaces as a build-time-obvious runtime error during
-// Phase 2 verification, not a silent misclassification.
+// product) - not guessed, and confirmed to actually build (see git history -
+// `import OnnxRuntimeBindings` and every call here compiled clean on the
+// first real Xcode build). The class-label list and output tensor layout
+// (fullClassLabels, parseDetections() below) are ALSO confirmed, against
+// the official notAI-tech/NudeNet Python client's own source
+// (nudenet/nudenet.py) - not guessed either. input/outputName are resolved
+// dynamically from the session itself rather than hardcoded, matching that
+// same Python client's own approach, so there's nothing string-literal left
+// to get wrong there.
+//
+// What's still genuinely unconfirmed, because it requires the real model
+// file to exist and actually run inference against it (not just read
+// reference source): that the 640m.onnx binary downloaded from
+// https://github.com/notAI-tech/NudeNet/releases/download/v3.4-weights/640m.onnx
+// matches what this file assumes, and that inference actually produces
+// sane detections end-to-end on the real Mac. parseDetections() fails
+// closed (throws .unexpectedOutputShape) on any shape mismatch rather than
+// silently misreading a wrong layout, so a surprise here surfaces as a
+// loud runtime error during Phase 2 verification, not a silent
+// misclassification.
 
 import CoreVideo
 import CryptoKit
@@ -45,12 +54,15 @@ final class NudeNetClassifier {
     private var env: ORTEnv?
     private var session: ORTSession?
 
-    // Standard YOLOv8-export input/output names - NOT yet confirmed against
-    // NudeNet 640m specifically. If these are wrong, session.run() throws
-    // immediately (ORT reports "invalid feed/fetch name"), which is a loud,
-    // obvious failure during Phase 2 verification rather than a silent one.
-    private static let inputName = "images"
-    private static let outputName = "output0"
+    // Resolved from the session itself at load time (matching the official
+    // notAI-tech/NudeNet Python client's own `model_inputs[0].name` /
+    // `run(None, ...)` positional-first-output approach - see
+    // https://github.com/notAI-tech/NudeNet nudenet/nudenet.py) rather than
+    // hardcoded guessed strings. Removes a whole class of "guessed the
+    // wrong literal name" risk; if the model genuinely has zero
+    // inputs/outputs (malformed export), loadSession() fails closed instead.
+    private var inputName: String?
+    private var outputName: String?
 
     init() throws {
         guard FileManager.default.fileExists(atPath: ContentGuardPaths.modelFile) else {
@@ -71,20 +83,31 @@ final class NudeNetClassifier {
             // closed over; a missing Neural Engine path specifically isn't
             // a security concern, just a performance one.
         }
+        let newSession = try ORTSession(env: ortEnv, modelPath: ContentGuardPaths.modelFile, sessionOptions: options)
+        guard let firstInput = try newSession.inputNames().first,
+              let firstOutput = try newSession.outputNames().first else {
+            throw NudeNetClassifierError.sessionCreationFailed
+        }
         env = ortEnv
-        session = try ORTSession(env: ortEnv, modelPath: ContentGuardPaths.modelFile, sessionOptions: options)
+        session = newSession
+        inputName = firstInput
+        outputName = firstOutput
     }
 
-    /// Runs inference on an already-640px-downscaled BGRA pixel buffer (see
-    /// FrameProcessor.swift's downscale step) and returns the
-    /// highest-confidence detection across ALL classes (not just blocked
-    /// ones - FrameProcessor.swift is the one that checks both the
-    /// confidence threshold and the blocked-class set, so this always
-    /// returns .detected rather than pre-filtering; .clean is effectively
-    /// unreachable given a real model, kept only as a defensive fallback
-    /// for a zero-anchor output).
+    /// Runs inference on a raw captured-frame BGRA pixel buffer (any size -
+    /// preprocess() below letterbox-pads and downscales to the model's
+    /// fixed 640x640 input, matching the official Python client's own
+    /// pad-then-resize approach rather than a naive stretch-resize) and
+    /// returns the highest-confidence detection across ALL classes (not
+    /// just blocked ones - FrameProcessor.swift is the one that checks
+    /// both the confidence threshold and the blocked-class set, so this
+    /// always returns .detected rather than pre-filtering; .clean is
+    /// effectively unreachable given a real model, kept only as a
+    /// defensive fallback for a zero-anchor output).
     func classify(_ pixelBuffer: CVPixelBuffer) throws -> ClassificationResult {
-        guard let session else { throw NudeNetClassifierError.sessionCreationFailed }
+        guard let session, let inputName, let outputName else {
+            throw NudeNetClassifierError.sessionCreationFailed
+        }
 
         let inputFloats = try preprocess(pixelBuffer)
         let inputData = inputFloats.withUnsafeBufferPointer { NSMutableData(bytes: $0.baseAddress!, length: $0.count * MemoryLayout<Float>.size) }
@@ -95,11 +118,11 @@ final class NudeNetClassifier {
         )
 
         let outputs = try session.run(
-            withInputs: [Self.inputName: inputTensor],
-            outputNames: [Self.outputName],
+            withInputs: [inputName: inputTensor],
+            outputNames: [outputName],
             runOptions: nil
         )
-        guard let outputValue = outputs[Self.outputName] else {
+        guard let outputValue = outputs[outputName] else {
             throw NudeNetClassifierError.unexpectedOutputShape
         }
         return try parseDetections(from: outputValue)
@@ -107,33 +130,54 @@ final class NudeNetClassifier {
 
     // MARK: - Preprocessing
 
-    /// Converts a BGRA CVPixelBuffer into the float32 NCHW tensor most YOLO-
-    /// family ONNX exports expect (1x3x640x640, RGB channel order,
-    /// normalized 0-1). Confirm this matches NudeNet 640m's actual expected
-    /// input against the model's own metadata once it's available to
-    /// inspect (e.g. via `python -c "import onnx; ..."` or Netron) rather
-    /// than assuming the common case is the actual case.
+    /// Converts a BGRA CVPixelBuffer into the float32 NCHW tensor NudeNet
+    /// 640m expects: always exactly 1x3x640x640, RGB channel order,
+    /// normalized 0-1 - confirmed against the official Python client's own
+    /// preprocessing (nudenet/nudenet.py's _read_image: pad to a square
+    /// with cv2.copyMakeBorder - bottom/right only, origin stays top-left -
+    /// THEN resize the padded square to the model's input size, rather
+    /// than a naive stretch-resize that would distort aspect ratio).
+    /// FrameProcessor.swift's downscale() already scales the incoming
+    /// buffer so its longer side is 640px while preserving aspect ratio -
+    /// mathematically equivalent to the Python client's pad-first-then-
+    /// resize ordering, since both derive from the same
+    /// target/max(originalWidth,originalHeight) scale factor. This
+    /// function's job is just the padding: place the (already-scaled, still
+    /// possibly non-square) source into the top-left of a full 640x640
+    /// zero-filled (black) canvas, matching copyMakeBorder's default fill
+    /// and padding sides exactly, rather than assuming the source is
+    /// already square.
     private func preprocess(_ pixelBuffer: CVPixelBuffer) throws -> [Float] {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 0, height > 0, width <= 640, height <= 640 else {
+            // Anything larger than 640 in either dimension means the
+            // caller didn't actually downscale to 640 first - fail closed
+            // rather than silently cropping or overrunning the canvas.
+            throw NudeNetClassifierError.unexpectedOutputShape
+        }
         guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else {
             throw NudeNetClassifierError.unexpectedOutputShape
         }
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
         let buffer = base.assumingMemoryBound(to: UInt8.self)
 
-        var chwPlanes = [Float](repeating: 0, count: 3 * width * height)
-        let planeSize = width * height
+        // Zero-filled (black) 640x640 canvas - matches
+        // cv2.copyMakeBorder's default fill color. Only the top-left
+        // width x height region gets written; the rest stays black padding.
+        let canvasDimension = 640
+        var chwPlanes = [Float](repeating: 0, count: 3 * canvasDimension * canvasDimension)
+        let planeSize = canvasDimension * canvasDimension
         for y in 0..<height {
             for x in 0..<width {
                 let offset = y * bytesPerRow + x * 4 // BGRA
                 let b = Float(buffer[offset]) / 255.0
                 let g = Float(buffer[offset + 1]) / 255.0
                 let r = Float(buffer[offset + 2]) / 255.0
-                let pixelIndex = y * width + x
+                let pixelIndex = y * canvasDimension + x
                 chwPlanes[0 * planeSize + pixelIndex] = r
                 chwPlanes[1 * planeSize + pixelIndex] = g
                 chwPlanes[2 * planeSize + pixelIndex] = b
@@ -149,15 +193,14 @@ final class NudeNetClassifier {
     /// The model scores every class per anchor regardless of whether we
     /// care about it (e.g. FACE_FEMALE, BELLY_COVERED); this list has to
     /// match the model's real channel order for parseDetections() below to
-    /// pick the right index. Filled in from NudeNet's commonly-published
-    /// label set (the notAI-tech/NudeNet detector releases), but NOT yet
-    /// verified against this specific exported model - do that via Netron
-    /// (or `python -c "import onnx; ..."` on the metadata) once the real
-    /// .onnx file exists, before trusting this order. A wrong order here
-    /// silently misclassifies rather than erroring, since it's just array
-    /// indexing - the numClasses count check in parseDetections() below at
-    /// least catches a wrong total, but not a shuffled order with the same
-    /// count.
+    /// pick the right index. Confirmed verbatim (order and all) against the
+    /// official notAI-tech/NudeNet Python client's own `__labels` list -
+    /// https://github.com/notAI-tech/NudeNet/blob/main/nudenet/nudenet.py -
+    /// not a guess. That client also confirms the output layout
+    /// parseDetections() below assumes: `np.transpose(np.squeeze(output[0]))`
+    /// then per-row `outputs[i][0:4]` for the box and `outputs[i][4:]` for
+    /// class scores - i.e. raw (pre-transpose) shape
+    /// [1, 4 + numClasses, numAnchors], exactly what's implemented below.
     private static let fullClassLabels: [String] = [
         "FEMALE_GENITALIA_COVERED",
         "FACE_FEMALE",
