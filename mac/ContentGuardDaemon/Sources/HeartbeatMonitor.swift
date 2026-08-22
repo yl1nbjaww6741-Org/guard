@@ -203,6 +203,15 @@ enum RunningAppCheck {
         return false
     }
 
+    /// Real value of the C macro PROC_PIDPATHINFO_MAXSIZE (4 * MAXPATHLEN,
+    /// i.e. 4 * 1024 - stable across macOS versions, unlikely to ever
+    /// change). Defined locally rather than using the SDK macro directly:
+    /// the macOS 26.5 SDK marks it "unavailable: structure not supported"
+    /// for Swift import specifically (confirmed via a real build error,
+    /// not assumed) - the underlying value itself is unaffected, just not
+    /// reachable through Swift's C interop anymore.
+    private static let pidPathMaxSize = 4 * 1024
+
     /// Enumerates running processes via sysctl(KERN_PROC_ALL) - available to
     /// root without any GUI session, unlike NSWorkspace.runningApplications.
     private static func runningExecutablePaths() -> [String] {
@@ -218,7 +227,7 @@ enum RunningAppCheck {
         for proc in procList {
             var pid = proc.kp_proc.p_pid
             guard pid > 0 else { continue }
-            var pathBuffer = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+            var pathBuffer = [CChar](repeating: 0, count: pidPathMaxSize)
             let len = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
             if len > 0 {
                 paths.append(String(cString: pathBuffer))

@@ -10,4 +10,6 @@
 // Deliberately just this one line of dispatch - all real logic lives in
 // AdminReleaseTool.run().
 
+import Foundation // for exit() - Darwin's C stdlib, not visible without an import
+
 exit(AdminReleaseTool.run())
