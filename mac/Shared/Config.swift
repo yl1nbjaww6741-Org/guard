@@ -40,6 +40,24 @@ enum ContentGuardConfig {
         "com.apple.ActivityMonitor",
     ]
 
+    /// Never force-terminate these, regardless of what's frontmost when a
+    /// detection fires - a separate, narrower list from safeAppBundleIDs
+    /// above (that one's about what to skip *scanning*; this one's about
+    /// what's unsafe to *kill*). Finder auto-relaunches if force-quit, so
+    /// it's low-risk, but there's no upside to ever targeting it either.
+    /// Dock/SystemUIServer/loginwindow are genuinely dangerous to force-quit
+    /// - killing the wrong one can crash the whole GUI session, not just an
+    /// app. Includes our own bundle ID as a defensive belt-and-suspenders
+    /// (should never be frontmost-and-detected in practice, but "never
+    /// terminate yourself" is cheap insurance).
+    static let neverTerminateBundleIDs: Set<String> = [
+        "com.apple.finder",
+        "com.apple.dock",
+        "com.apple.systemuiserver",
+        "com.apple.loginwindow",
+        ContentGuardIdentifiers.agentBundleID,
+    ]
+
     // MARK: - Heartbeat / IPC
 
     static let heartbeatIntervalSeconds: TimeInterval = 5.0

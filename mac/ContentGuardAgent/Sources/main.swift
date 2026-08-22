@@ -61,14 +61,64 @@ extension AppDelegate: CaptureManagerDelegate {
 }
 
 extension AppDelegate: FrameProcessorDelegate {
+    /// Deliberate departure from the original blackout-on-detect design,
+    /// per an explicit decision to prioritize disguise over the daemon's
+    /// cooldown/escalation protection for this specific reaction: instead
+    /// of covering the screen and notifying the daemon (which would start
+    /// its own 10-minute cooldown), this force-terminates whatever app is
+    /// frontmost at the moment of detection. No overlay, no
+    /// heartbeatClient.sendBlackout() call - the daemon's BlackoutTimer/
+    /// EscalationManager machinery is intentionally not engaged by this
+    /// path.
+    //
+    // Known, accepted tradeoff (flagged, not hidden): this is meaningfully
+    // weaker than the blackout+cooldown approach. Nothing stops
+    // immediately reopening the same app/site right after - there's no
+    // forced waiting period and no escalation if this happens repeatedly.
+    // The daemon's separate tamper-resistance (heartbeat monitoring,
+    // fail-closed on the agent going quiet, escalation on repeated agent
+    // kills) is UNCHANGED and still fully active - that protects against
+    // someone killing the agent process itself, a different concern from
+    // "what happens right after a detection."
     func frameProcessor(_ processor: FrameProcessor, didDetect detection: BlackoutData, on displayID: CGDirectDisplayID) {
-        NSLog("ContentGuardAgent: BLACKOUT triggered - class=\(detection.detectionClass) confidence=\(detection.confidence) display=\(displayID)")
-        overlayManager.cover()
-        heartbeatClient.sendBlackout(detection)
+        NSLog("ContentGuardAgent: DETECTED - class=\(detection.detectionClass) confidence=\(detection.confidence) display=\(displayID)")
+        quitFrontmostApp()
     }
 
     func frameProcessorDidProcessFrame(_ processor: FrameProcessor) {
         heartbeatClient.recordFrameProcessed()
+    }
+
+    /// Best-effort: the frontmost app at the moment of detection is a
+    /// heuristic, not a certainty - by the time this runs (after capture,
+    /// downscale, prefilter, and inference), the user may have already
+    /// switched focus. Accepted as good-enough rather than tracking
+    /// per-window attribution through the whole pipeline, which the
+    /// original design doesn't otherwise need.
+    ///
+    /// Dispatches to the main thread internally, same reasoning as
+    /// OverlayManager.cover()/clear() - this is called from
+    /// FrameProcessor's background queue, and NSWorkspace/NSRunningApplication
+    /// are AppKit, which already crashed once this session (SIGTRAP) when
+    /// called off the main thread. Not repeating that.
+    private func quitFrontmostApp() {
+        DispatchQueue.main.async {
+            guard let frontmost = NSWorkspace.shared.frontmostApplication else {
+                NSLog("ContentGuardAgent: no frontmost app to terminate")
+                return
+            }
+            guard let bundleID = frontmost.bundleIdentifier,
+                  !ContentGuardConfig.neverTerminateBundleIDs.contains(bundleID) else {
+                NSLog("ContentGuardAgent: frontmost app (\(frontmost.bundleIdentifier ?? "unknown")) is on the never-terminate list - not quitting")
+                return
+            }
+            NSLog("ContentGuardAgent: force-terminating \(bundleID)")
+            // forceTerminate(), not terminate() - a normal quit request can
+            // be intercepted by the app itself (an "unsaved changes?"
+            // dialog would leave the content on screen exactly as long as
+            // that dialog sits unanswered). This needs to be unconditional.
+            frontmost.forceTerminate()
+        }
     }
 }
 

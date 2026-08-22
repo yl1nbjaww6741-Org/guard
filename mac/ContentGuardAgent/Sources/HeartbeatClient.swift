@@ -32,6 +32,13 @@ final class HeartbeatClient {
         }
     }
 
+    /// Currently unused by main.swift's detection path - the "quit the
+    /// frontmost app, don't blackout" decision means detections no longer
+    /// notify the daemon at all. Kept rather than deleted: it's real,
+    /// working capability (daemon-side handling in HeartbeatMonitor.swift
+    /// still exists too), not dead code from an abandoned direction - just
+    /// not currently called. Revisit if the quit-only approach ever needs
+    /// daemon-side awareness added back.
     func sendBlackout(_ detection: BlackoutData) {
         queue.async { [weak self] in
             self?.trySend(.blackout(detection))
