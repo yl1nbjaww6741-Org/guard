@@ -88,14 +88,20 @@ extension AppDelegate: FrameProcessorDelegate {
     /// path.
     //
     // Known, accepted tradeoff (flagged, not hidden): this is meaningfully
-    // weaker than the blackout+cooldown approach. Nothing stops
-    // immediately reopening the same app/site right after - there's no
-    // forced waiting period and no escalation if this happens repeatedly.
-    // The daemon's separate tamper-resistance (heartbeat monitoring,
-    // fail-closed on the agent going quiet, escalation on repeated agent
-    // kills) is UNCHANGED and still fully active - that protects against
-    // someone killing the agent process itself, a different concern from
-    // "what happens right after a detection."
+    // weaker than the blackout+cooldown approach - no forced waiting period
+    // on the very first detection, unlike BlackoutTimer's immediate
+    // 10-minute cover. Partially closed, not fully: quitFrontmostApp() below
+    // also reports every detection-triggered quit to the daemon
+    // (heartbeatClient.sendAppDetection), and AppLockManager.swift locks the
+    // specific app out from relaunching for 10 minutes once it's been quit
+    // this way appBlockCountThreshold times - so a *single* detection still
+    // just gets a quiet quit-and-reopen, but repeatedly triggering on the
+    // same app stops working after a few tries. The daemon's separate
+    // tamper-resistance (heartbeat monitoring, fail-closed on the agent
+    // going quiet, escalation on repeated agent kills) is UNCHANGED and
+    // still fully active - that protects against someone killing the agent
+    // process itself, a different concern from "what happens right after a
+    // detection."
     func frameProcessor(_ processor: FrameProcessor, didDetect detection: BlackoutData, on displayID: CGDirectDisplayID) {
         NSLog("ContentGuardAgent: DETECTED - class=\(detection.detectionClass) confidence=\(detection.confidence) display=\(displayID)")
         quitFrontmostApp()
@@ -134,6 +140,20 @@ extension AppDelegate: FrameProcessorDelegate {
             // dialog would leave the content on screen exactly as long as
             // that dialog sits unanswered). This needs to be unconditional.
             frontmost.forceTerminate()
+
+            // Report this to the daemon so repeated detections on the same
+            // app can trigger a real lockout (AppLockManager.swift), not
+            // just a one-off quit each time - closing the tradeoff this
+            // whole reaction's own doc comment calls out above. Uses
+            // executableURL, not bundleURL: the daemon's enforcement
+            // matches against what a *running* process's path actually
+            // looks like (proc_pidpath() -> .../Contents/MacOS/AppName),
+            // not the bundle directory.
+            if let executablePath = frontmost.executableURL?.path {
+                heartbeatClient.sendAppDetection(bundleID: bundleID, executablePath: executablePath)
+            } else {
+                NSLog("ContentGuardAgent: no executableURL for \(bundleID) - can't report it for app-lock tracking")
+            }
         }
     }
 }

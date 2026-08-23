@@ -15,6 +15,11 @@
 		8003D040303881EB00C6CE01 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D03B303881EB00C6CE01 /* main.swift */; };
 		8003D041303881EB00C6CE01 /* BlackoutTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D037303881EB00C6CE01 /* BlackoutTimer.swift */; };
 		8003D042303881EB00C6CE01 /* FallbackCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D039303881EB00C6CE01 /* FallbackCover.swift */; };
+		8003D051303881EB00C6CE02 /* ProcessEnumeration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D050303881EB00C6CE02 /* ProcessEnumeration.swift */; };
+		8003D053303881EB00C6CE02 /* AppLockManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D052303881EB00C6CE02 /* AppLockManager.swift */; };
+		8003D054303881EB00C6CE02 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D01930387A4900C6CE01 /* Config.swift */; };
+		8003D055303881EB00C6CE02 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D01A30387A4900C6CE01 /* Constants.swift */; };
+		8003D056303881EB00C6CE02 /* IPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D01B30387A4900C6CE01 /* IPCProtocol.swift */; };
 		8003D0593039787000C6CE01 /* onnxruntime in Frameworks */ = {isa = PBXBuildFile; productRef = 8003D0583039787000C6CE01 /* onnxruntime */; };
 		8003D05B3039787000C6CE01 /* onnxruntime_extensions in Frameworks */ = {isa = PBXBuildFile; productRef = 8003D05A3039787000C6CE01 /* onnxruntime_extensions */; };
 /* End PBXBuildFile section */
@@ -50,6 +55,8 @@
 		8003D039303881EB00C6CE01 /* FallbackCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FallbackCover.swift; sourceTree = "<group>"; };
 		8003D03A303881EB00C6CE01 /* HeartbeatMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartbeatMonitor.swift; sourceTree = "<group>"; };
 		8003D03B303881EB00C6CE01 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		8003D050303881EB00C6CE02 /* ProcessEnumeration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessEnumeration.swift; sourceTree = "<group>"; };
+		8003D052303881EB00C6CE02 /* AppLockManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLockManager.swift; sourceTree = "<group>"; };
 		8003D0473038824200C6CE01 /* ContentGuardRelease */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ContentGuardRelease; sourceTree = BUILT_PRODUCTS_DIR; };
 		80A0DCFD303878CB00840C36 /* ContentGuardAgent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = ContentGuardAgent.app; path = /Users/lukepowell/guard/mac/build/Debug/ContentGuardAgent.app; sourceTree = "<absolute>"; };
 /* End PBXFileReference section */
@@ -125,6 +132,8 @@
 				8003D039303881EB00C6CE01 /* FallbackCover.swift */,
 				8003D03A303881EB00C6CE01 /* HeartbeatMonitor.swift */,
 				8003D03B303881EB00C6CE01 /* main.swift */,
+				8003D050303881EB00C6CE02 /* ProcessEnumeration.swift */,
+				8003D052303881EB00C6CE02 /* AppLockManager.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -283,6 +292,11 @@
 				8003D040303881EB00C6CE01 /* main.swift in Sources */,
 				8003D041303881EB00C6CE01 /* BlackoutTimer.swift in Sources */,
 				8003D042303881EB00C6CE01 /* FallbackCover.swift in Sources */,
+				8003D051303881EB00C6CE02 /* ProcessEnumeration.swift in Sources */,
+				8003D053303881EB00C6CE02 /* AppLockManager.swift in Sources */,
+				8003D054303881EB00C6CE02 /* Config.swift in Sources */,
+				8003D055303881EB00C6CE02 /* Constants.swift in Sources */,
+				8003D056303881EB00C6CE02 /* IPCProtocol.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

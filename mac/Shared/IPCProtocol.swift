@@ -10,11 +10,17 @@
 // Trust model, worth being explicit about: the socket itself is root-owned
 // but user-writable, so any local process running as the logged-in user can
 // connect and send messages, including a `clearBlackout`. That's fine for
-// `heartbeat` and `blackout` (the daemon treats those as informational, not
-// as an escalation of privilege - a fake heartbeat just delays detection of
-// agent-down, which the grace-window check already tolerates briefly, and a
-// fake `blackout` just covers the screen, which is the fail-safe direction
-// anyway). It is NOT fine for `clearBlackout` on its own - the daemon must
+// `heartbeat`, `blackout`, and `appDetection` (the daemon treats those as
+// informational, not as an escalation of privilege - a fake heartbeat just
+// delays detection of agent-down, which the grace-window check already
+// tolerates briefly; a fake `blackout` just covers the screen, which is the
+// fail-safe direction anyway; a fake `appDetection` just locks an app out
+// for a while, an annoyance at worst, not a bypass of anything - and
+// AppLockManager independently refuses to ever lock a
+// neverTerminateBundleIDs entry regardless of what a message claims, so a
+// forged message naming Dock/SystemUIServer/loginwindow can't be used to
+// get the daemon to repeatedly kill something genuinely dangerous to kill).
+// It is NOT fine for `clearBlackout` on its own - the daemon must
 // NOT treat "a message arrived on the socket claiming to be clearBlackout"
 // as sufficient authorization. AdminRelease.swift is responsible for running
 // a real AuthorizationServices check (kAuthorizationFlagInteractionAllowed)
@@ -30,6 +36,7 @@ enum IPCMessage: Codable {
     case heartbeat(HeartbeatData)
     case blackout(BlackoutData)
     case clearBlackout // only ever send this from AdminRelease, after a real auth check
+    case appDetection(AppDetectionData)
 }
 
 struct HeartbeatData: Codable {
@@ -51,6 +58,22 @@ struct HeartbeatData: Codable {
 struct BlackoutData: Codable {
     let confidence: Float
     let detectionClass: String
+    let timestamp: TimeInterval
+}
+
+/// Sent by the agent's quitFrontmostApp() every time it force-terminates an
+/// app for a real detection - see AppLockManager.swift for what the daemon
+/// does with these. `executablePath` (not just bundleID) is what
+/// AppLockManager actually matches running processes against once an app
+/// gets locked out: proc_pidpath() (used by ProcessEnumeration.swift)
+/// returns a real filesystem path to the Mach-O executable inside the
+/// bundle, not a bundle identifier, so there's no bundleID-based API to
+/// enforce against without a bundle-lookup roundtrip the daemon has no
+/// GUI-session access to make. NSRunningApplication.executableURL on the
+/// agent's side already has exactly this path for free.
+struct AppDetectionData: Codable {
+    let bundleID: String
+    let executablePath: String
     let timestamp: TimeInterval
 }
 

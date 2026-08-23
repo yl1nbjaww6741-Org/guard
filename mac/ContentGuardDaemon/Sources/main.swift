@@ -52,10 +52,13 @@ let escalationManager = EscalationManager(
     }
 )
 
+let appLockManager = AppLockManager(log: logLine)
+
 let heartbeatMonitor = HeartbeatMonitor(
     escalationManager: escalationManager,
     blackoutTimer: blackoutTimer,
     fallbackCover: fallbackCover,
+    appLockManager: appLockManager,
     log: logLine
 )
 

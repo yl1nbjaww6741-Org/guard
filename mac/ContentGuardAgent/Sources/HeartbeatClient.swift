@@ -45,6 +45,22 @@ final class HeartbeatClient {
         }
     }
 
+    /// Called by main.swift's quitFrontmostApp() every time it actually
+    /// force-terminates an app for a real detection - see
+    /// AppLockManager.swift on the daemon side for what happens with these.
+    /// Same "send it now, don't batch into the next heartbeat" reasoning as
+    /// sendBlackout above.
+    func sendAppDetection(bundleID: String, executablePath: String) {
+        queue.async { [weak self] in
+            let data = AppDetectionData(
+                bundleID: bundleID,
+                executablePath: executablePath,
+                timestamp: Date().timeIntervalSince1970
+            )
+            self?.trySend(.appDetection(data))
+        }
+    }
+
     // MARK: - Connection management
 
     // Named connectSocket(), not connect() - a same-named instance method

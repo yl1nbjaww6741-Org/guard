@@ -143,4 +143,35 @@ enum ContentGuardConfig {
     /// EscalationManager.swift.
     static let escalationKillCount: Int = 5
     static let escalationWindowSeconds: TimeInterval = 60.0
+
+    // MARK: - Per-app lockout
+
+    /// If the same app is force-quit for a real NSFW detection this many
+    /// times, AppLockManager locks it out from relaunching for
+    /// appLockDurationSeconds - closing the specific tradeoff called out in
+    /// mac/README.md's Phase 2 row: quitFrontmostApp() alone does nothing
+    /// on its own to stop immediately reopening the same app/site right
+    /// after a detection. Deliberately a plain lifetime-until-lock counter,
+    /// not a rolling time window like EscalationManager's exit tracking -
+    /// every entry here is a real confirmed classifier detection, not noise
+    /// that needs filtering by recency the way an unrelated crash would.
+    static let appBlockCountThreshold: Int = 4
+
+    /// 10 minutes. Tracked as its own constant rather than reusing
+    /// blackoutDurationSeconds, even though they start at the same value -
+    /// the two are conceptually distinct (blackoutDurationSeconds is a
+    /// whole-screen cover from the original design, currently unused since
+    /// main.swift's detection handler quits the frontmost app instead; this
+    /// is a narrower per-app relaunch block) and shouldn't be forced to
+    /// always move together just because someone picked the same number
+    /// for both.
+    static let appLockDurationSeconds: TimeInterval = 600.0
+
+    /// How often AppLockManager polls the process table for a locked app
+    /// trying to relaunch. Deliberately tighter than heartbeatIntervalSeconds
+    /// - this is active enforcement, not failure detection, and a locked
+    /// app visibly flashing open for several seconds before getting killed
+    /// undermines the point of locking it out more than a cheap, frequent
+    /// sysctl poll costs.
+    static let appLockPollIntervalSeconds: TimeInterval = 2.0
 }

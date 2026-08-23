@@ -1,7 +1,7 @@
 // Listens on the Unix domain socket, tracks the agent's heartbeat, and
 // enforces the grace-window fail-closed check. This is the piece that ties
-// EscalationManager, BlackoutTimer, and FallbackCover together into the
-// daemon's actual runtime behavior.
+// EscalationManager, BlackoutTimer, FallbackCover, and AppLockManager
+// together into the daemon's actual runtime behavior.
 
 import Foundation
 
@@ -30,17 +30,20 @@ final class HeartbeatMonitor {
     private let escalationManager: EscalationManager
     private let blackoutTimer: BlackoutTimer
     private let fallbackCover: FallbackCover
+    private let appLockManager: AppLockManager
     private let log: (String) -> Void
 
     init(
         escalationManager: EscalationManager,
         blackoutTimer: BlackoutTimer,
         fallbackCover: FallbackCover,
+        appLockManager: AppLockManager,
         log: @escaping (String) -> Void
     ) {
         self.escalationManager = escalationManager
         self.blackoutTimer = blackoutTimer
         self.fallbackCover = fallbackCover
+        self.appLockManager = appLockManager
         self.log = log
     }
 
@@ -169,6 +172,9 @@ final class HeartbeatMonitor {
             blackoutTimer.adminRelease()
             escalationManager.resetState()
             fallbackCover.hide()
+        case .appDetection(let data):
+            log("detection-triggered quit reported: bundleID=\(data.bundleID)")
+            appLockManager.recordDetectionQuit(bundleID: data.bundleID, executablePath: data.executablePath)
         }
     }
 
@@ -265,7 +271,7 @@ enum RunningAppCheck {
     ]
 
     static func isRiskyAppRunning() -> Bool {
-        for path in runningExecutablePaths() {
+        for (_, path) in ProcessEnumeration.runningProcesses() {
             if riskyPathFragments.contains(where: { path.contains($0) }) {
                 return true
             }
@@ -275,38 +281,5 @@ enum RunningAppCheck {
             }
         }
         return false
-    }
-
-    /// Real value of the C macro PROC_PIDPATHINFO_MAXSIZE (4 * MAXPATHLEN,
-    /// i.e. 4 * 1024 - stable across macOS versions, unlikely to ever
-    /// change). Defined locally rather than using the SDK macro directly:
-    /// the macOS 26.5 SDK marks it "unavailable: structure not supported"
-    /// for Swift import specifically (confirmed via a real build error,
-    /// not assumed) - the underlying value itself is unaffected, just not
-    /// reachable through Swift's C interop anymore.
-    private static let pidPathMaxSize = 4 * 1024
-
-    /// Enumerates running processes via sysctl(KERN_PROC_ALL) - available to
-    /// root without any GUI session, unlike NSWorkspace.runningApplications.
-    private static func runningExecutablePaths() -> [String] {
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
-        var size = 0
-        guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0, size > 0 else { return [] }
-
-        let entryCount = size / MemoryLayout<kinfo_proc>.stride
-        var procList = [kinfo_proc](repeating: kinfo_proc(), count: entryCount)
-        guard sysctl(&mib, u_int(mib.count), &procList, &size, nil, 0) == 0 else { return [] }
-
-        var paths: [String] = []
-        for proc in procList {
-            var pid = proc.kp_proc.p_pid
-            guard pid > 0 else { continue }
-            var pathBuffer = [CChar](repeating: 0, count: pidPathMaxSize)
-            let len = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
-            if len > 0 {
-                paths.append(String(cString: pathBuffer))
-            }
-        }
-        return paths
     }
 }
