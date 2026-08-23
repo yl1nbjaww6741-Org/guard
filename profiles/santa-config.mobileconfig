@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadDisplayName</key>
+    <string>ContentGuard Santa Configuration</string>
+    <key>PayloadIdentifier</key>
+    <string>com.contentguard.santa</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>B9EFAEA3-D5BE-4766-A5D3-BAABC33A4278</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.northpolesec.santa</string>
+            <key>PayloadIdentifier</key>
+            <string>com.contentguard.santa.payload</string>
+            <key>PayloadUUID</key>
+            <string>AA383881-96D1-49E5-A703-D1B91C0F19DD</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>ContentGuard Santa Payload</string>
+
+            <!--
+              MONITOR (1), not LOCKDOWN (2) - a deliberate decision already
+              made and documented in this file's README before Phase 3
+              started (see the "Deliberate deviation" section there):
+              standard users install freely (forceAdminPasswordForApp
+              Installation=false in restrictions.mobileconfig), Phase 2's
+              content-capture blocker is the real backstop against NSFW
+              content regardless of which app displays it, and Santa's job
+              here narrows to denylisting specific known-bad tools rather
+              than gatekeeping all execution. If Santa ever switches to
+              LOCKDOWN, this whole file's approach changes (StaticRules
+              would need to cover everything meant to run, not just what's
+              denied) - not a small edit, revisit deliberately rather than
+              flipping this integer alone.
+            -->
+            <key>ClientMode</key>
+            <integer>1</integer>
+
+            <!--
+              No SyncBaseURL - deliberately no sync server for Phase 3.
+              StaticRules alone is enough for "deny a short, specific list
+              of known-bad tools" and avoids standing up + trusting another
+              network service (a sync server) for what's currently a small,
+              hand-maintained list. Revisit if the denylist grows past what's
+              comfortable to hand-maintain in this file, or Phase 4's
+              Cloudflare Worker ends up wanting to push rule updates
+              dynamically (see mac/README.md's Phase 4 row).
+            -->
+            <key>StaticRules</key>
+            <array>
+                <!--
+                  Defense-in-depth allowlist for ContentGuard's own
+                  binaries, signed with the self-signed "ContentGuard
+                  Signing" identity (see mac/Installer/build-pkg.sh).
+                  Belt-and-suspenders the same way Config.swift's
+                  neverTerminateBundleIDs is: MONITOR mode means Santa isn't
+                  gating ContentGuardAgent/ContentGuardDaemon from running
+                  today, but an explicit ALLOWLIST rule means that stays
+                  true even if ClientMode ever flips to LOCKDOWN later
+                  (see the ClientMode comment above) without anyone having
+                  to remember to add this rule at that point.
+
+                  __CONTENTGUARD_CERT_SHA256__ is a placeholder - Santa's
+                  CERTIFICATE rule type matches on the SHA-256 fingerprint
+                  of the X.509 leaf signing certificate, which is a
+                  different value from the CodeRequirement hash already
+                  used in profiles/pppc.mobileconfig (that's a legacy
+                  SHA-1-based codesign requirement hash, not compatible
+                  here). Once Santa's installed on the real Mac, get the
+                  real value with:
+
+                    santactl fileinfo /usr/local/bin/ContentGuardAgent.app
+
+                  and look for "SHA-256 (leaf signing cert)" in the output
+                  (or `codesign -dvvv <path>` and inspect the signing chain
+                  in Keychain Access if santactl's output format differs).
+                  Fill in below and re-push before relying on this rule.
+                -->
+                <dict>
+                    <key>identifier</key>
+                    <string>__CONTENTGUARD_CERT_SHA256__</string>
+                    <key>rule_type</key>
+                    <string>CERTIFICATE</string>
+                    <key>policy</key>
+                    <string>ALLOWLIST</string>
+                </dict>
+
+                <!--
+                  Starter denylist entry #1: Tor Browser, the specific
+                  example already named in mac/README.md's Phase 3 row.
+                  __TOR_BROWSER_TEAMID__ is a placeholder, deliberately -
+                  no confirmed real value for the Tor Project's Apple
+                  Developer Team ID was available while writing this
+                  offline; guessing one would be worse than leaving it
+                  blank, since a wrong Team ID silently matches nothing and
+                  looks like protection that isn't there. Get the real
+                  value once on the real Mac (safe to do even though
+                  installing Tor Browser to check its own signature feels
+                  backwards - this only reads the signature, Santa's
+                  MONITOR mode doesn't block anything yet anyway):
+
+                    codesign -dv /Applications/Tor\ Browser.app 2>&1 | grep TeamIdentifier
+
+                  Fill in below and re-push. Keep this list small and
+                  deliberate (see profiles/README.md and this payload's
+                  own StaticRules comment above) - add entries as real
+                  gaps show up, not preemptively.
+                -->
+                <dict>
+                    <key>identifier</key>
+                    <string>__TOR_BROWSER_TEAMID__</string>
+                    <key>rule_type</key>
+                    <string>TEAMID</string>
+                    <key>policy</key>
+                    <string>BLOCKLIST</string>
+                </dict>
+            </array>
+
+            <key>EventLogType</key>
+            <string>syslog</string>
+        </dict>
+    </array>
+</dict>
+</plist>
