@@ -57,14 +57,17 @@ final class FrameProcessor {
     /// region instead of the whole-frame mean: real explicit content forms
     /// a concentrated blob of skin pixels; diffuse desktop noise (wood
     /// grain, a face in a video call thumbnail, warm lighting) doesn't
-    /// cluster like that even at a similar whole-frame average. 0.35
-    /// confirmed against real data on the real Mac the same session it was
-    /// added: the two real detections that motivated this fix scored
-    /// maxBlockRatio 0.7 and 0.9 (both well above 0.35, both correctly
-    /// reached the classifier and triggered real 0.76+/0.79+ confidence
-    /// detections), while ordinary browsing in the same session topped out
-    /// around 0.2 - real margin on both sides, same shape of evidence
-    /// skinRatioPrefilterThreshold's own 0.15 was confirmed against above.
+    /// cluster like that even at a similar whole-frame average. 0.35 was
+    /// first confirmed against the two real detections that motivated this
+    /// fix (maxBlockRatio 0.7 and 0.9, both well above 0.35) against
+    /// ordinary browsing that topped out around 0.2 - but that used an 8x8
+    /// block grid, since replaced by a 4x4 grid (see skinAnalysis's doc
+    /// comment) specifically because 8x8 blocks were small enough for a
+    /// single static icon to saturate one on its own. The 0.35 threshold
+    /// itself carries over unchanged - it's a ratio, not tied to a
+    /// specific grid size - but its real-data confirmation was against the
+    /// old grid, so it's provisional again against the new one until
+    /// re-confirmed the same way.
     private let skinRatioPrefilterBlockThreshold: Double = 0.35
 
     init(classifier: NudeNetClassifier) {
@@ -104,19 +107,19 @@ final class FrameProcessor {
         lastFrameHash[displayID] = hash
 
         let (skinRatio, maxBlockSkinRatio) = skinAnalysis(of: thumbnail)
-        // TEMPORARY - re-added to diagnose a new real report (Energy
-        // Impact climbing again, specifically "whenever moving screens" -
-        // switching windows/apps/scrolling, exactly the pattern that would
-        // burst a lot of changed frames through the prefilter at once).
-        // Leading suspect: skinRatioPrefilterBlockThreshold's 0.35 was only
-        // confirmed against ~9 samples from one image-heavy browsing
-        // session, not general desktop use the way the whole-frame 0.15
-        // was - and the OR condition below means the block path can only
-        // ever let MORE frames through than the whole-frame path alone
-        // did, never fewer. This logs which path is passing, so real data
-        // decides the fix instead of guessing a new threshold. Remove once
-        // confirmed one way or the other, same as every other temporary
-        // debug pass in this file's history.
+        // TEMPORARY - kept from the prior debug pass to confirm the grid-
+        // size fix below against real data. The last round of real logging
+        // found the actual cause of the renewed Energy Impact spike: NOT
+        // the whole-frame threshold (YouTube thumbnail scrolling legitimately
+        // pushed skinRatio to 0.17-0.44 - real skin-tone-heavy content,
+        // working as intended), but maxBlockSkinRatio pegged at exactly
+        // 0.55 repeatedly while skinRatio sat at the ordinary ~0.05 noise
+        // floor - a static UI element (icon/avatar) small enough to fully
+        // saturate one 8x8 grid cell on its own, re-triggering every tick
+        // regardless of real content. Fixed by coarsening the grid to 4x4
+        // (see skinAnalysis's doc comment). Remove this logging once that
+        // fix is confirmed against real data the same way every other
+        // change in this file has been.
         NSLog("ContentGuardAgent: [debug] skinRatio=\(skinRatio) maxBlockSkinRatio=\(maxBlockSkinRatio) threshold=\(skinRatioPrefilterThreshold) blockThreshold=\(skinRatioPrefilterBlockThreshold)")
         guard skinRatio >= skinRatioPrefilterThreshold || maxBlockSkinRatio >= skinRatioPrefilterBlockThreshold else {
             // Below both thresholds -> skip the full classifier. Still a
@@ -263,12 +266,24 @@ final class FrameProcessor {
     /// than two separate scans) since both need the same per-pixel skin
     /// classification: `globalRatio` is skin pixels as a fraction of the
     /// whole thumbnail (the original heuristic), `maxBlockRatio` is the
-    /// highest skin ratio found in any single cell of an 8x8 grid over
-    /// that same thumbnail (added after a real miss - see
-    /// skinRatioPrefilterBlockThreshold's doc comment). Same 8x8 grid
-    /// granularity as perceptualHash's sampling grid, though that function
-    /// samples one point per cell for speed; this needs every pixel
-    /// classified to compute per-cell density, so it isn't reused directly.
+    /// highest skin ratio found in any single cell of a grid over that
+    /// same thumbnail (added after a real miss - see
+    /// skinRatioPrefilterBlockThreshold's doc comment).
+    ///
+    /// Grid is 4x4, not 8x8 - originally matched perceptualHash's sampling
+    /// grid "for convenience" (see this file's git history), never
+    /// validated for this purpose, and real data caught the consequence:
+    /// on a 64px-wide thumbnail an 8x8 cell is only ~8x8 pixels, small
+    /// enough for one static desktop icon or avatar to fill on its own and
+    /// peg maxBlockRatio near 1.0 every tick regardless of actual content
+    /// (confirmed live - a fixed 0.55 recurred repeatedly while skinRatio
+    /// sat at the normal ~0.05 noise floor, i.e. nothing resembling real
+    /// content was even on screen). A 4x4 cell is 4x the area - the same
+    /// small icon now contributes at most ~1/4 of a cell's pixels, pulling
+    /// its ratio back under threshold, while a real embedded image (which
+    /// was always large enough to span multiple 8x8 cells already, e.g.
+    /// the confirmed real detections at 0.7/0.9) stays concentrated enough
+    /// to saturate a 4x4 cell too.
     private func skinAnalysis(of pixelBuffer: CVPixelBuffer) -> (globalRatio: Double, maxBlockRatio: Double) {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
@@ -281,7 +296,7 @@ final class FrameProcessor {
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
         let buffer = base.assumingMemoryBound(to: UInt8.self)
 
-        let gridSize = 8
+        let gridSize = 4
         var blockSkinCounts = [Int](repeating: 0, count: gridSize * gridSize)
         var blockTotalCounts = [Int](repeating: 0, count: gridSize * gridSize)
         var totalSkinCount = 0
