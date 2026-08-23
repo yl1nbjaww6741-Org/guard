@@ -156,7 +156,7 @@ enum ContentGuardConfig {
     /// (SIGTERM/SIGKILL) or rapid cycling - a crashing agent (SIGSEGV etc)
     /// is treated as a bug, not tampering, and doesn't escalate. See
     /// EscalationManager.swift.
-    static let escalationKillCount: Int = 2
+    static let escalationKillCount: Int = 5
     static let escalationWindowSeconds: TimeInterval = 60.0
 
     // MARK: - Per-app lockout
