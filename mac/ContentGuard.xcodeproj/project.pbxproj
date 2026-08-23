@@ -22,6 +22,9 @@
 		8003D056303881EB00C6CE02 /* IPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D01B30387A4900C6CE01 /* IPCProtocol.swift */; };
 		8003D0593039787000C6CE01 /* onnxruntime in Frameworks */ = {isa = PBXBuildFile; productRef = 8003D0583039787000C6CE01 /* onnxruntime */; };
 		8003D05B3039787000C6CE01 /* onnxruntime_extensions in Frameworks */ = {isa = PBXBuildFile; productRef = 8003D05A3039787000C6CE01 /* onnxruntime_extensions */; };
+		8003D05C3038824200C6CE01 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D01930387A4900C6CE01 /* Config.swift */; };
+		8003D05D3038824200C6CE01 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D01A30387A4900C6CE01 /* Constants.swift */; };
+		8003D05E3038824200C6CE01 /* IPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D01B30387A4900C6CE01 /* IPCProtocol.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -304,6 +307,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8003D05C3038824200C6CE01 /* Config.swift in Sources */,
+				8003D05D3038824200C6CE01 /* Constants.swift in Sources */,
+				8003D05E3038824200C6CE01 /* IPCProtocol.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
