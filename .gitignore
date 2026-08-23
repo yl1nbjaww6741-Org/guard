@@ -31,3 +31,7 @@ DerivedData/
 mac/build/
 mac/Installer/pkg-root/
 mac/Installer/*.pkg
+
+## worker/ (Cloudflare Worker, Phase 4)
+worker/node_modules/
+worker/.wrangler/

@@ -1,0 +1,34 @@
+# Cloudflare Worker config for the ContentGuard control panel.
+#
+# __CLOUDFLARE_ACCOUNT_ID__ and __D1_DATABASE_ID__ are deliberately left as
+# placeholders rather than guessed, same reasoning as every other
+# real-value placeholder in this repo (see profiles/santa-config.mobileconfig's
+# history) - these only exist once real Cloudflare resources are created
+# on the real account, and a wrong ID silently pointing at nothing (or
+# someone else's account) is worse than an obvious placeholder. Fill in
+# once mac/docs/PHASE_4_DASHBOARD_SETUP.md's setup steps are actually run.
+
+name = "contentguard-worker"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+account_id = "__CLOUDFLARE_ACCOUNT_ID__"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "contentguard"
+database_id = "__D1_DATABASE_ID__"
+
+# No route/custom domain configured yet - defaults to the workers.dev
+# subdomain Cloudflare assigns on first deploy. Santa's SyncBaseURL in
+# profiles/santa-config.mobileconfig gets updated to point at whatever
+# real URL this ends up at, once deployed - not before, since guessing
+# that URL ahead of time would be exactly the kind of unverified
+# real-value placeholder this project has repeatedly caught and fixed
+# this session (pppc.mobileconfig, santa-config.mobileconfig's own two
+# placeholders).
+
+# Cloudflare Access (mac/README.md's Phase 4 row: dashboard auth reuses
+# the existing Zero Trust instance from Phase 1) is configured at the
+# Cloudflare dashboard/Zero Trust level, not here - an Access Application
+# needs to be created pointing at this Worker's route once one exists.
+# See mac/docs/PHASE_4_DASHBOARD_SETUP.md's setup steps.
