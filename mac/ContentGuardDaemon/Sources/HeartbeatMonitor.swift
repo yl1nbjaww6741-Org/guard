@@ -187,6 +187,18 @@ final class HeartbeatMonitor {
                 if self.fallbackCover.isShowing && !self.blackoutTimer.isActive && !self.escalationLockActive
                     && data.captureActive && !framesLookStalled {
                     self.fallbackCover.hide()
+                } else if self.fallbackCover.isShowing && self.escalationLockActive
+                    && data.captureActive && !framesLookStalled {
+                    // Everything else about this heartbeat looks healthy
+                    // enough that the ordinary auto-clear condition above
+                    // would have cleared the cover - logged here
+                    // specifically so that's directly observable on the
+                    // real Mac, since fallbackCover.hide() itself doesn't
+                    // log anything on its own and escalation only calls
+                    // show() once (unlike the frame-stall path, this
+                    // doesn't visibly re-lock the display, so there'd
+                    // otherwise be no way to see the fix actually holding).
+                    self.log("heartbeat looks healthy but escalation lock is active - staying locked until admin release")
                 }
             }
         case .blackout(let data):
