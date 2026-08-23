@@ -40,13 +40,23 @@ set -euo pipefail
 
 SIGNING_IDENTITY="ContentGuard Signing"
 VERSION="1.0.0"
-BUILD_DIR="build/Release"
 PKG_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Absolute, not "build/Release" - that was silently relying on xcodebuild
+# putting products under $PKG_ROOT/build/Release, which it never does
+# unless explicitly told to. Without an override, xcodebuild builds into
+# ~/Library/Developer/Xcode/DerivedData/<project>-<hash>/Build/Products/
+# Release instead - confirmed the hard way on the real Mac: every step
+# above this one succeeded (all three targets built and linked fine into
+# DerivedData), and only the packaging step below failed, with `codesign`
+# reporting "No such file or directory" against a build/Release that was
+# never created. CONFIGURATION_BUILD_DIR below forces xcodebuild to put
+# products exactly where this script already expected them.
+BUILD_DIR="$PKG_ROOT/build/Release"
 
 echo "==> Building ContentGuardAgent, ContentGuardDaemon, ContentGuardRelease"
-xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardAgent -configuration Release
-xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardDaemon -configuration Release
-xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardRelease -configuration Release
+xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardAgent -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR"
+xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardDaemon -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR"
+xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardRelease -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR"
 
 echo "==> Signing binaries with the self-signed ContentGuard Signing identity"
 codesign --force --sign "$SIGNING_IDENTITY" --options runtime "$BUILD_DIR/ContentGuardAgent.app"
