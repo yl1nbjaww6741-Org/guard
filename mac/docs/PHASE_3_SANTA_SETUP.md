@@ -69,6 +69,35 @@ detailed walkthrough if needed).
    cleanly before Santa tried to activate - worth fixing that before
    trusting anything else here.
 
+## Step 2.5 - Grant Santa's daemon Full Disk Access
+
+Not part of Santa's own docs' "quick start," but confirmed necessary live:
+right after Step 2's install, `santactl status` failed outright with "An
+error occurred communicating with the Santa daemon" - `com.northpolesec
+.santa.daemon` needs Full Disk Access (`SystemPolicyAllFiles` in TCC
+terms) to function at all, which is a separate grant from Step 1's
+System Extension pre-approval.
+
+Push `profiles/santa-tcc.mobileconfig` the same way as Step 1 (**Controls
+> OS settings > Custom settings** in Fleet, target the Mac). Its content
+was copied verbatim from northpole.dev's own reference TCC profile
+(`northpole.dev/deployment/profile-tcc/`) rather than reconstructed by
+hand, and covers all three of Santa's components (`daemon`, `netd`,
+`bundleservice`) rather than narrowing to just `daemon` - matching the
+vendor's own reference profile beats guessing which pieces are safe to
+leave out.
+
+Confirm on the Mac once pushed:
+
+```bash
+santactl status
+```
+
+Should no longer error - if it still can't reach the daemon after this
+profile shows Verified in Fleet, check **System Settings > Privacy &
+Security > Full Disk Access** directly for whether `com.northpolesec
+.santa.daemon` is listed and enabled.
+
 ## Step 3 - Confirm MONITOR mode is active
 
 ```bash

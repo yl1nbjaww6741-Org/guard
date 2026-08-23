@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadDisplayName</key>
+    <string>ContentGuard Santa Full Disk Access</string>
+    <key>PayloadIdentifier</key>
+    <string>com.contentguard.santatcc</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>7027B775-7385-4513-BA4F-FCED8C6C1E27</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.TCC.configuration-profile-policy</string>
+            <key>PayloadIdentifier</key>
+            <string>com.contentguard.santatcc.payload</string>
+            <key>PayloadUUID</key>
+            <string>E2408ED1-502D-45D1-B8D1-6E9926291065</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>ContentGuard Santa Full Disk Access Payload</string>
+            <!--
+              Not part of the original Phase 3 plan - discovered live on
+              the real Mac: `santactl status` failed with "An error
+              occurred communicating with the Santa daemon" right after
+              Santa installed and its System Extension was enabled.
+              northpole.dev's own troubleshooting doc confirms
+              com.northpolesec.santa.daemon needs Full Disk Access
+              (SystemPolicyAllFiles) to function at all - a separate TCC
+              grant from the System Extension activation Step 1 already
+              covers, and not mentioned anywhere in PHASE_3_SANTA_SETUP.md
+              until now.
+
+              CodeRequirement strings and structure copied verbatim from
+              northpole.dev's own reference TCC profile
+              (northpole.dev/deployment/profile-tcc/), pasted directly by
+              the user from their browser rather than reconstructed from
+              an indirect fetch - two automated attempts to retrieve this
+              page gave inconsistent answers (one said the key was
+              "Authorization"/<true/>, another said "Allowed"/true, and
+              the CodeRequirement string came back visibly truncated) so
+              it wasn't trustworthy to transcribe secondhand for something
+              this exact-value-sensitive, especially right after
+              diagnosing a PPPC failure that came down to exact string
+              content.
+
+              Uses "Allowed" (Boolean), not "Authorization" (String) -
+              both are valid per Apple's own schema (mutually exclusive,
+              either works), and this matches northpole.dev's own
+              template rather than converting to the newer key for no
+              reason.
+
+              All three of Santa's components included - daemon (does the
+              actual authorization work, this is the one this profile
+              exists for), netd (network extension, unused by Phase 3's
+              execution-control-only setup), and bundleservice (not
+              previously known about - discovered from this same
+              reference profile, presumably the on-demand helper Santa
+              uses for bundle hashing). Same reasoning as
+              system-extension.mobileconfig's AllowedSystemExtensions:
+              pre-approving an unused component is harmless if it's never
+              exercised, and matching the vendor's own reference profile
+              beats guessing which pieces are safe to narrow out.
+            -->
+            <key>Services</key>
+            <dict>
+                <key>SystemPolicyAllFiles</key>
+                <array>
+                    <dict>
+                        <key>Identifier</key>
+                        <string>com.northpolesec.santa.daemon</string>
+                        <key>IdentifierType</key>
+                        <string>bundleID</string>
+                        <key>CodeRequirement</key>
+                        <string>identifier "com.northpolesec.santa.daemon" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = ZMCG7MLDV9</string>
+                        <key>Allowed</key>
+                        <true/>
+                        <key>StaticCode</key>
+                        <false/>
+                    </dict>
+                    <dict>
+                        <key>Identifier</key>
+                        <string>com.northpolesec.santa.netd</string>
+                        <key>IdentifierType</key>
+                        <string>bundleID</string>
+                        <key>CodeRequirement</key>
+                        <string>identifier "com.northpolesec.santa.netd" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = ZMCG7MLDV9</string>
+                        <key>Allowed</key>
+                        <true/>
+                        <key>StaticCode</key>
+                        <false/>
+                    </dict>
+                    <dict>
+                        <key>Identifier</key>
+                        <string>com.northpolesec.santa.bundleservice</string>
+                        <key>IdentifierType</key>
+                        <string>bundleID</string>
+                        <key>CodeRequirement</key>
+                        <string>identifier "com.northpolesec.santa.bundleservice" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = ZMCG7MLDV9</string>
+                        <key>Allowed</key>
+                        <true/>
+                        <key>StaticCode</key>
+                        <false/>
+                    </dict>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>
