@@ -104,6 +104,20 @@ final class FrameProcessor {
         lastFrameHash[displayID] = hash
 
         let (skinRatio, maxBlockSkinRatio) = skinAnalysis(of: thumbnail)
+        // TEMPORARY - re-added to diagnose a new real report (Energy
+        // Impact climbing again, specifically "whenever moving screens" -
+        // switching windows/apps/scrolling, exactly the pattern that would
+        // burst a lot of changed frames through the prefilter at once).
+        // Leading suspect: skinRatioPrefilterBlockThreshold's 0.35 was only
+        // confirmed against ~9 samples from one image-heavy browsing
+        // session, not general desktop use the way the whole-frame 0.15
+        // was - and the OR condition below means the block path can only
+        // ever let MORE frames through than the whole-frame path alone
+        // did, never fewer. This logs which path is passing, so real data
+        // decides the fix instead of guessing a new threshold. Remove once
+        // confirmed one way or the other, same as every other temporary
+        // debug pass in this file's history.
+        NSLog("ContentGuardAgent: [debug] skinRatio=\(skinRatio) maxBlockSkinRatio=\(maxBlockSkinRatio) threshold=\(skinRatioPrefilterThreshold) blockThreshold=\(skinRatioPrefilterBlockThreshold)")
         guard skinRatio >= skinRatioPrefilterThreshold || maxBlockSkinRatio >= skinRatioPrefilterBlockThreshold else {
             // Below both thresholds -> skip the full classifier. Still a
             // load shedder, not an acquitter, on both paths: each
