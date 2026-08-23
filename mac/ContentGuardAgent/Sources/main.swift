@@ -161,7 +161,18 @@ extension AppDelegate: FrameProcessorDelegate {
             // just a one-off quit each time - closing the tradeoff this
             // whole reaction's own doc comment calls out above.
             if let executablePath {
-                heartbeatClient.sendAppDetection(bundleID: bundleID, executablePath: executablePath)
+                // Explicit self required here (unlike captureManager/
+                // heartbeatClient references elsewhere in this file) -
+                // real compiler error, not a style choice: this project
+                // sets default-isolation=MainActor, and the first time a
+                // closure passed to a non-isolated API like
+                // DispatchQueue.main.async actually touches an instance
+                // member (this line is the first one in this specific
+                // closure that does - NSWorkspace.shared/ContentGuardConfig/
+                // frontmost above aren't self members), the compiler needs
+                // capture semantics made explicit rather than inferring
+                // them silently.
+                self.heartbeatClient.sendAppDetection(bundleID: bundleID, executablePath: executablePath)
             } else {
                 NSLog("ContentGuardAgent: no executableURL for \(bundleID) - can't report it for app-lock tracking")
             }
