@@ -72,25 +72,19 @@
                   (see the ClientMode comment above) without anyone having
                   to remember to add this rule at that point.
 
-                  __CONTENTGUARD_CERT_SHA256__ is a placeholder - Santa's
-                  CERTIFICATE rule type matches on the SHA-256 fingerprint
-                  of the X.509 leaf signing certificate, which is a
-                  different value from the CodeRequirement hash already
-                  used in profiles/pppc.mobileconfig (that's a legacy
-                  SHA-1-based codesign requirement hash, not compatible
-                  here). Once Santa's installed on the real Mac, get the
-                  real value with:
-
-                    santactl fileinfo /usr/local/bin/ContentGuardAgent.app
-
-                  and look for "SHA-256 (leaf signing cert)" in the output
-                  (or `codesign -dvvv <path>` and inspect the signing chain
-                  in Keychain Access if santactl's output format differs).
-                  Fill in below and re-push before relying on this rule.
+                  Confirmed on the real Mac via `santactl fileinfo
+                  /usr/local/bin/ContentGuardAgent.app` - the SHA-256
+                  under "Signing Chain: 1." (the self-signed "ContentGuard
+                  Signing" leaf cert; self-signed means leaf and root are
+                  the same entry). Its SHA-1 matches the hash already used
+                  in profiles/pppc.mobileconfig's CodeRequirement, which
+                  is a useful cross-check that it's the same certificate -
+                  but Santa's CERTIFICATE rule type specifically needs the
+                  SHA-256, not that SHA-1.
                 -->
                 <dict>
                     <key>identifier</key>
-                    <string>__CONTENTGUARD_CERT_SHA256__</string>
+                    <string>ef2d492485a1d4b3c74946ffc72da927862af3ea0205ffdd96b96ab3617bc31f</string>
                     <key>rule_type</key>
                     <string>CERTIFICATE</string>
                     <key>policy</key>
@@ -100,27 +94,19 @@
                 <!--
                   Starter denylist entry #1: Tor Browser, the specific
                   example already named in mac/README.md's Phase 3 row.
-                  __TOR_BROWSER_TEAMID__ is a placeholder, deliberately -
-                  no confirmed real value for the Tor Project's Apple
-                  Developer Team ID was available while writing this
-                  offline; guessing one would be worse than leaving it
-                  blank, since a wrong Team ID silently matches nothing and
-                  looks like protection that isn't there. Get the real
-                  value once on the real Mac (safe to do even though
-                  installing Tor Browser to check its own signature feels
-                  backwards - this only reads the signature, Santa's
-                  MONITOR mode doesn't block anything yet anyway):
-
-                    codesign -dv /Applications/Tor\ Browser.app 2>&1 | grep TeamIdentifier
-
-                  Fill in below and re-push. Keep this list small and
-                  deliberate (see profiles/README.md and this payload's
-                  own StaticRules comment above) - add entries as real
-                  gaps show up, not preemptively.
+                  Confirmed on the real Mac via `codesign -dv
+                  "/Applications/Tor Browser.app" 2>&1 | grep
+                  TeamIdentifier` - not guessed, per this file's own
+                  earlier note about a wrong Team ID silently matching
+                  nothing and looking like protection that isn't there.
+                  Keep this list small and deliberate (see
+                  profiles/README.md and this payload's own StaticRules
+                  comment above) - add entries as real gaps show up, not
+                  preemptively.
                 -->
                 <dict>
                     <key>identifier</key>
-                    <string>__TOR_BROWSER_TEAMID__</string>
+                    <string>MADPSAYN6T</string>
                     <key>rule_type</key>
                     <string>TEAMID</string>
                     <key>policy</key>
