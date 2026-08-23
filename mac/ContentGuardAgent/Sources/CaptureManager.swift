@@ -29,6 +29,11 @@ final class CaptureManager: NSObject {
     private var streamHealthTimer: DispatchSourceTimer?
     private var isRebuilding = false
 
+    /// True once start() has run at least once - see checkStreamHealth()'s
+    /// doc comment for why this replaced a `!streams.isEmpty` guard. Only
+    /// ever touched from outputQueue, same as the other state above.
+    private var hasStartedOnce = false
+
     init(appScopeManager: AppScopeManager, overlayManager: OverlayManager) {
         self.appScopeManager = appScopeManager
         self.overlayManager = overlayManager
@@ -56,6 +61,9 @@ final class CaptureManager: NSObject {
     func start() async throws {
         try await appScopeManager.refresh()
         try await rebuildAllStreams()
+        outputQueue.async { [weak self] in
+            self?.hasStartedOnce = true
+        }
         startStreamHealthCheck()
     }
 
@@ -87,6 +95,30 @@ final class CaptureManager: NSObject {
 
         for display in content.displays {
             try await buildStream(for: display, ownOverlayWindows: ownWindows)
+        }
+
+        if streams.isEmpty {
+            // Found necessary on the real Mac: SCShareableContent can
+            // legitimately return zero displays when this runs during a
+            // silent maintenance wake (macOS's periodic brief wake-without-
+            // display-on, confirmed live via `pmset -g log` showing
+            // mDNSResponder MaintenanceWake entries during an otherwise
+            // unexplained multi-hour capture outage) - handleWake() fires
+            // NSWorkspace.didWakeNotification for these too, not just a
+            // real user-visible wake. Deliberately NOT resetting
+            // lastFrameDeliveredAt below in this case - doing so used to
+            // tell checkStreamHealth() "fresh and healthy" at the exact
+            // moment streams actually went empty, which combined with the
+            // old `!streams.isEmpty` guard there meant the health check
+            // permanently stopped evaluating staleness from that point on.
+            // Confirmed live: capture stayed dead through a real full wake
+            // and 3+ minutes of active use afterward, with zero rebuild
+            // attempts logged the whole time - this is that gap, closed.
+            // Leaving lastFrameDeliveredAt stale (or nil, pre-first-build)
+            // means the next checkStreamHealth() tick sees this as overdue
+            // and retries, same as any other real stall.
+            NSLog("ContentGuardAgent: rebuildAllStreams found 0 displays (likely a silent maintenance wake) - not marking healthy, will retry")
+            return
         }
 
         // Reset the health-check baseline to "now" - a freshly (re)built
@@ -158,9 +190,15 @@ final class CaptureManager: NSObject {
     }
 
     private func checkStreamHealth() {
-        // Nothing built yet (start() hasn't run, or we're mid-teardown) -
-        // nothing to judge as stalled.
-        guard !streams.isEmpty else { return }
+        // start() hasn't completed its first rebuild yet - nothing to judge
+        // as stalled. Deliberately NOT `!streams.isEmpty` (what this used to
+        // read) - that guard conflated "never started" with "started, but
+        // the last rebuild found zero displays and streams is legitimately
+        // empty right now", and the second case is exactly the stall this
+        // whole mechanism exists to catch and retry, not a reason to skip
+        // it. See rebuildAllStreams()'s doc comment on the zero-displays
+        // case for the real incident that surfaced this.
+        guard hasStartedOnce else { return }
 
         let reference = lastFrameDeliveredAt ?? .distantPast
         guard Date().timeIntervalSince(reference) > ContentGuardConfig.captureStreamStallGraceSeconds else { return }
