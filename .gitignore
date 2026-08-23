@@ -31,3 +31,9 @@ DerivedData/
 mac/build/
 mac/Installer/pkg-root/
 mac/Installer/*.pkg
+
+## Self-hosted fleet secrets (mac/fleet/self-hosted/) - real credentials,
+# never committed. .env.example is the tracked template.
+mac/fleet/self-hosted/.env
+mac/fleet/self-hosted/*.env
+mac/fleet/self-hosted/command/
