@@ -43,6 +43,29 @@ final class FrameProcessor {
     /// job now instead of passing nearly everything through.
     private let skinRatioPrefilterThreshold: Double = 0.15
 
+    /// Second prefilter path, added alongside the whole-frame threshold
+    /// above after a real, confirmed miss: genuinely explicit Reddit
+    /// images, embedded in a page with a lot of surrounding chrome
+    /// (sidebar, header, whitespace), never reached the classifier at all
+    /// - live debug logging showed skinRatio sitting at 0.005-0.12 for
+    /// those exact frames, comfortably under 0.15, because the whole-frame
+    /// average dilutes a real image's skin coverage by however much of the
+    /// screen isn't that image. A single global average genuinely cannot
+    /// distinguish "explicit image occupying a third of the screen" from
+    /// "normal desktop skin-tone noise" - this session's own data put both
+    /// in the same 0.05-0.12 band. So this checks the densest single
+    /// region instead of the whole-frame mean: real explicit content forms
+    /// a concentrated blob of skin pixels; diffuse desktop noise (wood
+    /// grain, a face in a video call thumbnail, warm lighting) doesn't
+    /// cluster like that even at a similar whole-frame average. Provisional
+    /// value - deliberately higher than the whole-frame real-content floor
+    /// (0.2+, per FrameProcessor's other threshold's doc comment) since an
+    /// undiluted local region should score higher than a diluted
+    /// whole-frame average did for the same real content - but not yet
+    /// confirmed against real data the way the whole-frame threshold was;
+    /// still logging the raw value in [debug] output pending that.
+    private let skinRatioPrefilterBlockThreshold: Double = 0.35
+
     init(classifier: NudeNetClassifier) {
         self.classifier = classifier
     }
@@ -79,26 +102,24 @@ final class FrameProcessor {
         }
         lastFrameHash[displayID] = hash
 
-        let skinRatio = skinPixelRatio(of: thumbnail)
-        // TEMPORARY - reinstated to diagnose a specific real report (real
-        // Reddit NSFW images not triggering a block) that this exact
-        // threshold change is a plausible cause of: skinPixelRatio is
-        // computed over the WHOLE captured frame, not just an embedded
-        // image, so a genuinely explicit photo occupying a moderate
-        // fraction of a page with a lot of surrounding chrome (sidebar,
-        // header, whitespace) could plausibly stay under 0.15 even though
-        // it would clear a lower threshold easily. Remove again once this
-        // is confirmed one way or the other - see this file's git history
-        // for why the equivalent logging was removed before (a real,
-        // measured battery cost, unconditional on every 3s tick).
-        NSLog("ContentGuardAgent: [debug] skinRatio=\(skinRatio) threshold=\(skinRatioPrefilterThreshold)")
-        guard skinRatio >= skinRatioPrefilterThreshold else {
-            // Below threshold -> skip the full classifier. This IS a load
-            // shedder, not an acquitter: the threshold is deliberately
-            // permissive specifically so this never becomes the thing that
-            // "cleared" a frame that should have been blocked - it only
-            // ever skips frames confidently unlikely to contain the target
-            // classes at all.
+        let (skinRatio, maxBlockSkinRatio) = skinAnalysis(of: thumbnail)
+        // TEMPORARY - kept from the diagnostic pass that found the
+        // block-threshold gap in the first place, still useful for
+        // confirming skinRatioPrefilterBlockThreshold's provisional value
+        // against real data. Remove once that's settled - see this file's
+        // git history for why the equivalent whole-frame-only logging was
+        // removed before (a real, measured battery cost, unconditional on
+        // every 3s tick).
+        NSLog("ContentGuardAgent: [debug] skinRatio=\(skinRatio) maxBlockSkinRatio=\(maxBlockSkinRatio) threshold=\(skinRatioPrefilterThreshold) blockThreshold=\(skinRatioPrefilterBlockThreshold)")
+        guard skinRatio >= skinRatioPrefilterThreshold || maxBlockSkinRatio >= skinRatioPrefilterBlockThreshold else {
+            // Below both thresholds -> skip the full classifier. Still a
+            // load shedder, not an acquitter, on both paths: each
+            // threshold is deliberately permissive on its own axis (whole-
+            // frame average / densest local region) specifically so
+            // neither becomes the thing that "cleared" a frame that should
+            // have been blocked - together they only skip frames
+            // confidently unlikely to contain the target classes at all,
+            // whether the skin coverage is diffuse or concentrated.
             return
         }
 
@@ -235,20 +256,38 @@ final class FrameProcessor {
     /// the change hash - deliberately crude (a fixed Cb/Cr band), since its
     /// only job is deciding whether to bother with a full inference, not
     /// deciding anything final. See the class doc comment.
-    private func skinPixelRatio(of pixelBuffer: CVPixelBuffer) -> Double {
+    ///
+    /// Computes both prefilter signals in one pass over the pixels (rather
+    /// than two separate scans) since both need the same per-pixel skin
+    /// classification: `globalRatio` is skin pixels as a fraction of the
+    /// whole thumbnail (the original heuristic), `maxBlockRatio` is the
+    /// highest skin ratio found in any single cell of an 8x8 grid over
+    /// that same thumbnail (added after a real miss - see
+    /// skinRatioPrefilterBlockThreshold's doc comment). Same 8x8 grid
+    /// granularity as perceptualHash's sampling grid, though that function
+    /// samples one point per cell for speed; this needs every pixel
+    /// classified to compute per-cell density, so it isn't reused directly.
+    private func skinAnalysis(of pixelBuffer: CVPixelBuffer) -> (globalRatio: Double, maxBlockRatio: Double) {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
-        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return 1.0 } // can't evaluate -> don't shed
+        // Can't evaluate -> don't shed, on both signals.
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return (1.0, 1.0) }
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 0, height > 0 else { return (1.0, 1.0) }
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
         let buffer = base.assumingMemoryBound(to: UInt8.self)
 
-        var skinCount = 0
+        let gridSize = 8
+        var blockSkinCounts = [Int](repeating: 0, count: gridSize * gridSize)
+        var blockTotalCounts = [Int](repeating: 0, count: gridSize * gridSize)
+        var totalSkinCount = 0
         var totalCount = 0
-        for y in stride(from: 0, to: height, by: 1) {
-            for x in stride(from: 0, to: width, by: 1) {
+
+        for y in 0..<height {
+            let blockY = min(gridSize - 1, y * gridSize / height)
+            for x in 0..<width {
                 let offset = y * bytesPerRow + x * 4 // BGRA
                 let b = Double(buffer[offset])
                 let g = Double(buffer[offset + 1])
@@ -256,14 +295,27 @@ final class FrameProcessor {
 
                 let cb = -0.169 * r - 0.331 * g + 0.500 * b + 128
                 let cr = 0.500 * r - 0.419 * g - 0.081 * b + 128
+                let isSkin = cb >= 77 && cb <= 127 && cr >= 133 && cr <= 173
 
+                let blockX = min(gridSize - 1, x * gridSize / width)
+                let blockIndex = blockY * gridSize + blockX
+                blockTotalCounts[blockIndex] += 1
                 totalCount += 1
-                if cb >= 77, cb <= 127, cr >= 133, cr <= 173 {
-                    skinCount += 1
+                if isSkin {
+                    blockSkinCounts[blockIndex] += 1
+                    totalSkinCount += 1
                 }
             }
         }
-        guard totalCount > 0 else { return 1.0 }
-        return Double(skinCount) / Double(totalCount)
+
+        guard totalCount > 0 else { return (1.0, 1.0) }
+        let globalRatio = Double(totalSkinCount) / Double(totalCount)
+
+        var maxBlockRatio = 0.0
+        for i in 0..<(gridSize * gridSize) where blockTotalCounts[i] > 0 {
+            maxBlockRatio = max(maxBlockRatio, Double(blockSkinCounts[i]) / Double(blockTotalCounts[i]))
+        }
+
+        return (globalRatio, maxBlockRatio)
     }
 }
