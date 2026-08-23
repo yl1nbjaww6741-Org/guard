@@ -42,13 +42,23 @@ let blackoutTimer = BlackoutTimer(
     }
 )
 
+// Set once heartbeatMonitor exists below - EscalationManager's onEscalate
+// closure needs to call into it (markEscalationLockActive(), not
+// fallbackCover.show() directly - see that method's doc comment for why),
+// but HeartbeatMonitor's own init needs escalationManager as a dependency,
+// so neither can come strictly first. This forward reference is the
+// simplest way through that without restructuring the whole wiring style
+// this file otherwise uses (plain top-level lets, per its own header
+// comment).
+var heartbeatMonitorRef: HeartbeatMonitor?
+
 let escalationManager = EscalationManager(
     onExit: { kind in
         logLine("agent exit observed: \(kind)")
     },
     onEscalate: {
         logLine("escalation threshold reached - locking screen")
-        fallbackCover.show()
+        heartbeatMonitorRef?.markEscalationLockActive()
     }
 )
 
@@ -61,6 +71,7 @@ let heartbeatMonitor = HeartbeatMonitor(
     appLockManager: appLockManager,
     log: logLine
 )
+heartbeatMonitorRef = heartbeatMonitor
 
 do {
     try heartbeatMonitor.start()

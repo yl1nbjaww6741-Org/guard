@@ -27,6 +27,19 @@ final class HeartbeatMonitor {
     private var lastFramesProcessed: Int?
     private var lastFramesChangedAt: Date?
 
+    /// True from the moment EscalationManager's kill-counter crosses its
+    /// threshold until a real admin release - see markEscalationLockActive()
+    /// and the heartbeat handler's auto-clear condition below. Found the
+    /// hard way, on the real Mac: without this, an escalation lock behaved
+    /// no differently from the ordinary heartbeat-overdue/frame-stall
+    /// fail-closed checks (both of which auto-clear on their own once the
+    /// agent looks healthy again, by design) - the very next healthy
+    /// heartbeat from the relaunched agent, which typically lands within
+    /// ~10-15s given how fast launchd relaunches it, auto-cleared the
+    /// escalation lock just as fast, undermining the whole point of a
+    /// separate, harder-to-shrug-off signal for repeated tampering.
+    private var escalationLockActive = false
+
     private let escalationManager: EscalationManager
     private let blackoutTimer: BlackoutTimer
     private let fallbackCover: FallbackCover
@@ -51,6 +64,22 @@ final class HeartbeatMonitor {
         monitorStartedAt = Date()
         try bindAndListen()
         startGraceWindowChecker()
+    }
+
+    /// Called from main.swift's EscalationManager.onEscalate wiring, in
+    /// place of calling fallbackCover.show() directly - that was the actual
+    /// bug (see escalationLockActive's doc comment): calling show() alone,
+    /// with nothing marking the lock as escalation-sourced, meant the very
+    /// next healthy heartbeat auto-cleared it via the same path that
+    /// legitimately auto-clears an ordinary fail-closed cover. Routing this
+    /// through here instead means the auto-clear check itself can tell the
+    /// difference and refuse to clear until a real admin release.
+    func markEscalationLockActive() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.escalationLockActive = true
+            self.fallbackCover.show()
+        }
     }
 
     // MARK: - Socket setup
@@ -155,7 +184,7 @@ final class HeartbeatMonitor {
                 // that's actually evidence of live capture, not just of a
                 // living process.
                 let framesLookStalled = self.isFrameCountStalled(referenceDate: Date())
-                if self.fallbackCover.isShowing && !self.blackoutTimer.isActive
+                if self.fallbackCover.isShowing && !self.blackoutTimer.isActive && !self.escalationLockActive
                     && data.captureActive && !framesLookStalled {
                     self.fallbackCover.hide()
                 }
@@ -171,6 +200,7 @@ final class HeartbeatMonitor {
             log("admin release: clearing blackout and escalation state")
             blackoutTimer.adminRelease()
             escalationManager.resetState()
+            escalationLockActive = false
             fallbackCover.hide()
         case .appDetection(let data):
             log("detection-triggered quit reported: bundleID=\(data.bundleID)")
