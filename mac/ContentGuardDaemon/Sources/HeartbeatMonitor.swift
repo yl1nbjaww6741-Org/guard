@@ -14,6 +14,12 @@ final class HeartbeatMonitor {
     private var lastHeartbeatData: HeartbeatData?
     private var graceCheckTimer: DispatchSourceTimer?
 
+    /// Set once, in start() - see ContentGuardConfig.agentStartupGraceSeconds's
+    /// doc comment for why "never heard from the agent yet" is measured
+    /// against this instead of being treated as overdue on the very first
+    /// check.
+    private var monitorStartedAt: Date?
+
     /// Tracks frame-count staleness independently of heartbeat arrival - see
     /// ContentGuardConfig.frameStallGraceSeconds's doc comment for why this
     /// exists: a heartbeat arriving on schedule is not proof capture is
@@ -39,6 +45,7 @@ final class HeartbeatMonitor {
     }
 
     func start() throws {
+        monitorStartedAt = Date()
         try bindAndListen()
         startGraceWindowChecker()
     }
@@ -185,10 +192,25 @@ final class HeartbeatMonitor {
         let heartbeatOverdue: Bool
         if let lastHeartbeatAt {
             heartbeatOverdue = Date().timeIntervalSince(lastHeartbeatAt) > graceDeadline
+        } else if let monitorStartedAt {
+            // Never heard from the agent this daemon instance's life yet.
+            // Used to be treated as overdue immediately - proven wrong on
+            // the real Mac by a full reboot: the agent needs real
+            // wall-clock time after login to spin up ScreenCaptureKit and
+            // send its first heartbeat, and RunningAppCheck sees ordinary
+            // login items relaunching as "risky" during that exact window,
+            // which locked the screen seconds after a normal login. See
+            // ContentGuardConfig.agentStartupGraceSeconds's doc comment for
+            // why a bounded, one-time startup grace period is the right
+            // fix rather than reverting to "wait a full heartbeatGraceSeconds"
+            // (too slow for the real mid-session-restart case this
+            // originally protected) or removing the check entirely (would
+            // reopen that gap for good).
+            heartbeatOverdue = Date().timeIntervalSince(monitorStartedAt) > ContentGuardConfig.agentStartupGraceSeconds
         } else {
-            // Never heard from the agent at all (e.g. just booted, agent
-            // hasn't started yet) - treat as overdue immediately rather
-            // than waiting a full grace window with no signal either way.
+            // start() hasn't run yet - shouldn't be reachable since
+            // graceCheckTimer is only created inside start(), but fail
+            // closed rather than open if this is ever hit anyway.
             heartbeatOverdue = true
         }
 

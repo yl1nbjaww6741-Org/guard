@@ -89,6 +89,44 @@ enum ContentGuardConfig {
     /// that, not a tight bound.
     static let frameStallGraceSeconds: TimeInterval = 30.0
 
+    /// Found the hard way, on the real Mac, via a full `sudo reboot` (not
+    /// just a launchd bootout/bootstrap cycle - see mac/README.md): the
+    /// daemon (a LaunchDaemon) comes up at system boot, well before anyone
+    /// logs in. HeartbeatMonitor's grace-window check has always treated
+    /// "never received a heartbeat this run" as overdue *immediately*
+    /// rather than waiting out a full heartbeatGraceSeconds - deliberately,
+    /// to close a real gap where a daemon restart mid-session (agent
+    /// already running, a risky app already open) shouldn't get a free
+    /// pass window with zero protection. But that same immediate check
+    /// also fires the instant a user logs in after a real boot: macOS
+    /// relaunches login items right away, RunningAppCheck.isRiskyAppRunning()
+    /// counts any ordinary /Applications app as risky (not just Chrome -
+    /// see that function's own doc comment on why it's deliberately
+    /// broad), and the agent's ScreenCaptureKit stream needs real wall-clock
+    /// time to spin up and send its first heartbeat - so the very next
+    /// grace-check tick (every heartbeatIntervalSeconds) sees "no heartbeat
+    /// yet" + "some login item is running" and fails closed within seconds
+    /// of typing the login password. Confirmed live: this is exactly what
+    /// locked the screen right after a real restart.
+    ///
+    /// The fix is a one-time startup grace period, timed from when this
+    /// daemon instance started (see HeartbeatMonitor.monitorStartedAt) -
+    /// once elapsed, the original immediate-overdue behavior applies
+    /// permanently for the rest of that daemon instance's life, so this
+    /// doesn't reopen an ongoing gap, just delays when the check starts
+    /// being strict. Sized well above ordinary login-item-relaunch +
+    /// ScreenCaptureKit-startup timing, generous specifically because real
+    /// boot conditions (cold caches, everything relaunching at once) are
+    /// heavier than steady-state. Doesn't meaningfully weaken the original
+    /// mid-session-restart case this replaces either: if the agent was
+    /// already alive and heartbeating before the daemon restarted, its
+    /// heartbeat timer keeps ticking independently and a fresh heartbeat
+    /// should land well under this window regardless - the only case this
+    /// grace period actually costs anything against is both the daemon
+    /// and the agent dying at the exact same instant during an active
+    /// session, which is bounded to this window, not unlimited.
+    static let agentStartupGraceSeconds: TimeInterval = 45.0
+
     static let socketPath = "/var/run/contentguard.sock"
 
     // MARK: - Blackout / escalation
