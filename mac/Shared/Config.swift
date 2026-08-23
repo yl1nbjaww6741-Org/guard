@@ -89,6 +89,21 @@ enum ContentGuardConfig {
     /// that, not a tight bound.
     static let frameStallGraceSeconds: TimeInterval = 30.0
 
+    /// How long CaptureManager (agent-side) waits since the last frame it
+    /// actually delivered before concluding its own SCStream has silently
+    /// died and proactively rebuilding it - the self-healing counterpart to
+    /// frameStallGraceSeconds above. Found necessary on the real Mac: the
+    /// daemon's frame-stall detection can *notice* a dead stream, but its
+    /// only lever is repeatedly sleeping the display (FallbackCover), which
+    /// does nothing to fix the underlying problem - confirmed live, a stall
+    /// that started once just stayed stalled, repeatedly sleeping the
+    /// display, until a human ran `launchctl kickstart` by hand. Deliberately
+    /// shorter than frameStallGraceSeconds (30s) - this should resolve a
+    /// stall well before the daemon's more disruptive fail-closed response
+    /// ever needs to fire at all, not race it. See CaptureManager.swift's
+    /// startStreamHealthCheck().
+    static let captureStreamStallGraceSeconds: TimeInterval = 15.0
+
     /// Found the hard way, on the real Mac, via a full `sudo reboot` (not
     /// just a launchd bootout/bootstrap cycle - see mac/README.md): the
     /// daemon (a LaunchDaemon) comes up at system boot, well before anyone
