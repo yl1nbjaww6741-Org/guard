@@ -14,6 +14,13 @@ final class HeartbeatMonitor {
     private var lastHeartbeatData: HeartbeatData?
     private var graceCheckTimer: DispatchSourceTimer?
 
+    /// Tracks frame-count staleness independently of heartbeat arrival - see
+    /// ContentGuardConfig.frameStallGraceSeconds's doc comment for why this
+    /// exists: a heartbeat arriving on schedule is not proof capture is
+    /// actually alive.
+    private var lastFramesProcessed: Int?
+    private var lastFramesChangedAt: Date?
+
     private let escalationManager: EscalationManager
     private let blackoutTimer: BlackoutTimer
     private let fallbackCover: FallbackCover
@@ -112,15 +119,34 @@ final class HeartbeatMonitor {
                 let isNewProcess = self.lastHeartbeatData?.pid != data.pid
                 self.lastHeartbeatAt = Date()
                 self.lastHeartbeatData = data
+
+                // Frame-count staleness tracked separately from heartbeat
+                // arrival - see ContentGuardConfig.frameStallGraceSeconds's
+                // doc comment. A new process always counts as "just
+                // changed" (its own frame counter starts fresh at 0, so it
+                // trivially differs from whatever the previous process last
+                // reported) - correct, since a freshly (re)started process
+                // hasn't stalled, it just hasn't produced a frame yet.
+                if isNewProcess || data.framesProcessed != self.lastFramesProcessed {
+                    self.lastFramesChangedAt = Date()
+                }
+                self.lastFramesProcessed = data.framesProcessed
+
                 if isNewProcess {
                     self.escalationManager.watchNewAgentProcess(pid: data.pid)
                 }
                 self.log("heartbeat: pid=\(data.pid) captureActive=\(data.captureActive) frames=\(data.framesProcessed) modelHash=\(data.modelHash)")
-                // A heartbeat arriving at all means the agent is alive and
-                // able to cover the screen itself - safe to lift a
-                // fallback cover that was only up because the agent
-                // appeared to be gone.
-                if self.fallbackCover.isShowing && !self.blackoutTimer.isActive {
+
+                // Used to be "a heartbeat arriving at all means the agent
+                // can cover the screen itself" - proven wrong on the real
+                // Mac: a stalled SCStream keeps sending perfectly healthy-
+                // looking heartbeats (captureActive=true) with a frozen
+                // frame count. Only lift a fallback cover for a heartbeat
+                // that's actually evidence of live capture, not just of a
+                // living process.
+                let framesLookStalled = self.isFrameCountStalled(referenceDate: Date())
+                if self.fallbackCover.isShowing && !self.blackoutTimer.isActive
+                    && data.captureActive && !framesLookStalled {
                     self.fallbackCover.hide()
                 }
             }
@@ -156,23 +182,49 @@ final class HeartbeatMonitor {
 
     private func checkGraceWindow() {
         let graceDeadline = ContentGuardConfig.heartbeatGraceSeconds
-        let overdue: Bool
+        let heartbeatOverdue: Bool
         if let lastHeartbeatAt {
-            overdue = Date().timeIntervalSince(lastHeartbeatAt) > graceDeadline
+            heartbeatOverdue = Date().timeIntervalSince(lastHeartbeatAt) > graceDeadline
         } else {
             // Never heard from the agent at all (e.g. just booted, agent
             // hasn't started yet) - treat as overdue immediately rather
             // than waiting a full grace window with no signal either way.
-            overdue = true
+            heartbeatOverdue = true
         }
 
-        guard overdue else { return }
+        // A second, independent failure signal - see
+        // ContentGuardConfig.frameStallGraceSeconds's doc comment. Found on
+        // the real Mac: heartbeats can keep arriving exactly on schedule
+        // (heartbeatOverdue staying false the whole time) from a process
+        // whose SCStream died silently underneath it, with captureActive
+        // stuck reporting true. Gated on captureActive being true at all -
+        // if the agent's own heartbeat is honestly reporting capture as
+        // down, that's not a new signal this needs to add anything to.
+        let framesStalled = lastHeartbeatData?.captureActive == true
+            && isFrameCountStalled(referenceDate: Date())
+
+        guard heartbeatOverdue || framesStalled else { return }
         guard RunningAppCheck.isRiskyAppRunning() else { return }
 
         if !fallbackCover.isShowing {
-            log("agent heartbeat overdue and a risky app is running - failing closed")
+            if heartbeatOverdue {
+                log("agent heartbeat overdue and a risky app is running - failing closed")
+            } else {
+                log("agent heartbeats arriving but frame count has stalled and a risky app is running - failing closed")
+            }
         }
         fallbackCover.show()
+    }
+
+    /// True if capture claims to be active (per the most recent heartbeat)
+    /// but framesProcessed hasn't actually advanced within
+    /// frameStallGraceSeconds. `lastFramesChangedAt == nil` means no
+    /// heartbeat has been judged yet, not that anything is stalled - the
+    /// heartbeatOverdue check above already covers that "no signal at all"
+    /// case on its own.
+    private func isFrameCountStalled(referenceDate: Date) -> Bool {
+        guard let lastFramesChangedAt else { return false }
+        return referenceDate.timeIntervalSince(lastFramesChangedAt) > ContentGuardConfig.frameStallGraceSeconds
     }
 }
 

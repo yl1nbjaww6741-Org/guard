@@ -68,6 +68,27 @@ enum ContentGuardConfig {
     /// HeartbeatMonitor.swift.
     static let heartbeatGraceSeconds: TimeInterval = 15.0
 
+    /// 10x the capture interval. Found the hard way, on the real Mac: a
+    /// process can stay alive and keep sending perfectly on-schedule
+    /// heartbeats with captureActive=true, while the actual SCStream has
+    /// silently died underneath it (a real ScreenCaptureKit failure mode -
+    /// not every stream death fires SCStreamDelegate.didStopWithError, and
+    /// HeartbeatClient.captureActive is a "did start() succeed once" flag,
+    /// never re-evaluated - see HeartbeatClient.swift). That leaves the
+    /// heartbeatGraceSeconds check above blind: heartbeats keep arriving on
+    /// time, so "time since last heartbeat" alone never trips, even though
+    /// zero frames have actually been processed in minutes. framesProcessed
+    /// is already in every heartbeat and monotonically increases whenever
+    /// capture is genuinely alive (FrameProcessor.process() bumps it via a
+    /// deferred call on every frame, regardless of skin-ratio outcome) - so
+    /// HeartbeatMonitor tracks when that count last actually changed, not
+    /// just when a heartbeat last arrived. 30s is generous versus the
+    /// nominal 3s cadence specifically because real multi-display capture
+    /// jitter was observed going as high as ~6s between frames even in
+    /// confirmed-healthy operation - this needs comfortable margin above
+    /// that, not a tight bound.
+    static let frameStallGraceSeconds: TimeInterval = 30.0
+
     static let socketPath = "/var/run/contentguard.sock"
 
     // MARK: - Blackout / escalation
