@@ -37,8 +37,12 @@
 
     <!--
       File names match what build-pkg.sh's three pkgbuild invocations
-      actually produce, resolved relative to --package-path Installer
-      (passed to productbuild above).
+      actually produce, resolved relative to productbuild's own
+      package path argument above (Installer). Deliberately not naming
+      that flag with its usual two leading dashes here - XML comments
+      can't contain a double hyphen anywhere inside them, only at the
+      open/close delimiters, and writing it out broke productbuild's own
+      XML parser on this exact line, confirmed live on the real Mac.
     -->
     <pkg-ref id="com.contentguard.pkg" version="1.0.0" onConclusion="none">contentguard-app.pkg</pkg-ref>
     <pkg-ref id="com.contentguard.daemon.plist" version="1.0.0" onConclusion="none">daemon-plist.pkg</pkg-ref>
