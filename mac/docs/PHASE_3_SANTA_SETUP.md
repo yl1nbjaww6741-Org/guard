@@ -143,15 +143,36 @@ Step 1.
 ## Step 5 - Verify the rules actually took effect
 
 ```bash
-santactl rule --check --path /Applications/Tor\ Browser.app
-santactl rule --check --path /usr/local/bin/ContentGuardAgent.app
+sudo santactl rule --check --path "/Applications/Tor Browser.app/Contents/MacOS/firefox" --teamid
+sudo santactl rule --check --path /usr/local/bin/ContentGuardAgent.app/Contents/MacOS/ContentGuardAgent --certificate
 ```
 
-Should show `BLOCKLIST` and `ALLOWLIST` respectively. Then the real
-test: launch Tor Browser (if installed) and confirm Santa actually
-blocks it - MONITOR mode still enforces explicit BLOCKLIST rules, that's
-the whole point of using StaticRules instead of relying on ClientMode
-alone. Also confirm ContentGuardAgent/ContentGuardDaemon are unaffected -
+Two things confirmed the hard way and worth calling out so the next
+person doesn't repeat the same detours:
+
+- **Needs `sudo`** - `santactl rule` requires root, plain user
+  invocation just errors.
+- **Needs `--teamid`/`--certificate` and the real binary path, not the
+  `.app` bundle** - `santactl rule --check --path` defaults to checking
+  for a `BINARY` (SHA-256) rule specifically, per `santactl`'s own
+  `--help` text (`--path`'s description: "Defaults to a SHA-256 rule
+  unless overridden with another flag"). Since our two rules are a
+  `TEAMID` rule and a `CERTIFICATE` rule, not binary rules, checking
+  without the matching flag always reports "No matching rule exists"
+  regardless of whether the rule is actually there and working - this
+  produced a real, confusing false negative on the actual Mac (the rule
+  was genuinely enforcing - Tor Browser really got blocked on launch -
+  while `--check` kept saying no rule matched, until the right flag was
+  added). Pointing `--path` at the bundle directory itself (rather than
+  the actual Mach-O inside `Contents/MacOS/`) doesn't help either, since
+  a directory has no code signature of its own to check against.
+
+Should show `BLOCKLIST` and `ALLOWLIST` respectively (as
+`Blocked (TeamID, Static)` / `Allowed (Certificate, Static)`). Then the
+real test: launch Tor Browser and confirm Santa actually blocks it -
+MONITOR mode still enforces explicit BLOCKLIST rules, that's the whole
+point of using StaticRules instead of relying on ClientMode alone.
+Also confirm ContentGuardAgent/ContentGuardDaemon are unaffected -
 they should be, since MONITOR mode doesn't gate anything without an
 explicit rule and Phase 2's own processes were already running fine
 before Santa existed, but worth confirming rather than assuming.
