@@ -21,13 +21,27 @@ final class FrameProcessor {
     private var lastFrameHash: [CGDirectDisplayID: UInt64] = [:]
     private let processingQueue = DispatchQueue(label: "com.contentguard.agent.frame-processing", qos: .utility)
 
-    /// Skin-tone prefilter threshold - deliberately permissive. This is a
-    /// load shedder (skip obviously-safe frames to save a full inference),
-    /// not an acquitter (it never gets to say "definitely clean" on its
-    /// own) - see the module doc comment. Needs empirical tuning against
-    /// real screenshots once running on the Mac; this starting value is a
-    /// reasonable guess, not a measured one.
-    private let skinRatioPrefilterThreshold: Double = 0.05
+    /// Skin-tone prefilter threshold - deliberately permissive, but no
+    /// longer a guess: found the hard way on the real Mac that the
+    /// original 0.05 barely cleared normal desktop "skin tone noise" at
+    /// all - Activity Monitor showed ContentGuardAgent as the single
+    /// highest Energy Impact process running (126.8, above Chrome, above
+    /// everything), and the agent's own debug log during completely
+    /// ordinary use (no NSFW content anywhere) showed skinRatio
+    /// consistently landing at ~0.066-0.069 - just barely above 0.05 - so
+    /// the "load shedder" was shedding almost nothing: 36 of the last 42
+    /// captured frames were reaching a full ONNX Runtime + CoreML
+    /// inference, continuously, every ~3s, for no reason. Cross-checked
+    /// against every confirmed real detection from this session's testing:
+    /// every one of them needed a skin ratio of 0.2+ before the classifier
+    /// produced anything but a ~1e-5 near-zero confidence - below that,
+    /// confidence stayed firmly negligible regardless of skin ratio. 0.15
+    /// sits with real margin on both sides of that real data: well above
+    /// the observed normal-use noise floor (~0.05-0.09), well below the
+    /// observed real-content floor (0.2+) - still a load shedder, not an
+    /// acquitter (see the module doc comment), just one actually doing its
+    /// job now instead of passing nearly everything through.
+    private let skinRatioPrefilterThreshold: Double = 0.15
 
     init(classifier: NudeNetClassifier) {
         self.classifier = classifier
@@ -66,13 +80,6 @@ final class FrameProcessor {
         lastFrameHash[displayID] = hash
 
         let skinRatio = skinPixelRatio(of: thumbnail)
-        // TEMPORARY diagnostic logging (Phase 2 detection testing) - remove
-        // once the pipeline is confirmed working end-to-end against real
-        // content. Logs every frame that reaches this point, whether or
-        // not it clears the prefilter, so a false negative can be
-        // distinguished between "never reached the classifier" and "the
-        // classifier scored it too low."
-        NSLog("ContentGuardAgent: [debug] skinRatio=\(skinRatio) threshold=\(skinRatioPrefilterThreshold)")
         guard skinRatio >= skinRatioPrefilterThreshold else {
             // Below threshold -> skip the full classifier. This IS a load
             // shedder, not an acquitter: the threshold is deliberately
@@ -92,9 +99,8 @@ final class FrameProcessor {
             let result = try classifier.classify(scaledForModel)
             switch result {
             case .clean:
-                NSLog("ContentGuardAgent: [debug] classify() -> .clean")
+                break
             case .detected(let detectionClass, let confidence, _):
-                NSLog("ContentGuardAgent: [debug] classify() -> .detected class=\(detectionClass) confidence=\(confidence)")
                 guard confidence >= ContentGuardConfig.detectionConfidenceThreshold else {
                     // Below the confirmation gate - a single borderline
                     // frame shouldn't cost 10 minutes, per the original
@@ -109,10 +115,16 @@ final class FrameProcessor {
                 report(detectionClass: detectionClass, confidence: confidence, displayID: displayID)
             }
         } catch {
-            NSLog("ContentGuardAgent: [debug] classify() threw \(error) - failing closed")
+            NSLog("ContentGuardAgent: classify() threw \(error) - failing closed")
             // Classifier itself errored (model load issue, inference
             // failure, etc) - this IS an error case, and per the spec,
-            // errors fail closed.
+            // errors fail closed. Real, rare, operationally meaningful -
+            // unlike the per-frame [debug] logging removed above (see this
+            // file's git history for that - it served its purpose
+            // confirming the pipeline end-to-end against real content
+            // across this session's testing, and was itself a real,
+            // measured cost: it ran unconditionally on every single
+            // captured frame, indefinitely, for as long as the agent runs).
             reportUncertainAsPositive(displayID: displayID)
         }
     }
