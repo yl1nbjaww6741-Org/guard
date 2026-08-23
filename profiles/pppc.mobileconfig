@@ -3,23 +3,46 @@
 <plist version="1.0">
 <dict>
     <!--
-      PayloadUUID/PayloadVersion bumped (both top-level and inner payload)
-      after this profile failed twice in Fleet's OS settings with the
-      identical generic "the key 'Authorization or Allowed' has an
-      invalid value" error, on identical content both times - the second
-      failure came right after re-uploading and Resend-ing the exact
-      current file, unchanged. Content itself was cross-checked against
-      Apple's own device-management schema (github.com/apple/device-
-      management) and confirmed correct: Authorization/Allow is valid for
-      both ScreenCapture and Accessibility, and CodeRequirement matches
-      `codesign -d -r-` on the real installed binary byte-for-byte. An
-      identical failure on confirmed-correct content, twice, pointed at
-      MDM profile installation being UUID-keyed rather than content-keyed
-      - re-pushing the same PayloadUUID may just replay a cached prior
-      outcome rather than genuinely re-validating. Not yet confirmed this
-      was the actual cause (that requires this fresh UUID actually
-      clearing in Fleet) - noted here either way so the reasoning isn't
-      lost if it needs revisiting.
+      ScreenCapture entry removed entirely - real root cause of the
+      persistent "the key 'Authorization or Allowed' has an invalid
+      value" Fleet failure finally found (confirmed via web search, not
+      guessed): macOS 26 (Tahoe, what this Mac runs - see the SDK version
+      in mac/Installer/build-pkg.sh's build output) restricts ScreenCapture
+      PPPC entries to Authorization: Deny or
+      AllowStandardUserToSetSystemService only - Allow is rejected
+      outright. Not a UUID-caching issue (ruled out: a genuinely fresh
+      PayloadUUID failed identically), not a content bug (CodeRequirement
+      confirmed byte-for-byte correct via `codesign -d -r-`) - this is a
+      real Apple platform restriction that didn't exist, or wasn't
+      enforced, when this profile was first written and confirmed working
+      during Phase 2.
+
+      Real, considered tradeoff, not a default: AllowStandardUserToSet
+      SystemService needs a live interactive click, reintroducing the
+      exact problem this profile originally existed to solve for a
+      headless launchd-started agent (see mac/README.md's Phase 2 row -
+      "every prior grant... went through some form of live
+      user-interaction context, which a plain launchd bootstrap never
+      has"). Deny defeats the point entirely. So there is currently no
+      way to silently, automatically grant Screen Recording to a headless
+      agent via MDM on this macOS version - removing the entry rather
+      than picking either broken option.
+
+      Real consequence, confirmed and accepted (not silently absorbed):
+      this Mac's existing Screen Recording grant (already in its TCC
+      database from earlier testing) is untouched by this change and
+      keeps working - reboots, sleep/wake, and ordinary agent restarts
+      have already been confirmed live not to reset it (see
+      mac/README.md's Phase 2 row, the real cold-reboot test). But a
+      *future* fresh install, a TCC reset, or migrating to a different
+      Mac would need ONE manual interactive click (launch the agent
+      once at a real login session, or grant via System Settings
+      directly) before capture would work - no longer something MDM can
+      restore unattended. Until that click happens, the agent fails
+      closed rather than silently running uncovered (per this project's
+      established fail-closed design - see FrameProcessor.swift's and
+      HeartbeatMonitor's own doc comments), so the exposure window is a
+      locked screen requiring setup, not unblocked content.
     -->
     <key>PayloadDisplayName</key>
     <string>ContentGuard PPPC</string>
@@ -28,9 +51,9 @@
     <key>PayloadType</key>
     <string>Configuration</string>
     <key>PayloadUUID</key>
-    <string>2011545B-18D1-45FC-9AF3-2BEEC53E2216</string>
+    <string>B93AE7BB-B220-4DB4-AB78-F0B1DA17B6D2</string>
     <key>PayloadVersion</key>
-    <integer>2</integer>
+    <integer>3</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -43,43 +66,11 @@
             <key>PayloadIdentifier</key>
             <string>com.contentguard.pppc.payload</string>
             <key>PayloadUUID</key>
-            <string>4D753AD3-B7B8-4E46-9BE8-6B85C594FE33</string>
+            <string>84261996-479A-4C16-B14D-50DBE96350D4</string>
             <key>PayloadVersion</key>
-            <integer>2</integer>
+            <integer>3</integer>
             <key>Services</key>
             <dict>
-                <!--
-                  Authorization: Allow, not AllowStandardUserToSetSystemService.
-                  The latter (used deliberately in the PHASE_2_SIGNING_TEST.md
-                  test profile) requires a live, interactive user click on the
-                  system's Allow dialog to complete the grant - fine for a
-                  one-time manual test, but structurally incompatible with
-                  ContentGuardAgent's real deployment: a headless LSUIElement
-                  LaunchAgent, auto-started by launchd at login with nobody
-                  necessarily present to click anything. This is the
-                  documented, correct way to grant Screen Recording to a
-                  background agent unattended - MDM-pushed PPPC with a
-                  silent Allow, which is the one path that doesn't depend on
-                  an interactive click event at all. This is very likely the
-                  actual root cause of the real-Mac launchd-vs-Terminal
-                  discrepancy chased at length in this session: every prior
-                  grant (System Settings toggle, an interactive Terminal
-                  launch) went through some form of live user-interaction
-                  context, which a plain launchd bootstrap never has.
-                -->
-                <key>ScreenCapture</key>
-                <array>
-                    <dict>
-                        <key>Identifier</key>
-                        <string>com.contentguard.agent</string>
-                        <key>IdentifierType</key>
-                        <string>bundleID</string>
-                        <key>CodeRequirement</key>
-                        <string>identifier "com.contentguard.agent" and certificate root = H"cda6539309367d134e61fb248ba54c7e1386268e"</string>
-                        <key>Authorization</key>
-                        <string>Allow</string>
-                    </dict>
-                </array>
                 <key>Accessibility</key>
                 <array>
                     <dict>
