@@ -134,6 +134,21 @@ extension AppDelegate: FrameProcessorDelegate {
                 NSLog("ContentGuardAgent: frontmost app (\(frontmost.bundleIdentifier ?? "unknown")) is on the never-terminate list - not quitting")
                 return
             }
+            // Captured BEFORE forceTerminate() below, deliberately - found
+            // the hard way on the real Mac that reading executableURL
+            // AFTER telling NSRunningApplication to terminate silently
+            // failed to report every single detection to the daemon
+            // (AppLockManager never saw a single appDetection message
+            // despite 5 real force-quits in one test run). bundleID was
+            // already safe (read earlier, in the guard above) - this pulls
+            // executablePath into the same "read metadata from a still-
+            // alive process" window, rather than querying a process that's
+            // already been told to die. Uses executableURL, not bundleURL:
+            // the daemon's enforcement matches against what a *running*
+            // process's path actually looks like (proc_pidpath() ->
+            // .../Contents/MacOS/AppName), not the bundle directory.
+            let executablePath = frontmost.executableURL?.path
+
             NSLog("ContentGuardAgent: force-terminating \(bundleID)")
             // forceTerminate(), not terminate() - a normal quit request can
             // be intercepted by the app itself (an "unsaved changes?"
@@ -144,12 +159,8 @@ extension AppDelegate: FrameProcessorDelegate {
             // Report this to the daemon so repeated detections on the same
             // app can trigger a real lockout (AppLockManager.swift), not
             // just a one-off quit each time - closing the tradeoff this
-            // whole reaction's own doc comment calls out above. Uses
-            // executableURL, not bundleURL: the daemon's enforcement
-            // matches against what a *running* process's path actually
-            // looks like (proc_pidpath() -> .../Contents/MacOS/AppName),
-            // not the bundle directory.
-            if let executablePath = frontmost.executableURL?.path {
+            // whole reaction's own doc comment calls out above.
+            if let executablePath {
                 heartbeatClient.sendAppDetection(bundleID: bundleID, executablePath: executablePath)
             } else {
                 NSLog("ContentGuardAgent: no executableURL for \(bundleID) - can't report it for app-lock tracking")

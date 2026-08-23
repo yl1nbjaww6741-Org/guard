@@ -129,8 +129,25 @@ final class HeartbeatClient {
     }
 
     private func trySend(_ message: IPCMessage) {
-        guard let connection else {
+        // Used to just call connectSocket() and return here, dropping
+        // whatever message triggered this - harmless for a heartbeat (the
+        // next 5s tick sends a fresh one regardless), but a real gap for a
+        // one-shot message like appDetection: if the connection happened to
+        // be nil at the exact moment of a detection, that detection's
+        // report was silently lost with nothing to resend it, undermining
+        // AppLockManager's whole counter. connectSocket() is synchronous
+        // (a blocking connect(2)) and this always runs already dispatched
+        // onto `queue`, same as connectSocket() itself, so trying the send
+        // immediately after is safe - no new thread-safety concern.
+        if connection == nil {
             connectSocket()
+        }
+        guard let connection else {
+            // Still nothing after trying - the daemon's socket genuinely
+            // isn't there right now. Not worth retry machinery beyond this:
+            // heartbeats self-heal on the next tick regardless, and a lost
+            // appDetection just means AppLockManager needs one more real
+            // detection to reach its threshold, not a silent, permanent gap.
             return
         }
         do {
