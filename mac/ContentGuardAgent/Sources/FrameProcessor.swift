@@ -80,6 +80,18 @@ final class FrameProcessor {
         lastFrameHash[displayID] = hash
 
         let skinRatio = skinPixelRatio(of: thumbnail)
+        // TEMPORARY - reinstated to diagnose a specific real report (real
+        // Reddit NSFW images not triggering a block) that this exact
+        // threshold change is a plausible cause of: skinPixelRatio is
+        // computed over the WHOLE captured frame, not just an embedded
+        // image, so a genuinely explicit photo occupying a moderate
+        // fraction of a page with a lot of surrounding chrome (sidebar,
+        // header, whitespace) could plausibly stay under 0.15 even though
+        // it would clear a lower threshold easily. Remove again once this
+        // is confirmed one way or the other - see this file's git history
+        // for why the equivalent logging was removed before (a real,
+        // measured battery cost, unconditional on every 3s tick).
+        NSLog("ContentGuardAgent: [debug] skinRatio=\(skinRatio) threshold=\(skinRatioPrefilterThreshold)")
         guard skinRatio >= skinRatioPrefilterThreshold else {
             // Below threshold -> skip the full classifier. This IS a load
             // shedder, not an acquitter: the threshold is deliberately
@@ -99,8 +111,13 @@ final class FrameProcessor {
             let result = try classifier.classify(scaledForModel)
             switch result {
             case .clean:
-                break
+                // TEMPORARY, same diagnostic pass as the skinRatio log
+                // above - remove alongside it.
+                NSLog("ContentGuardAgent: [debug] classify() -> .clean")
             case .detected(let detectionClass, let confidence, _):
+                // TEMPORARY, same diagnostic pass as the skinRatio log
+                // above - remove alongside it.
+                NSLog("ContentGuardAgent: [debug] classify() -> .detected class=\(detectionClass) confidence=\(confidence)")
                 guard confidence >= ContentGuardConfig.detectionConfidenceThreshold else {
                     // Below the confirmation gate - a single borderline
                     // frame shouldn't cost 10 minutes, per the original
