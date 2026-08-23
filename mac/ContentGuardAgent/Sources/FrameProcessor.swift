@@ -57,13 +57,14 @@ final class FrameProcessor {
     /// region instead of the whole-frame mean: real explicit content forms
     /// a concentrated blob of skin pixels; diffuse desktop noise (wood
     /// grain, a face in a video call thumbnail, warm lighting) doesn't
-    /// cluster like that even at a similar whole-frame average. Provisional
-    /// value - deliberately higher than the whole-frame real-content floor
-    /// (0.2+, per FrameProcessor's other threshold's doc comment) since an
-    /// undiluted local region should score higher than a diluted
-    /// whole-frame average did for the same real content - but not yet
-    /// confirmed against real data the way the whole-frame threshold was;
-    /// still logging the raw value in [debug] output pending that.
+    /// cluster like that even at a similar whole-frame average. 0.35
+    /// confirmed against real data on the real Mac the same session it was
+    /// added: the two real detections that motivated this fix scored
+    /// maxBlockRatio 0.7 and 0.9 (both well above 0.35, both correctly
+    /// reached the classifier and triggered real 0.76+/0.79+ confidence
+    /// detections), while ordinary browsing in the same session topped out
+    /// around 0.2 - real margin on both sides, same shape of evidence
+    /// skinRatioPrefilterThreshold's own 0.15 was confirmed against above.
     private let skinRatioPrefilterBlockThreshold: Double = 0.35
 
     init(classifier: NudeNetClassifier) {
@@ -103,14 +104,6 @@ final class FrameProcessor {
         lastFrameHash[displayID] = hash
 
         let (skinRatio, maxBlockSkinRatio) = skinAnalysis(of: thumbnail)
-        // TEMPORARY - kept from the diagnostic pass that found the
-        // block-threshold gap in the first place, still useful for
-        // confirming skinRatioPrefilterBlockThreshold's provisional value
-        // against real data. Remove once that's settled - see this file's
-        // git history for why the equivalent whole-frame-only logging was
-        // removed before (a real, measured battery cost, unconditional on
-        // every 3s tick).
-        NSLog("ContentGuardAgent: [debug] skinRatio=\(skinRatio) maxBlockSkinRatio=\(maxBlockSkinRatio) threshold=\(skinRatioPrefilterThreshold) blockThreshold=\(skinRatioPrefilterBlockThreshold)")
         guard skinRatio >= skinRatioPrefilterThreshold || maxBlockSkinRatio >= skinRatioPrefilterBlockThreshold else {
             // Below both thresholds -> skip the full classifier. Still a
             // load shedder, not an acquitter, on both paths: each
@@ -132,13 +125,8 @@ final class FrameProcessor {
             let result = try classifier.classify(scaledForModel)
             switch result {
             case .clean:
-                // TEMPORARY, same diagnostic pass as the skinRatio log
-                // above - remove alongside it.
-                NSLog("ContentGuardAgent: [debug] classify() -> .clean")
+                break
             case .detected(let detectionClass, let confidence, _):
-                // TEMPORARY, same diagnostic pass as the skinRatio log
-                // above - remove alongside it.
-                NSLog("ContentGuardAgent: [debug] classify() -> .detected class=\(detectionClass) confidence=\(confidence)")
                 guard confidence >= ContentGuardConfig.detectionConfidenceThreshold else {
                     // Below the confirmation gate - a single borderline
                     // frame shouldn't cost 10 minutes, per the original
