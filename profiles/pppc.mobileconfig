@@ -2,6 +2,25 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!--
+      PayloadUUID/PayloadVersion bumped (both top-level and inner payload)
+      after this profile failed twice in Fleet's OS settings with the
+      identical generic "the key 'Authorization or Allowed' has an
+      invalid value" error, on identical content both times - the second
+      failure came right after re-uploading and Resend-ing the exact
+      current file, unchanged. Content itself was cross-checked against
+      Apple's own device-management schema (github.com/apple/device-
+      management) and confirmed correct: Authorization/Allow is valid for
+      both ScreenCapture and Accessibility, and CodeRequirement matches
+      `codesign -d -r-` on the real installed binary byte-for-byte. An
+      identical failure on confirmed-correct content, twice, pointed at
+      MDM profile installation being UUID-keyed rather than content-keyed
+      - re-pushing the same PayloadUUID may just replay a cached prior
+      outcome rather than genuinely re-validating. Not yet confirmed this
+      was the actual cause (that requires this fresh UUID actually
+      clearing in Fleet) - noted here either way so the reasoning isn't
+      lost if it needs revisiting.
+    -->
     <key>PayloadDisplayName</key>
     <string>ContentGuard PPPC</string>
     <key>PayloadIdentifier</key>
@@ -9,9 +28,9 @@
     <key>PayloadType</key>
     <string>Configuration</string>
     <key>PayloadUUID</key>
-    <string>19b6a78b-0f4b-4813-a844-c29cf3fecd66</string>
+    <string>2011545B-18D1-45FC-9AF3-2BEEC53E2216</string>
     <key>PayloadVersion</key>
-    <integer>1</integer>
+    <integer>2</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -24,9 +43,9 @@
             <key>PayloadIdentifier</key>
             <string>com.contentguard.pppc.payload</string>
             <key>PayloadUUID</key>
-            <string>1bd4ae89-315d-40cd-a26e-d477fb1fe986</string>
+            <string>4D753AD3-B7B8-4E46-9BE8-6B85C594FE33</string>
             <key>PayloadVersion</key>
-            <integer>1</integer>
+            <integer>2</integer>
             <key>Services</key>
             <dict>
                 <!--
