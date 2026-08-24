@@ -752,24 +752,6 @@ document.getElementById("rules-body").addEventListener("click", async (e) => {
   }
 });
 
-// Static, same placement reasoning as upload-profile-form above.
-document.getElementById("add-safe-app-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const form = new FormData(e.target);
-  try {
-    await api("/api/safe-apps", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ bundle_id: form.get("bundle_id"), password: form.get("password") }),
-    });
-    e.target.reset();
-    setStatus("safe-apps-status", "Queued - applies in ~24h, same as any other loosening on this dashboard.", false);
-    await loadSafeApps();
-  } catch (err) {
-    setStatus("safe-apps-status", "Failed to queue: " + err.message, true);
-  }
-});
-
 document.getElementById("safe-apps-body").addEventListener("click", async (e) => {
   const bundleId = e.target.getAttribute("data-remove-safe-app");
   if (!bundleId) return;
