@@ -20,6 +20,14 @@
 import type { Policy, RuleType } from "./types";
 
 export interface StaticRuleEntry {
+  // Human-readable label - not part of the real profile at all (Santa's
+  // StaticRules dict has no name/label field, per its own real proto/
+  // plist shape), added purely so the dashboard doesn't show a bare hex
+  // hash or Team ID with no indication of what it actually is. Kept here
+  // by hand alongside the real identifier/rule_type/policy, sourced from
+  // the same comments already in profiles/santa-config.mobileconfig
+  // that explain what each entry is for.
+  name: string;
   identifier: string;
   rule_type: RuleType;
   policy: Policy;
@@ -27,11 +35,13 @@ export interface StaticRuleEntry {
 
 export const STATIC_RULES: StaticRuleEntry[] = [
   {
+    name: "ContentGuard (self-allowlist)",
     identifier: "ef2d492485a1d4b3c74946ffc72da927862af3ea0205ffdd96b96ab3617bc31f",
     rule_type: "CERTIFICATE",
     policy: "ALLOWLIST",
   },
   {
+    name: "Tor Browser",
     identifier: "MADPSAYN6T",
     rule_type: "TEAMID",
     policy: "BLOCKLIST",

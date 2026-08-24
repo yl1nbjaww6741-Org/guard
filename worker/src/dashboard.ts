@@ -120,10 +120,11 @@ export function renderDashboard(): string {
   <section>
     <h2>Santa rules</h2>
     <table id="rules-table">
-      <thead><tr><th>Identifier</th><th>Type</th><th>Policy</th><th>Scope</th><th></th></tr></thead>
-      <tbody id="rules-body"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+      <thead><tr><th>Name</th><th>Identifier</th><th>Type</th><th>Policy</th><th>Scope</th><th></th></tr></thead>
+      <tbody id="rules-body"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
     </table>
     <form class="inline" id="add-rule-form">
+      <input name="app_name" placeholder="App name (e.g. Tor Browser)" style="min-width: 160px;">
       <input name="identifier" placeholder="Identifier (SHA-256 / Team ID / etc)" required style="flex: 1; min-width: 220px;">
       <select name="rule_type">
         <option value="TEAMID">Team ID</option>
@@ -219,6 +220,7 @@ async function loadRules() {
   // here previously made it look like Santa was enforcing nothing, when
   // e.g. Tor Browser's block was working the whole time.
   const staticRowsHtml = staticRules.map((r) => \`<tr class="static-rule">
+    <td>\${escapeHtml(r.name)}</td>
     <td>\${escapeHtml(r.identifier)}</td>
     <td>\${r.rule_type}</td>
     <td class="policy-\${r.policy}">\${r.policy}</td>
@@ -228,7 +230,7 @@ async function loadRules() {
 
   let dynamicRowsHtml;
   if (rules.length === 0) {
-    dynamicRowsHtml = '<tr><td colspan="5" class="empty">No dashboard-added rules yet.</td></tr>';
+    dynamicRowsHtml = '<tr><td colspan="6" class="empty">No dashboard-added rules yet.</td></tr>';
   } else {
     dynamicRowsHtml = rules.map((r) => {
       const p = pendingByRuleId[r.id];
@@ -242,6 +244,7 @@ async function loadRules() {
         actionCell = "";
       }
       return \`<tr>
+        <td>\${escapeHtml(r.notification_app_name) || '<span class="empty" style="padding:0;">unnamed</span>'}</td>
         <td>\${escapeHtml(r.identifier)}</td>
         <td>\${r.rule_type}</td>
         <td class="policy-\${r.policy}">\${r.policy}</td>
@@ -269,7 +272,7 @@ async function loadInstalledApps(host) {
       ? \`\${escapeHtml(a.identifier)} <span class="pending-note" style="color:#8b8f98;">(\${a.rule_type})</span>\`
       : '<span class="empty" style="padding:0;">no identifier available</span>';
     const actions = a.identifier
-      ? \`<button data-block="\${escapeHtml(a.identifier)}" data-rule-type="\${a.rule_type}">Block</button> <button data-allow="\${escapeHtml(a.identifier)}" data-rule-type="\${a.rule_type}">Allow</button>\`
+      ? \`<button data-block="\${escapeHtml(a.identifier)}" data-rule-type="\${a.rule_type}" data-app-name="\${escapeHtml(a.name)}">Block</button> <button data-allow="\${escapeHtml(a.identifier)}" data-rule-type="\${a.rule_type}" data-app-name="\${escapeHtml(a.name)}">Allow</button>\`
       : "";
     return \`<tr>
       <td>\${escapeHtml(a.name)}</td>
@@ -333,6 +336,7 @@ document.getElementById("add-rule-form").addEventListener("submit", async (e) =>
         identifier: form.get("identifier"),
         rule_type: form.get("rule_type"),
         policy: form.get("policy"),
+        notification_app_name: form.get("app_name") || undefined,
       }),
     });
     e.target.reset();
@@ -389,14 +393,15 @@ document.getElementById("installed-apps-body").addEventListener("click", async (
   const identifier = blockId || allowId;
   if (!identifier) return;
   const ruleType = e.target.getAttribute("data-rule-type");
+  const appName = e.target.getAttribute("data-app-name");
   const policy = blockId ? "BLOCKLIST" : "ALLOWLIST";
   try {
     await api("/api/rules", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ identifier, rule_type: ruleType, policy }),
+      body: JSON.stringify({ identifier, rule_type: ruleType, policy, notification_app_name: appName || undefined }),
     });
-    setStatus("installed-apps-status", (blockId ? "Blocked " : "Allowed ") + identifier + ".", false);
+    setStatus("installed-apps-status", (blockId ? "Blocked " : "Allowed ") + appName + ".", false);
     await loadRules();
   } catch (err) {
     setStatus("installed-apps-status", "Failed to add rule: " + err.message, true);
