@@ -105,16 +105,43 @@ documented contract - it does NOT prove Fleet's real server accepts
 these exact requests**, which still needs the real deployed instance and
 real credentials (see setup steps below, not run yet).
 
+## Also real and verified: Cloudflare Access auth
+
+`worker/src/cloudflareAccess.ts` verifies Access JWTs (`Cf-Access-Jwt-Assertion`
+header, RS256 against Access's real JWKS endpoint, `aud`/`iss` claim
+checks) using `jose`, built against Cloudflare's own documented method
+(not guessed). Replaces the earlier interim `API_TOKEN` stopgap entirely
+on all `/api/...` routes - decided in favor of replacing rather than
+layering both, since a Cloudflare-signed per-session JWT is strictly
+stronger than a static shared token and keeping both would add
+complexity without adding real security.
+
+`LOOSEN_PASSWORD_HASH` is set to the same real password as the Access
+login itself - the user's explicit, informed choice (simplicity over the
+extra friction a genuinely separate credential would add). The two
+checks stay functionally independent in code regardless - the loosen
+password is still re-checked separately at the moment of a loosen
+request, never skipped just because Access already passed.
+
+**Verified in two parts**, since Access's real JWKS endpoint is TLS-only
+and this sandbox can't cheaply fake that:
+1. The security-critical part (signature + claims verification) tested
+   directly with the exact same `jose` calls this code makes, against
+   real RSA-signed test tokens from a local mock JWKS server: valid
+   token accepted; wrong-audience, expired, tampered-signature, and
+   garbage tokens all correctly rejected (5/5 correct outcomes).
+2. The route-level fail-closed paths tested through a live `wrangler dev`
+   instance: no Access config at all correctly 500s ("not configured")
+   on every `/api/...` route rather than silently allowing access;
+   config set but no `Cf-Access-Jwt-Assertion` header correctly 401s, on
+   both the rules and software APIs.
+
+**Not verified**: an actual end-to-end request through a real deployed
+Access Application - needs real Zero Trust configuration, not done yet
+(see setup steps below).
+
 ## Not built yet
 
-- **Cloudflare Access auth** - not wired into the Worker at all yet. The
-  plan (reuse the existing Zero Trust instance from Phase 1) is an
-  infrastructure/configuration step done in Cloudflare's dashboard, not
-  code - see setup steps below - plus a small amount of Worker code to
-  verify the `Cf-Access-Jwt-Assertion` header as defense in depth rather
-  than trusting Access alone (and, once that's real, to retire the
-  interim `API_TOKEN` stopgap or keep both as layered defense - not yet
-  decided).
 - **The dashboard itself** - no frontend exists yet. Everything above is
   backend only.
 
@@ -157,28 +184,28 @@ same pattern as every other real-value placeholder in this repo.
 4. `npm run db:migrate:remote` - applies `schema.sql` to the real,
    remote D1 database (mirrors the local verification already done
    above).
-5. Set the two secrets `worker/src/auth.ts` needs (both fail closed if
-   left unset, so this can happen any time before real use, not
-   necessarily before first deploy):
+5. `npm run deploy` - first real deploy, to a `workers.dev` subdomain by
+   default.
+6. In Cloudflare's Zero Trust dashboard, create an Access Application
+   pointing at that Worker's route, using the same Access policy already
+   locked down in Phase 1. Note its team domain and AUD tag - both
+   shown in the Application's settings once created.
+7. Set the secrets `worker/src/auth.ts`, `worker/src/cloudflareAccess.ts`,
+   and `worker/src/fleetClient.ts` need (all fail closed if left unset,
+   so none of this needs to happen before the deploy above):
    ```bash
-   npx wrangler secret put API_TOKEN
+   npx wrangler secret put CF_ACCESS_TEAM_DOMAIN   # from step 6
+   npx wrangler secret put CF_ACCESS_AUD           # from step 6
    # LOOSEN_PASSWORD_HASH must be a SHA-256 hex digest, not the raw
-   # password - e.g. on macOS: echo -n 'your real password' | shasum -a 256
+   # password - e.g. on macOS: echo -n 'your real password' | shasum -a 256.
+   # Deliberately set to the SAME password as your Cloudflare Access
+   # login - see this file's "Cloudflare Access auth" section above for
+   # why that's a real, considered tradeoff and not an oversight.
    npx wrangler secret put LOOSEN_PASSWORD_HASH
-   ```
-   Also needed for `fleetClient.ts` to work at all - the real deployed
-   Fleet URL (`mac/fleet/README.md`'s `fleet.yourdomain.com`, once real)
-   and a real Fleet API token (Fleet's own UI: "My account" -> "Get API
-   token"):
-   ```bash
+   # Fleet's own UI: "My account" -> "Get API token"
    npx wrangler secret put FLEET_BASE_URL
    npx wrangler secret put FLEET_API_TOKEN
    ```
-6. `npm run deploy` - first real deploy, to a `workers.dev` subdomain by
-   default.
-7. In Cloudflare's Zero Trust dashboard, create an Access Application
-   pointing at that Worker's route, using the same Access policy already
-   locked down in Phase 1.
 8. Only once the above is live: update
    `profiles/santa-config.mobileconfig` with the real `SyncBaseURL` and
    resolve the open design question above before actually pushing it -
