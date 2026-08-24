@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>02C634B6-1924-4ADC-9E63-600C318508A9</string>
     <key>PayloadVersion</key>
-    <integer>2</integer>
+    <integer>3</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>9E25880A-CCAF-4034-B1BC-1AF9D59008A5</string>
             <key>PayloadVersion</key>
-            <integer>2</integer>
+            <integer>3</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Restrictions Payload</string>
 
@@ -34,8 +34,21 @@
             <false/>
             <key>allowEraseContentAndSettings</key>
             <false/>
+            <!--
+              Deliberately true, not the original spec's false - explicit,
+              informed user request (not a default/oversight): asked to be
+              loosened immediately, bypassing this project's own ratchet
+              mechanism (which doesn't cover MDM profile edits at all -
+              see mac/docs/PHASE_4_DASHBOARD_SETUP.md's "Loosening MDM
+              profile restrictions" section for the tradeoff this accepts
+              and why it wasn't extended to cover this instead). Real
+              side-channel this reopens: AirDrop can move files (including
+              installers) onto this Mac without going through anything
+              Santa or Gateway ever sees - accepted as a known, named gap,
+              not an unnoticed one.
+            -->
             <key>allowAirDrop</key>
-            <false/>
+            <true/>
             <key>allowLocalUserCreation</key>
             <false/>
             <key>allowAccountModification</key>

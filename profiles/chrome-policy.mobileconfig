@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>6ECA9AC0-F965-4483-8362-5B12E50392E8</string>
     <key>PayloadVersion</key>
-    <integer>1</integer>
+    <integer>2</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>56450B06-03B6-4F67-8CF6-95716E896A8F</string>
             <key>PayloadVersion</key>
-            <integer>1</integer>
+            <integer>2</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Chrome Policy Payload</string>
             <key>PayloadContent</key>
@@ -44,14 +44,40 @@
                                 <integer>1</integer>
                                 <key>BrowserGuestModeEnabled</key>
                                 <false/>
-                                <key>ExtensionInstallBlocklist</key>
-                                <array>
-                                    <string>*</string>
-                                </array>
+                                <!--
+                                  ExtensionInstallBlocklist removed
+                                  entirely (was ["*"], blocking all
+                                  installs) rather than set to an empty
+                                  array - per Chrome's own real policy
+                                  semantics (confirmed against Chrome
+                                  Enterprise's own policy docs, not
+                                  guessed), an unset policy is the actual
+                                  "no restriction" state, same meaning as
+                                  removing it. Deliberate, informed user
+                                  request, not a default/oversight -
+                                  bypasses this project's ratchet
+                                  mechanism, which doesn't cover MDM
+                                  profile edits at all (see
+                                  mac/docs/PHASE_4_DASHBOARD_SETUP.md's
+                                  "Loosening MDM profile restrictions"
+                                  section). Real gap this reopens: this is
+                                  the mechanism that would let a
+                                  proxy/VPN/content-unblocking extension
+                                  in - accepted as a known, named gap.
+                                -->
                                 <key>DnsOverHttpsMode</key>
                                 <string>off</string>
+                                <!--
+                                  BrowserSignin: 1 (Enable), not 0
+                                  (Disable) - confirmed against Chrome
+                                  Enterprise's own real policy values, not
+                                  guessed: 0 disables sign-in entirely, 1
+                                  allows but doesn't force it, 2 forces it.
+                                  Same deliberate, informed loosening as
+                                  the extension-install change above.
+                                -->
                                 <key>BrowserSignin</key>
-                                <integer>0</integer>
+                                <integer>1</integer>
                             </dict>
                         </dict>
                     </array>

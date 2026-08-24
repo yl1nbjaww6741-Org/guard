@@ -21,6 +21,15 @@
 // but Python's strict `plistlib` (used to extract this file) didn't.
 // Fixed at the source (comment-only, no functional change, no
 // PayloadVersion bump or Fleet repush needed).
+//
+// Note on 2026-08-24's loosening (extension installs, browser sign-in,
+// AirDrop): these are edits to the .mobileconfig files themselves, which
+// this project's D1-backed ratchet mechanism (24h delay + re-entered
+// password, see schema.sql's pending_loosen_requests) does NOT cover -
+// that only gates the dashboard's own Santa rules table. Applied
+// immediately at the user's explicit, informed request after that gap
+// was raised - see mac/docs/PHASE_4_DASHBOARD_SETUP.md's "Loosening MDM
+// profile restrictions" section for the full tradeoff.
 
 export interface ConfigProfileDetail {
   name: string;
@@ -38,9 +47,9 @@ export const CONFIG_PROFILES: ConfigProfileDetail[] = [
       "Incognito mode: disabled",
       "Guest mode: disabled",
       "Developer tools: disabled",
-      "All extension installs: blocked (ExtensionInstallBlocklist: *)",
+      "Extension installs: allowed (loosened by explicit user request 2026-08-24 - was blocklisted entirely; ExtensionInstallBlocklist removed, Chrome's real semantics for 'no restriction')",
       "Chrome's own DNS-over-HTTPS: off (Gateway's DoH-provider block already covers this at the network level - this closes the same gap inside Chrome specifically)",
-      "Browser sign-in: disabled",
+      "Browser sign-in: allowed, not forced (loosened by explicit user request 2026-08-24 - BrowserSignin 0->1)",
     ],
   },
   {
@@ -67,7 +76,7 @@ export const CONFIG_PROFILES: ConfigProfileDetail[] = [
     restrictions: [
       "iCloud Private Relay: blocked",
       "Erase All Content and Settings: blocked",
-      "AirDrop: blocked",
+      "AirDrop: allowed (loosened by explicit user request 2026-08-24 - was blocked; known reopened side-channel, files can move onto this Mac without Santa/Gateway seeing them)",
       "Creating new local user accounts: blocked",
       "Modifying the existing account (e.g. changing admin status): blocked",
       "Installing configuration profiles via the UI: blocked (profiles only arrive via Fleet/MDM)",

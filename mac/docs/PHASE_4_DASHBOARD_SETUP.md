@@ -498,19 +498,16 @@ not assumed correct:**
 and `https://contentguard-worker.yl1nbjaww6741-4.workers.dev/` both
 return 200.
 
-**Not yet done**: `profiles/santa-config.mobileconfig`'s `SyncBaseURL`
-has been updated to the new domain (`PayloadVersion` bumped 3->4), but
-this has **not been pushed through Fleet yet**. Before pushing it:
-1. Add a new Cloudflare Gateway allow rule for `panel.lukep009.download`
-   - narrow, exact hostname, not a wildcard, same requirement the
-     original workers.dev rule needed (see "Real end-to-end
-     confirmation" above for why that mattered the first time).
-2. Push the updated profile through Fleet (**Controls -> OS settings ->
-   Custom settings**, same as every other profile push in this
-   project).
-3. Confirm with `sudo santactl sync --debug` on the real Mac - same
-   verification bar as the original sync rollout, not just "Fleet says
-   it applied."
+**Done, and confirmed on the real Mac**: a new Cloudflare Gateway allow
+rule was added for `panel.lukep009.download` (narrow, exact hostname,
+not a wildcard, same requirement the original workers.dev rule needed),
+`profiles/santa-config.mobileconfig`'s updated `SyncBaseURL`
+(`PayloadVersion` bumped 3->4) was pushed through Fleet, and
+`sudo santactl sync --debug` on the real Mac completed the full
+four-stage cycle and ended in "Sync completed successfully" - with the
+real TLS certificate presented during preflight showing
+`CN=lukep009.download`, confirming the sync genuinely went through the
+new custom domain, not just that the old URL kept working alongside it.
 
 ## Also real and verified: detailed MDM restrictions + config upload/update
 
@@ -578,3 +575,66 @@ right after a successful upload (the success handler's own
 status element to be static siblings outside that container, matching
 the placement `add-rule-form`/`rules-status` already use for the same
 reason - confirmed fixed by re-running the same browser test.
+
+## Loosening MDM profile restrictions - a real gap in the ratchet, accepted knowingly
+
+On 2026-08-24 the user asked to allow three things that had been blocked
+since Phase 3/4: Chrome extension installs, Chrome browser sign-in, and
+AirDrop - reasoning that they don't harden anything meaningful for their
+own use, only add friction.
+
+**This surfaced a real gap, worth recording rather than quietly
+patching over**: this project's ratchet mechanism (`pending_loosen_
+requests` in `schema.sql`, 24h delay + a re-entered password before a
+loosening takes effect - "even an already-open dashboard session can't
+instantly undo a restriction on impulse") only covers the dashboard's
+own D1-backed Santa rules table. It does **not** cover the MDM
+configuration profiles in `profiles/` at all - those are hand-edited in
+this repo and pushed through Fleet (or now, via the dashboard's own
+config-upload feature), with no delay or re-confirmation step of any
+kind. Asking for an instant edit to a `.mobileconfig` file is a way to
+loosen a restriction that completely sidesteps the exact protection the
+ratchet exists to provide - not by breaking it, just by asking through a
+door it doesn't cover.
+
+This was flagged to the user directly before making any change, with
+three explicit options: extend the ratchet to cover MDM profile edits
+too (closing the gap generally, more work), apply the change immediately
+with the gap acknowledged (a deliberate, informed override of the
+project's own design), or wait a day and revisit with a clearer head
+(an ad-hoc version of the same cooling-off period the ratchet already
+gives Santa rules). **The user chose to apply immediately** - a real,
+informed decision by the person this whole project exists to serve, not
+something decided on their behalf.
+
+**What changed, and the real values used (verified against Chrome
+Enterprise's own policy semantics and Apple's own Restrictions payload
+key, not guessed)**:
+- `chrome-policy.mobileconfig` (`PayloadVersion` 1->2):
+  `ExtensionInstallBlocklist` (was `["*"]`, blocking every install)
+  removed entirely - per Chrome's own real policy semantics, an unset
+  policy is genuinely equivalent to "no restriction", not different from
+  an empty list. `BrowserSignin` changed `0` (Disable) -> `1` (Enable,
+  not `2` Force) - confirmed against Chrome Enterprise's real documented
+  values for this policy.
+- `restrictions.mobileconfig` (`PayloadVersion` 2->3): `allowAirDrop`
+  changed `false` -> `true` (Apple's own Restrictions payload key,
+  well-established and stable).
+- `worker/src/configProfiles.ts`'s hand-kept mirror updated to match, so
+  the dashboard's MDM lockdown section reflects the real current state,
+  not the old one.
+
+**Known, named gaps this reopens** (accepted, not unnoticed): extension
+installs are the mechanism that would let a proxy/VPN/content-unblocking
+extension into Chrome; AirDrop is a side-channel for moving files
+(including installers) onto this Mac without Santa or Gateway ever
+seeing them; browser sign-in itself isn't a bypass, but removes some of
+the friction/traceability the rest of this setup relies on.
+
+**Not yet pushed through Fleet as of this doc update** - same two-step
+requirement as any other profile change (Cloudflare Gateway is
+irrelevant here, these aren't sync-server-reachability changes): push
+both updated profiles through Fleet (**Controls -> OS settings -> Custom
+settings**, or via the dashboard's own "Update this profile" feature),
+then confirm on the real Mac that MDM reports both profiles verified at
+their new `PayloadVersion`.
