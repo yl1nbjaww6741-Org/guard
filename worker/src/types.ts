@@ -113,6 +113,10 @@ export interface Env {
   // See auth.ts's doc comment on why this is deliberately a separate
   // credential from whatever Cloudflare Access itself gates.
   LOOSEN_PASSWORD_HASH?: string;
+  // Static shared token Santa sends via SyncExtraHeaders (see
+  // auth.ts's requireSyncToken doc comment) - protects the sync
+  // endpoints, which are otherwise reachable by anyone on the internet.
+  SANTA_SYNC_TOKEN?: string;
   // Cloudflare Access config - see cloudflareAccess.ts. Not secret in
   // the sense of granting access on their own (they're the audience/issuer
   // a real Access-issued JWT must match, not a credential), but treated

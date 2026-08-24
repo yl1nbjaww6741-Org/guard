@@ -45,7 +45,9 @@ export async function requireCloudflareAccess(request: Request, env: Env): Promi
     // Fail closed on missing config, not open - same principle as
     // auth.ts's verifyLoosenPassword. An unconfigured Access setup
     // should never silently mean "no auth required".
-    return new Response("Cloudflare Access not configured", { status: 500 });
+    // 503, not 500 - this is "not ready yet" (missing config), not a
+    // server error.
+    return new Response("Cloudflare Access not configured", { status: 503 });
   }
 
   const token = request.headers.get("Cf-Access-Jwt-Assertion");

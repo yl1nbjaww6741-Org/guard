@@ -1,19 +1,21 @@
 // ContentGuard control-panel Worker - entry point.
 //
-// Two distinct route groups:
-//  - Santa's 4 sync-protocol stages (santaSync.ts) - called by Santa
-//    itself on the Mac, not by a human, so no auth beyond the
-//    machine_id/body consistency check santaSync.ts already does.
+// Three route groups:
+//  - Santa's 4 sync-protocol stages (santaSync.ts) - gated by a static
+//    shared token (auth.ts's requireSyncToken), not Cloudflare Access:
+//    Santa itself calls these, and Access's browser/JWT-based model
+//    doesn't fit a macOS sync client. Found live, the hard way, that
+//    this needs *some* gate - see requireSyncToken's own doc comment for
+//    what was wrong before and why.
 //  - The rule-management/software-deployment API (/api/...) - meant for
-//    the (not-yet-built) dashboard, gated by Cloudflare Access
-//    (cloudflareAccess.ts). The real access-control boundary is the
-//    Access Application itself, configured at the Cloudflare edge - see
+//    the dashboard, gated by Cloudflare Access (cloudflareAccess.ts).
+//    The real access-control boundary is the Access Application itself,
+//    configured at the Cloudflare edge - see
 //    mac/docs/PHASE_4_DASHBOARD_SETUP.md's setup steps - this Worker's
 //    own JWT check is defense-in-depth on top of that, not instead of it.
-//
 //  - GET / - the dashboard page itself (dashboard.ts), also Access-gated.
 
-import { verifyLoosenPassword } from "./auth";
+import { requireSyncToken, verifyLoosenPassword } from "./auth";
 import { requireCloudflareAccess } from "./cloudflareAccess";
 import { renderDashboard } from "./dashboard";
 import { cancelLoosenRequest, getRuleById, listActiveLoosenRequests, listRules, upsertRule } from "./db";
@@ -105,12 +107,14 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // --- Santa sync protocol ---
+    // --- Santa sync protocol (static-token-gated, see auth.ts's requireSyncToken) ---
     const syncMatch = url.pathname.match(/^\/(preflight|eventupload|ruledownload|postflight)\/([^/]+)$/);
     if (syncMatch) {
       if (request.method !== "POST") {
         return new Response("Method Not Allowed", { status: 405 });
       }
+      const tokenError = await requireSyncToken(request, env);
+      if (tokenError) return tokenError;
       const stage = syncMatch[1]!;
       const machineId = syncMatch[2]!;
       const handler = SYNC_ROUTES[stage];
