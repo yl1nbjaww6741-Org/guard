@@ -209,6 +209,7 @@ export interface FleetListHostSoftwareResponse {
 // used for.
 
 export interface FleetMdmProfile {
+  profile_uuid: string;
   name: string;
   // One of "pending" | "verifying" | "verified" | "failed" per Fleet's
   // own docs - not narrowed to a union here since Fleet's real set could

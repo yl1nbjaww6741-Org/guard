@@ -43,6 +43,11 @@ import {
 import { clearSessionCookie, createSessionCookie, hasValidSession } from "./session";
 import { STATIC_RULES } from "./staticRules";
 import { handleGetHostStatus } from "./hostStatus";
+import {
+  handleListConfigProfileDetails,
+  handleUpdateConfigProfile,
+  handleUploadConfigProfile,
+} from "./configProfilesApi";
 import { handleEventUpload, handlePostflight, handlePreflight, handleRuleDownload } from "./santaSync";
 import {
   handleInstallPackage,
@@ -310,6 +315,28 @@ export default {
       const authError = await requireSession(request, env);
       if (authError) return authError;
       return handleGetHostStatus(request, env);
+    }
+
+    // --- Config profile detail/upload/update (session-gated) ---
+    const isConfigProfileApiRoute =
+      url.pathname === "/api/config-profile-details" ||
+      url.pathname === "/api/config-profiles" ||
+      url.pathname.match(/^\/api\/config-profiles\/[^/]+$/);
+    if (isConfigProfileApiRoute) {
+      const authError = await requireSession(request, env);
+      if (authError) return authError;
+
+      if (url.pathname === "/api/config-profile-details" && request.method === "GET") {
+        return handleListConfigProfileDetails();
+      }
+      if (url.pathname === "/api/config-profiles" && request.method === "POST") {
+        return handleUploadConfigProfile(request, env);
+      }
+      const updateMatch = url.pathname.match(/^\/api\/config-profiles\/([^/]+)$/);
+      if (updateMatch && request.method === "PATCH") {
+        return handleUpdateConfigProfile(decodeURIComponent(updateMatch[1]!), request, env);
+      }
+      return new Response("Method Not Allowed", { status: 405 });
     }
 
     // --- Dashboard password-change API (session-gated) ---

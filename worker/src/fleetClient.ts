@@ -175,3 +175,58 @@ export async function getHostStatus(env: Env, hostId: number): Promise<FleetHost
       : null,
   };
 }
+
+// Uploads a brand-new configuration profile to Fleet - built directly
+// against fleetdm/fleet's real "Create configuration profile" docs
+// (rest-api.md, POST /api/v1/fleet/configuration_profiles, Fleet
+// Premium - already purchased in Phase 1). `formData` is expected to
+// already contain a `profile` file field (the raw .mobileconfig bytes)
+// - same "thin, faithful proxy" pattern as uploadPackage above, this
+// function doesn't construct the FormData itself. Fleet 409s on a
+// duplicate PayloadDisplayName/PayloadIdentifier - surfaced to the
+// caller as a FleetApiError, not swallowed, since that's the real
+// signal to use the update endpoint below instead.
+export async function createConfigurationProfile(env: Env, formData: FormData): Promise<{ profile_uuid: string }> {
+  const { baseUrl, token } = requireFleetConfig(env);
+  const endpoint = "/api/v1/fleet/configuration_profiles";
+  const response = await fetch(`${baseUrl}${endpoint}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  const bodyText = await response.text();
+  if (!response.ok) {
+    throw new FleetApiError(endpoint, response.status, bodyText);
+  }
+  return JSON.parse(bodyText) as { profile_uuid: string };
+}
+
+// Replaces an existing configuration profile's content in place - built
+// directly against fleetdm/fleet's real "Update configuration profile"
+// docs (PATCH /api/v1/fleet/configuration_profiles/:profile_uuid, also
+// Fleet Premium). Fleet itself enforces the real safety property here,
+// not this Worker: per Fleet's own docs, the replacement file's
+// PayloadIdentifier must match the existing profile's, or the request
+// is rejected - this Worker deliberately doesn't pre-parse the uploaded
+// file's plist content to duplicate that check (no plist-parsing
+// dependency in this project, same reasoning as everywhere else), it
+// just passes the file through and lets Fleet's own validation be the
+// real gate.
+export async function updateConfigurationProfile(
+  env: Env,
+  profileUuid: string,
+  formData: FormData
+): Promise<{ profile_uuid: string }> {
+  const { baseUrl, token } = requireFleetConfig(env);
+  const endpoint = `/api/v1/fleet/configuration_profiles/${profileUuid}`;
+  const response = await fetch(`${baseUrl}${endpoint}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  const bodyText = await response.text();
+  if (!response.ok) {
+    throw new FleetApiError(endpoint, response.status, bodyText);
+  }
+  return JSON.parse(bodyText) as { profile_uuid: string };
+}

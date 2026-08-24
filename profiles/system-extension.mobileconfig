@@ -40,7 +40,7 @@
               here; it already works without it.
 
               Cloudflare's Team ID, confirmed via
-              `codesign -dv --verbose=4 "/Applications/Cloudflare WARP.app"`
+              `codesign -dv -vvvv "/Applications/Cloudflare WARP.app"`
               on the real system, for reference in case a future WARP
               version does add a System Extension: 68WVV388M8
 

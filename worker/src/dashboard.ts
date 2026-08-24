@@ -119,6 +119,12 @@ export function renderDashboard(): string {
   .mdm-status-verified { color: #51cf66; }
   .mdm-status-pending, .mdm-status-verifying { color: #ffd43b; }
   .mdm-status-failed { color: #ff6b6b; }
+  details.profile-details { border-bottom: 1px solid #22252b; padding: 0.5rem 0; }
+  details.profile-details summary { cursor: pointer; font-size: 0.85rem; }
+  details.profile-details summary span { font-weight: 600; margin-right: 0.5rem; }
+  details.profile-details ul { margin: 0.5rem 0 0.6rem 1.2rem; font-size: 0.8rem; color: #c3c6cc; }
+  details.profile-details li { margin-bottom: 0.2rem; }
+  details.profile-details form.inline { margin-top: 0.4rem; }
 </style>
 </head>
 <body>
@@ -148,6 +154,11 @@ export function renderDashboard(): string {
     <h2>MDM lockdown (Fleet)</h2>
     <div class="subtitle" style="margin-bottom: 0;">What Fleet has actually confirmed applied, not just what profiles/ intends.</div>
     <div id="mdm-lockdown-body">Loading...</div>
+    <form class="inline" id="upload-profile-form" style="margin-top: 1rem;">
+      <input type="file" name="profile" accept=".mobileconfig" required>
+      <button type="submit">Upload new profile</button>
+    </form>
+    <div class="status-msg" id="upload-profile-status"></div>
   </section>
 
   <section>
@@ -265,10 +276,21 @@ function timeAgo(input) {
   return \`\${days}d ago\`;
 }
 
+let configProfileDetailsCache = null;
+async function loadConfigProfileDetails() {
+  if (!configProfileDetailsCache) {
+    configProfileDetailsCache = await api("/api/config-profile-details");
+  }
+  return configProfileDetailsCache;
+}
+
 async function loadHostStatus() {
-  const data = await api("/api/host-status");
+  const [data, profileDetails] = await Promise.all([
+    api("/api/host-status"),
+    loadConfigProfileDetails().catch(() => []),
+  ]);
   renderSyncHealth(data);
-  renderMdmLockdown(data);
+  renderMdmLockdown(data, profileDetails);
 }
 
 // Santa's sync freshness (devices.last_preflight_at) and Fleet's own
@@ -304,13 +326,14 @@ function renderSyncHealth(data) {
   el.innerHTML = rows.join("");
 }
 
-function renderMdmLockdown(data) {
+function renderMdmLockdown(data, profileDetails) {
   const el = document.getElementById("mdm-lockdown-body");
   if (!data.fleet) {
     el.innerHTML = \`<div class="empty">\${escapeHtml(data.fleetError ?? "Fleet not available")}</div>\`;
     return;
   }
   const f = data.fleet;
+  const detailsByName = Object.fromEntries((profileDetails || []).map((d) => [d.name, d]));
   const parts = [];
 
   const deOn = f.disk_encryption_enabled;
@@ -322,15 +345,52 @@ function renderMdmLockdown(data) {
     if (f.mdm.profiles.length === 0) {
       parts.push('<div class="empty">No configuration profiles reported by Fleet.</div>');
     } else {
-      parts.push('<table><thead><tr><th>Profile</th><th>Status</th></tr></thead><tbody>' +
-        f.mdm.profiles.map((p) => \`<tr><td>\${escapeHtml(p.name)}</td><td class="mdm-status-\${escapeHtml(p.status)}">\${escapeHtml(p.status)}</td></tr>\`).join("") +
-        '</tbody></table>');
+      // Each profile is a <details> - click to see what it actually
+      // restricts (from configProfiles.ts's hand-kept summary, merged by
+      // name) and to replace its content in Fleet via
+      // updateConfigurationProfile, without leaving this page.
+      parts.push(f.mdm.profiles.map((p) => {
+        const detail = detailsByName[p.name];
+        const restrictionsHtml = detail
+          ? \`<ul>\${detail.restrictions.map((r) => \`<li>\${escapeHtml(r)}</li>\`).join("")}</ul>\`
+          : '<div class="empty" style="padding:0.25rem 0;">No local detail available for this profile.</div>';
+        return \`<details class="profile-details">
+          <summary><span class="mdm-status-\${escapeHtml(p.status)}">\${escapeHtml(p.status)}</span> \${escapeHtml(p.name)}</summary>
+          \${restrictionsHtml}
+          <form class="inline update-profile-form" data-profile-uuid="\${escapeHtml(p.profile_uuid)}">
+            <input type="file" name="profile" accept=".mobileconfig" required>
+            <button type="submit">Update this profile</button>
+          </form>
+          <div class="status-msg"></div>
+        </details>\`;
+      }).join(""));
     }
   } else {
     parts.push('<div class="empty">Not MDM-enrolled.</div>');
   }
 
   el.innerHTML = parts.join("");
+
+  // Rebuilt from scratch on every render, so listeners are attached
+  // fresh here each time rather than once at page load - matches how
+  // this whole section already gets redrawn on every loadHostStatus().
+  el.querySelectorAll(".update-profile-form").forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const profileUuid = form.getAttribute("data-profile-uuid");
+      const statusEl = form.nextElementSibling;
+      const fd = new FormData(form);
+      try {
+        await api(\`/api/config-profiles/\${encodeURIComponent(profileUuid)}\`, { method: "PATCH", body: fd });
+        statusEl.textContent = "Updated - Fleet will re-push it to the Mac.";
+        statusEl.className = "status-msg";
+        form.reset();
+      } catch (err) {
+        statusEl.textContent = "Failed: " + err.message;
+        statusEl.className = "status-msg error";
+      }
+    });
+  });
 }
 
 async function loadRules() {
@@ -452,6 +512,25 @@ function setStatus(id, message, isError) {
 document.getElementById("logout-btn").addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST", credentials: "include" });
   location.reload();
+});
+
+// Static, lives outside #mdm-lockdown-body on purpose (see the section's
+// markup) - that container gets fully rebuilt by every loadHostStatus()
+// call, including the one this handler itself triggers on success, so a
+// listener attached inside renderMdmLockdown would either vanish or
+// double up across renders. Attached once here instead, same as
+// add-rule-form below.
+document.getElementById("upload-profile-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  try {
+    await api("/api/config-profiles", { method: "POST", body: fd });
+    e.target.reset();
+    await loadHostStatus();
+    setStatus("upload-profile-status", "Uploaded - now tracked by Fleet.", false);
+  } catch (err) {
+    setStatus("upload-profile-status", "Failed to upload: " + err.message, true);
+  }
 });
 
 document.getElementById("add-rule-form").addEventListener("submit", async (e) => {

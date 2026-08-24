@@ -511,3 +511,70 @@ this has **not been pushed through Fleet yet**. Before pushing it:
 3. Confirm with `sudo santactl sync --debug` on the real Mac - same
    verification bar as the original sync rollout, not just "Fleet says
    it applied."
+
+## Also real and verified: detailed MDM restrictions + config upload/update
+
+The "MDM lockdown" section used to show each profile as just a name and a
+verified/pending/failed status - accurate, but not useful for actually
+knowing what's locked down without going and reading the `.mobileconfig`
+files by hand. It now expands each profile into what it actually
+restricts, and lets a new or replacement `.mobileconfig` be pushed to
+Fleet straight from the dashboard.
+
+**Where the restriction text comes from**: `worker/src/configProfiles.ts`
+hand-summarizes each of the 7 real files in `profiles/`, extracted for
+real via Python's `plistlib` against the actual files (not written from
+memory or guessed). Same "hand-kept mirror" pattern already established
+by `staticRules.ts`, with the same caveat: this has to be kept in sync by
+hand if a profile's real content changes, since this project deliberately
+avoids adding a plist-parsing dependency to the Worker (the same
+"minimal moving parts" reasoning that dropped `jose` earlier). The
+dashboard matches this static list to Fleet's live `mdm.profiles[]` by
+name, so each row shows real Fleet-confirmed status next to what that
+profile actually does.
+
+**Extracting the real content for real found a genuine, previously-live
+bug**: `system-extension.mobileconfig` had a literal `--` inside an XML
+comment (`` `codesign -dv --verbose=4 ...` ``), which is invalid per the
+XML spec even though Apple's and Fleet's own parsers tolerate it - the
+exact same bug class already fixed once before in this project's history
+(`distribution.xml`). Python's strict `expat`-based parser rejected it
+outright, which is how this got noticed. Fixed by rewording to `-vvvv`
+(same real `codesign` flag, no double-hyphen) - comment-only, no
+functional payload change, so no `PayloadVersion` bump and no Fleet
+re-push needed.
+
+**Upload/update**: `POST /api/config-profiles` and
+`PATCH /api/config-profiles/:profile_uuid` are thin proxies to Fleet's
+real Configuration Profiles API (Fleet Premium, already purchased in
+Phase 1 - `createConfigurationProfile`/`updateConfigurationProfile` in
+`worker/src/fleetClient.ts`, built directly against `fleetdm/fleet`'s own
+`rest-api.md`). Deliberately no client-side pre-validation that a
+replacement file's `PayloadIdentifier` matches the profile it's
+replacing - Fleet's own API already rejects a mismatch, and duplicating
+that check here would mean adding the plist-parsing dependency this
+project keeps choosing not to add.
+
+**Verified against a real local `wrangler dev` + mock Fleet server + real
+headless Chromium session**, same bar as everything else in this phase:
+- `GET /api/config-profile-details`, `POST /api/config-profiles`, and
+  `PATCH /api/config-profiles/:uuid` all curl-tested directly, including
+  the missing-`profile`-field 400 and the unauthenticated-request 401.
+- In-browser: the MDM section renders one expandable `<details>` per real
+  Fleet-reported profile, correctly matched by name (including a
+  deliberately-unmatched mock profile, to confirm the "No local detail
+  available for this profile" fallback works for a profile the hand-kept
+  mirror doesn't know about).
+- Both the per-profile "Update this profile" form and the general "Upload
+  new profile" form fire the correct request (confirmed via
+  `page.waitForResponse`) and show the right success text.
+
+**One real bug caught by that pass, before it shipped**: the upload
+form's "Uploaded - now tracked by Fleet." message was being wiped
+instantly, because the form and its status element lived inside
+`#mdm-lockdown-body` - the exact container `loadHostStatus()` rebuilds
+right after a successful upload (the success handler's own
+`await loadHostStatus()` call). Fixed by moving the upload form and its
+status element to be static siblings outside that container, matching
+the placement `add-rule-form`/`rules-status` already use for the same
+reason - confirmed fixed by re-running the same browser test.
