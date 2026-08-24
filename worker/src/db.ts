@@ -63,6 +63,36 @@ export async function markPostflight(db: D1Database, machineId: string): Promise
     .run();
 }
 
+export interface DeviceRecord {
+  machine_id: string;
+  owner: string;
+  hostname: string | null;
+  os_version: string | null;
+  santa_version: string | null;
+  client_mode: ClientMode;
+  last_preflight_at: number | null;
+  last_postflight_at: number | null;
+}
+
+// Backs the dashboard's "Sync health" section - this is Santa's own
+// sync activity (upsertDevice/markPostflight above), a genuinely
+// different signal from Fleet's "online/offline" status
+// (fleetClient.ts's getHostStatus): a Mac can be Fleet-online while
+// Santa's sync is stalled (wrong/expired SANTA_SYNC_TOKEN, Gateway
+// blocking the connection again - both real failure modes already hit
+// once in this project's own history) and neither signal substitutes
+// for the other. Ordered most-recently-synced first so a stalled device
+// among several would still surface near the top.
+export async function listDevices(db: D1Database): Promise<DeviceRecord[]> {
+  const result = await db
+    .prepare(
+      `SELECT machine_id, owner, hostname, os_version, santa_version, client_mode, last_preflight_at, last_postflight_at
+       FROM devices ORDER BY last_preflight_at DESC`
+    )
+    .all<DeviceRecord>();
+  return result.results ?? [];
+}
+
 interface RuleRow {
   id: number;
   identifier: string;

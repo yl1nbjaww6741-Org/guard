@@ -106,6 +106,19 @@ export function renderDashboard(): string {
 <style>
   ${SHARED_STYLES}
   .top-bar { display: flex; justify-content: space-between; align-items: baseline; }
+  .tab-nav { display: flex; gap: 0.25rem; border-bottom: 1px solid #2a2d33; margin: 1.5rem 0 2rem; }
+  .tab-btn {
+    background: transparent; border: none; border-bottom: 2px solid transparent;
+    border-radius: 0; color: #8b8f98; padding: 0.6rem 0.9rem; font-size: 0.9rem; cursor: pointer;
+  }
+  .tab-btn:hover { color: #e8e8ea; background: transparent; }
+  .tab-btn.active { color: #e8e8ea; border-bottom-color: #51cf66; }
+  .status-row { padding: 0.4rem 0; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem; }
+  .status-row.error { color: #ff6b6b; }
+  .status-dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; flex-shrink: 0; }
+  .mdm-status-verified { color: #51cf66; }
+  .mdm-status-pending, .mdm-status-verifying { color: #ffd43b; }
+  .mdm-status-failed { color: #ff6b6b; }
 </style>
 </head>
 <body>
@@ -116,6 +129,26 @@ export function renderDashboard(): string {
     </div>
     <button id="logout-btn">Log out</button>
   </div>
+
+  <nav class="tab-nav">
+    <button class="tab-btn" data-tab="mac">Mac</button>
+    <button class="tab-btn" data-tab="android">Android</button>
+    <button class="tab-btn" data-tab="networking">Networking</button>
+  </nav>
+
+  <div id="tab-mac" class="tab-panel">
+
+  <section>
+    <h2>Sync health</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Two separate signals, on purpose - a Mac can be Fleet-online while Santa's sync is stalled, or vice versa.</div>
+    <div id="sync-health-body">Loading...</div>
+  </section>
+
+  <section>
+    <h2>MDM lockdown (Fleet)</h2>
+    <div class="subtitle" style="margin-bottom: 0;">What Fleet has actually confirmed applied, not just what profiles/ intends.</div>
+    <div id="mdm-lockdown-body">Loading...</div>
+  </section>
 
   <section>
     <h2>Santa rules</h2>
@@ -181,6 +214,16 @@ export function renderDashboard(): string {
     <div class="status-msg" id="password-status">Takes effect 24 hours after requesting, same as loosening a rule.</div>
   </section>
 
+  </div>
+
+  <div id="tab-android" class="tab-panel" hidden>
+    <div class="empty">Coming soon.</div>
+  </div>
+
+  <div id="tab-networking" class="tab-panel" hidden>
+    <div class="empty">Coming soon.</div>
+  </div>
+
 <script>
 async function api(path, opts) {
   const res = await fetch(path, { ...opts, credentials: "include" });
@@ -202,6 +245,92 @@ function timeUntil(ms) {
   const hours = Math.floor(diff / 3600000);
   const mins = Math.floor((diff % 3600000) / 60000);
   return \`~\${hours}h \${mins}m\`;
+}
+
+// Accepts either an epoch-ms number (Santa's own devices table, from D1)
+// or an ISO 8601 string (Fleet's seen_time) - the two data sources
+// behind "Sync health" use different timestamp formats natively, and
+// converting both to the same relative-time display here is simpler
+// than normalizing at the API layer for a value only ever displayed.
+function timeAgo(input) {
+  const ts = typeof input === "number" ? input : new Date(input).getTime();
+  const diff = Date.now() - ts;
+  if (diff < 0) return "just now";
+  if (diff < 60000) return "just now";
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return \`\${mins}m ago\`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return \`\${hours}h ago\`;
+  const days = Math.floor(hours / 24);
+  return \`\${days}d ago\`;
+}
+
+async function loadHostStatus() {
+  const data = await api("/api/host-status");
+  renderSyncHealth(data);
+  renderMdmLockdown(data);
+}
+
+// Santa's sync freshness (devices.last_preflight_at) and Fleet's own
+// online/offline status are genuinely different signals - see
+// hostStatus.ts's doc comment. Both shown here, neither substituting
+// for the other. 30 minutes is 3x Santa's own FullSyncInterval (10
+// minutes, confirmed via santactl status on the real Mac) - comfortably
+// past due before flagging it stale, not a hair-trigger on normal sync
+// jitter.
+const SANTA_STALE_MS = 30 * 60 * 1000;
+
+function renderSyncHealth(data) {
+  const el = document.getElementById("sync-health-body");
+  const rows = [];
+
+  if (data.fleet) {
+    const online = data.fleet.status === "online";
+    rows.push(\`<div class="status-row\${online ? "" : " error"}"><span class="status-dot" style="background:\${online ? "#51cf66" : "#ff6b6b"}"></span><strong>Fleet</strong>&nbsp;- \${escapeHtml(data.fleet.status)}, last seen \${timeAgo(data.fleet.seen_time)}</div>\`);
+  } else {
+    rows.push(\`<div class="status-row error"><span class="status-dot" style="background:#ff6b6b"></span><strong>Fleet</strong>&nbsp;- \${escapeHtml(data.fleetError ?? "not available")}</div>\`);
+  }
+
+  if (data.devices.length === 0) {
+    rows.push('<div class="empty">No device has ever synced with Santa yet.</div>');
+  } else {
+    data.devices.forEach((d) => {
+      const stale = !d.last_preflight_at || (Date.now() - d.last_preflight_at) > SANTA_STALE_MS;
+      const lastSync = d.last_preflight_at ? timeAgo(d.last_preflight_at) : "never";
+      rows.push(\`<div class="status-row\${stale ? " error" : ""}"><span class="status-dot" style="background:\${stale ? "#ff6b6b" : "#51cf66"}"></span><strong>Santa</strong>&nbsp;(\${escapeHtml(d.hostname ?? d.machine_id)}) - \${d.client_mode}, last synced \${lastSync}</div>\`);
+    });
+  }
+
+  el.innerHTML = rows.join("");
+}
+
+function renderMdmLockdown(data) {
+  const el = document.getElementById("mdm-lockdown-body");
+  if (!data.fleet) {
+    el.innerHTML = \`<div class="empty">\${escapeHtml(data.fleetError ?? "Fleet not available")}</div>\`;
+    return;
+  }
+  const f = data.fleet;
+  const parts = [];
+
+  const deOn = f.disk_encryption_enabled;
+  const deLabel = deOn === null ? "unknown" : deOn ? "On" : "Off";
+  parts.push(\`<div class="status-row\${deOn === false ? " error" : ""}">Disk encryption: <strong>\${deLabel}</strong></div>\`);
+
+  if (f.mdm) {
+    parts.push(\`<div class="status-row\${f.mdm.connected_to_fleet ? "" : " error"}">MDM enrollment: \${escapeHtml(f.mdm.enrollment_status)}\${f.mdm.connected_to_fleet ? "" : " (NOT connected to Fleet)"}</div>\`);
+    if (f.mdm.profiles.length === 0) {
+      parts.push('<div class="empty">No configuration profiles reported by Fleet.</div>');
+    } else {
+      parts.push('<table><thead><tr><th>Profile</th><th>Status</th></tr></thead><tbody>' +
+        f.mdm.profiles.map((p) => \`<tr><td>\${escapeHtml(p.name)}</td><td class="mdm-status-\${escapeHtml(p.status)}">\${escapeHtml(p.status)}</td></tr>\`).join("") +
+        '</tbody></table>');
+    }
+  } else {
+    parts.push('<div class="empty">Not MDM-enrolled.</div>');
+  }
+
+  el.innerHTML = parts.join("");
 }
 
 async function loadRules() {
@@ -470,10 +599,36 @@ document.getElementById("password-pending-note").addEventListener("click", async
   }
 });
 
+// Tab nav - plain show/hide, no router needed for three tabs. The
+// current tab lives in the URL hash so it survives a reload/bookmark,
+// same "no build step, no extra moving parts" reasoning as everything
+// else in this file.
+const TABS = ["mac", "android", "networking"];
+function showTab(name) {
+  if (!TABS.includes(name)) name = "mac";
+  TABS.forEach((t) => {
+    document.getElementById(\`tab-\${t}\`).hidden = t !== name;
+  });
+  document.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-tab") === name);
+  });
+}
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    location.hash = btn.getAttribute("data-tab");
+  });
+});
+window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+showTab(location.hash.slice(1));
+
 loadRules().catch((err) => setStatus("rules-status", "Failed to load rules: " + err.message, true));
 loadSoftware().catch((err) => setStatus("software-status", "Failed to load software: " + err.message, true));
 loadPendingPasswordChange().catch(() => {});
 loadInstalledApps().catch((err) => setStatus("installed-apps-status", "Failed to load: " + err.message, true));
+loadHostStatus().catch((err) => {
+  document.getElementById("sync-health-body").innerHTML = \`<div class="empty error">Failed to load: \${escapeHtml(err.message)}</div>\`;
+  document.getElementById("mdm-lockdown-body").innerHTML = "";
+});
 </script>
 </body>
 </html>`;

@@ -201,3 +201,50 @@ export interface FleetListHostSoftwareResponse {
   count: number;
   software: FleetHostSoftwareItem[];
 }
+
+// --- Get host (GET /api/v1/fleet/hosts/:id) ---
+// Only the fields this Worker actually reads are kept required; Fleet's
+// real response is much larger (users, geolocation, batteries, issues,
+// etc) - see fleetClient.ts's getHostStatus doc comment for what this is
+// used for.
+
+export interface FleetMdmProfile {
+  name: string;
+  // One of "pending" | "verifying" | "verified" | "failed" per Fleet's
+  // own docs - not narrowed to a union here since Fleet's real set could
+  // grow and a strict union would make this Worker fail to compile on a
+  // status value it hasn't seen yet, for a field this Worker only ever
+  // displays, never branches logic on.
+  status: string;
+  operation_type: string;
+}
+
+export interface FleetMdmInfo {
+  enrollment_status: string;
+  connected_to_fleet: boolean;
+  profiles: FleetMdmProfile[];
+}
+
+export interface FleetHostDetail {
+  hostname: string;
+  status: string; // "online" | "offline" | "missing" per Fleet's own docs
+  seen_time: string;
+  os_version: string;
+  disk_encryption_enabled: boolean | null;
+  mdm: FleetMdmInfo | null; // null on a host that isn't MDM-enrolled at all
+}
+
+export interface FleetGetHostResponse {
+  host: {
+    hostname: string;
+    status: string;
+    seen_time: string;
+    os_version: string;
+    disk_encryption_enabled?: boolean;
+    mdm?: {
+      enrollment_status: string;
+      connected_to_fleet: boolean;
+      profiles?: FleetMdmProfile[];
+    };
+  };
+}

@@ -23,6 +23,8 @@
 import type {
   Env,
   FleetAddPackageResponse,
+  FleetGetHostResponse,
+  FleetHostDetail,
   FleetHostSoftwareItem,
   FleetListHostSoftwareResponse,
   FleetListHostsResponse,
@@ -132,4 +134,44 @@ export async function getHostSoftware(env: Env, hostId: number): Promise<FleetHo
   }
   const parsed = JSON.parse(bodyText) as FleetListHostSoftwareResponse;
   return parsed.software ?? [];
+}
+
+// Real connectivity + MDM-lockdown status for a host - built directly
+// against fleetdm/fleet's real "Get host" docs (rest-api.md), not
+// guessed. Backs the dashboard's "Sync health" and "MDM lockdown"
+// sections: whether Fleet has heard from this Mac recently
+// (status/seen_time) and what MDM actually has locked down right now
+// (disk_encryption_enabled, mdm.enrollment_status, and the real
+// per-profile verified/pending/failed status Fleet tracks) - not what
+// this repo's profiles/ directory *intends* to enforce, what Fleet has
+// actually confirmed applied.
+// `exclude_software=true` since the installed-software list is already
+// covered by getHostSoftware above - no reason to double the payload
+// size fetching it again here.
+export async function getHostStatus(env: Env, hostId: number): Promise<FleetHostDetail> {
+  const { baseUrl, token } = requireFleetConfig(env);
+  const endpoint = `/api/v1/fleet/hosts/${hostId}?exclude_software=true`;
+  const response = await fetch(`${baseUrl}${endpoint}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const bodyText = await response.text();
+  if (!response.ok) {
+    throw new FleetApiError(endpoint, response.status, bodyText);
+  }
+  const parsed = JSON.parse(bodyText) as FleetGetHostResponse;
+  const h = parsed.host;
+  return {
+    hostname: h.hostname,
+    status: h.status,
+    seen_time: h.seen_time,
+    os_version: h.os_version,
+    disk_encryption_enabled: h.disk_encryption_enabled ?? null,
+    mdm: h.mdm
+      ? {
+          enrollment_status: h.mdm.enrollment_status,
+          connected_to_fleet: h.mdm.connected_to_fleet,
+          profiles: h.mdm.profiles ?? [],
+        }
+      : null,
+  };
 }

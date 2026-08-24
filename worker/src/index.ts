@@ -42,6 +42,7 @@ import {
 } from "./ratchet";
 import { clearSessionCookie, createSessionCookie, hasValidSession } from "./session";
 import { STATIC_RULES } from "./staticRules";
+import { handleGetHostStatus } from "./hostStatus";
 import { handleEventUpload, handlePostflight, handlePreflight, handleRuleDownload } from "./santaSync";
 import {
   handleInstallPackage,
@@ -302,6 +303,13 @@ export default {
         return handleInstallPackage(Number(installMatch[1]), request, env);
       }
       return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    // --- Sync health / MDM lockdown status (session-gated) ---
+    if (url.pathname === "/api/host-status" && request.method === "GET") {
+      const authError = await requireSession(request, env);
+      if (authError) return authError;
+      return handleGetHostStatus(request, env);
     }
 
     // --- Dashboard password-change API (session-gated) ---
