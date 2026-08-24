@@ -94,21 +94,28 @@ re-run.
 - **The dashboard itself** - no frontend exists yet. Everything above is
   backend only.
 
-## Open design question, not yet decided
+## StaticRules vs. sync - decided
 
-`profiles/santa-config.mobileconfig` currently has no `SyncBaseURL` -
-Phase 3 deliberately used `StaticRules` alone (see that file's own
-comment). Once this Worker is live, does the real Tor Browser BLOCKLIST
-rule *move* to the sync server (dynamic, dashboard-editable), or does
-`StaticRules` stay as-is for defense-in-depth (the file's own comment on
-why the ContentGuard self-allowlist rule specifically should survive
-even a compromised or misbehaving sync server) while only *new* rules
-added after Phase 4 go through sync? Leaning toward the latter - keeping
-the profile-level `StaticRules` allowlist immutable and tamper-resistant
-regardless of what a network service does - but this hasn't been decided
-with the same "confirm before implementing" discipline the rest of this
-project uses for real tradeoffs, and shouldn't be until it's deliberately
-discussed the same way ScreenCapture's removal was.
+`profiles/santa-config.mobileconfig`'s existing `StaticRules` (Tor
+Browser's BLOCKLIST, ContentGuard's own self-allowlist) **stay exactly
+as they are, permanently, regardless of this Worker's sync server going
+live.** They are not migrated to dynamic rules and this Worker's rule
+set is not treated as a replacement for them. Reasoning: `StaticRules`
+live in an MDM-pushed configuration profile - tamper-resistant in a way
+a network service fundamentally can't be, since they keep working even
+if this Worker goes down, gets misconfigured, or is ever compromised.
+That guarantee is worth more than dashboard convenience for the small,
+deliberately-hand-maintained set of rules that already exist. Confirmed
+with the user before treating this as settled, same bar as
+ScreenCapture's removal.
+
+**What this Worker's rule set is actually for**: new rules added *after*
+Phase 4, day-to-day, without needing a full profile edit-and-repush
+cycle through Fleet every time (the whole reason Phase 4 exists per its
+"single control panel" scope decision). `worker/schema.sql`'s `rules`
+table and `StaticRules` are two independent, additive enforcement
+sources from Santa's perspective - a binary gets blocked if *either*
+denies it, not "whichever one wins."
 
 ## Real infra setup steps (not run yet)
 
