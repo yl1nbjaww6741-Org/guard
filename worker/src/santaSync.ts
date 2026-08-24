@@ -34,6 +34,33 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+// Real, previously-missed gap: Santa's own SyncClientContentEncoding
+// config key defaults to "deflate" (confirmed directly in
+// northpolesec/santa's docs/src/lib/santaconfig.ts, not guessed) - every
+// sync request Santa sends is deflate-compressed by default, with a
+// matching Content-Encoding header. Cloudflare Workers' Request object
+// does NOT auto-decompress an incoming request body based on that
+// header (unlike some client-side fetch() response handling) - a plain
+// `request.json()` on a compressed body throws a JSON parse error,
+// which index.ts's catch-all turns into an opaque 500 "Internal Server
+// Error". This was invisible to every local/curl-based test in this
+// project's history since curl doesn't compress bodies by default - it
+// only surfaced once tested against a real Santa client for the first
+// time. Handles "gzip" too since it's a documented alternative value
+// for the same config key; "deflate" maps to the Web Compression
+// Streams API's "deflate" format (zlib-wrapped, RFC 1950/1951), not
+// "deflate-raw" - matches what Content-Encoding: deflate means over
+// HTTP.
+async function parseJsonBody<T>(request: Request): Promise<T> {
+  const encoding = request.headers.get("content-encoding")?.toLowerCase();
+  if (!request.body || (encoding !== "deflate" && encoding !== "gzip")) {
+    return request.json<T>();
+  }
+  const decompressed = request.body.pipeThrough(new DecompressionStream(encoding));
+  const text = await new Response(decompressed).text();
+  return JSON.parse(text) as T;
+}
+
 // Every stage's URL includes machine_id (see the proto's `google.api.http`
 // annotations) - if it doesn't match the body's own machine_id field,
 // something is wrong (a misconfigured client, or a request that's been
@@ -44,7 +71,7 @@ function machineIdMismatch(urlMachineId: string, bodyMachineId: string | undefin
 }
 
 export async function handlePreflight(machineId: string, request: Request, env: Env): Promise<Response> {
-  const body = await request.json<PreflightRequest>();
+  const body = await parseJsonBody<PreflightRequest>(request);
   if (machineIdMismatch(machineId, body.machine_id)) {
     return jsonResponse({ error: "machine_id in URL and body disagree" }, 400);
   }
@@ -73,7 +100,7 @@ export async function handlePreflight(machineId: string, request: Request, env: 
 }
 
 export async function handleEventUpload(machineId: string, request: Request, env: Env): Promise<Response> {
-  const body = await request.json<EventUploadRequest>();
+  const body = await parseJsonBody<EventUploadRequest>(request);
   if (machineIdMismatch(machineId, body.machine_id)) {
     return jsonResponse({ error: "machine_id in URL and body disagree" }, 400);
   }
@@ -88,7 +115,7 @@ export async function handleEventUpload(machineId: string, request: Request, env
 }
 
 export async function handleRuleDownload(machineId: string, request: Request, env: Env): Promise<Response> {
-  const body = await request.json<RuleDownloadRequest>();
+  const body = await parseJsonBody<RuleDownloadRequest>(request);
   if (machineIdMismatch(machineId, body.machine_id)) {
     return jsonResponse({ error: "machine_id in URL and body disagree" }, 400);
   }
@@ -118,7 +145,7 @@ export async function handleRuleDownload(machineId: string, request: Request, en
 }
 
 export async function handlePostflight(machineId: string, request: Request, env: Env): Promise<Response> {
-  const body = await request.json<PostflightRequest>();
+  const body = await parseJsonBody<PostflightRequest>(request);
   if (machineIdMismatch(machineId, body.machine_id)) {
     return jsonResponse({ error: "machine_id in URL and body disagree" }, 400);
   }
