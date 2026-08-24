@@ -1,0 +1,259 @@
+// The dashboard frontend - the last piece of Phase 4's "single control
+// panel" scope decision (mac/README.md's Phase 4 row). A single static
+// HTML page with inline vanilla JS, served directly by this Worker (no
+// separate build step, no external CDN dependency - Workers can't
+// reliably reach arbitrary external hosts from every request path
+// anyway, and this project's whole ethos is minimal moving parts). Calls
+// the same-origin /api/... endpoints already built and verified in
+// earlier commits - this file adds no new backend logic of its own.
+//
+// Auth: relies entirely on Cloudflare Access protecting this Worker's
+// route at the edge (mac/README.md's Phase 4 row) plus this route's own
+// `requireCloudflareAccess` check in index.ts, same as every /api/...
+// route. No separate login form here - Access's own login page handles
+// that before a request ever reaches this code.
+
+export function renderDashboard(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ContentGuard Control Panel</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #14161a; color: #e8e8ea; margin: 0; padding: 2rem;
+    max-width: 900px; margin-inline: auto;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+  .subtitle { color: #8b8f98; font-size: 0.85rem; margin-bottom: 2rem; }
+  section { margin-bottom: 2.5rem; }
+  h2 { font-size: 1.05rem; border-bottom: 1px solid #2a2d33; padding-bottom: 0.5rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.75rem; }
+  th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #22252b; }
+  th { color: #8b8f98; font-weight: 500; }
+  .policy-BLOCKLIST, .policy-SILENT_BLOCKLIST { color: #ff6b6b; }
+  .policy-ALLOWLIST, .policy-ALLOWLIST_COMPILER { color: #51cf66; }
+  .policy-REMOVE { color: #8b8f98; }
+  button {
+    background: #2a2d33; color: #e8e8ea; border: 1px solid #3a3e46;
+    border-radius: 6px; padding: 0.35rem 0.75rem; font-size: 0.8rem; cursor: pointer;
+  }
+  button:hover { background: #34383f; }
+  button.danger { border-color: #6b2c2c; color: #ff8787; }
+  button.danger:hover { background: #3a2222; }
+  form.inline { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; align-items: center; }
+  input, select { background: #1c1e23; color: #e8e8ea; border: 1px solid #3a3e46; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem; }
+  .pending-note { color: #ffd43b; font-size: 0.78rem; }
+  .empty { color: #6b6f78; font-size: 0.85rem; font-style: italic; padding: 0.75rem 0; }
+  .error { color: #ff6b6b; font-size: 0.85rem; margin-top: 0.5rem; }
+  .status-msg { font-size: 0.8rem; margin-top: 0.5rem; min-height: 1.2em; }
+</style>
+</head>
+<body>
+  <h1>ContentGuard Control Panel</h1>
+  <div class="subtitle">Phase 4 - Santa rules and Fleet software, one place instead of jumping between apps.</div>
+
+  <section>
+    <h2>Santa rules</h2>
+    <table id="rules-table">
+      <thead><tr><th>Identifier</th><th>Type</th><th>Policy</th><th>Scope</th><th></th></tr></thead>
+      <tbody id="rules-body"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+    </table>
+    <form class="inline" id="add-rule-form">
+      <input name="identifier" placeholder="Identifier (SHA-256 / Team ID / etc)" required style="flex: 1; min-width: 220px;">
+      <select name="rule_type">
+        <option value="TEAMID">Team ID</option>
+        <option value="CERTIFICATE">Certificate</option>
+        <option value="BINARY">Binary</option>
+        <option value="SIGNINGID">Signing ID</option>
+        <option value="CDHASH">CDHash</option>
+      </select>
+      <select name="policy">
+        <option value="BLOCKLIST">Block</option>
+        <option value="ALLOWLIST">Allow</option>
+        <option value="SILENT_BLOCKLIST">Block (silent)</option>
+      </select>
+      <button type="submit">Add rule</button>
+    </form>
+    <div class="status-msg" id="rules-status"></div>
+  </section>
+
+  <section>
+    <h2>Software (Fleet)</h2>
+    <table id="software-table">
+      <thead><tr><th>Name</th><th>Version</th><th>Platform</th><th></th></tr></thead>
+      <tbody id="software-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+    </table>
+    <form class="inline" id="upload-form">
+      <input type="file" name="software" accept=".pkg,.msi,.exe,.deb,.rpm,.tar.gz,.ipa" required>
+      <button type="submit">Upload package</button>
+    </form>
+    <div class="status-msg" id="software-status"></div>
+  </section>
+
+<script>
+async function api(path, opts) {
+  const res = await fetch(path, { ...opts, credentials: "include" });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(\`\${res.status}: \${text}\`);
+  }
+  const contentType = res.headers.get("content-type") || "";
+  return contentType.includes("application/json") ? res.json() : null;
+}
+
+function timeUntil(ms) {
+  const diff = ms - Date.now();
+  if (diff <= 0) return "any moment now";
+  const hours = Math.floor(diff / 3600000);
+  const mins = Math.floor((diff % 3600000) / 60000);
+  return \`~\${hours}h \${mins}m\`;
+}
+
+async function loadRules() {
+  const [rules, pending] = await Promise.all([
+    api("/api/rules"),
+    api("/api/loosen-requests"),
+  ]);
+  const pendingByRuleId = Object.fromEntries(pending.map((p) => [p.rule_id, p]));
+  const body = document.getElementById("rules-body");
+  if (rules.length === 0) {
+    body.innerHTML = '<tr><td colspan="5" class="empty">No rules yet - StaticRules in santa-config.mobileconfig still apply regardless.</td></tr>';
+    return;
+  }
+  body.innerHTML = rules.map((r) => {
+    const p = pendingByRuleId[r.id];
+    const canLoosen = r.policy !== "REMOVE" && !p;
+    let actionCell;
+    if (p) {
+      actionCell = \`<span class="pending-note">loosen queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel="\${p.id}">Cancel</button>\`;
+    } else if (canLoosen) {
+      actionCell = \`<button data-loosen="\${r.id}">Request loosen</button>\`;
+    } else {
+      actionCell = "";
+    }
+    return \`<tr>
+      <td>\${escapeHtml(r.identifier)}</td>
+      <td>\${r.rule_type}</td>
+      <td class="policy-\${r.policy}">\${r.policy}</td>
+      <td>\${r.device_id ?? "all devices"}</td>
+      <td>\${actionCell}</td>
+    </tr>\`;
+  }).join("");
+}
+
+async function loadSoftware() {
+  const packages = await api("/api/software");
+  const body = document.getElementById("software-body");
+  if (packages.length === 0) {
+    body.innerHTML = '<tr><td colspan="4" class="empty">Nothing uploaded yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = packages.map((p) => \`<tr>
+    <td>\${escapeHtml(p.name)}</td>
+    <td>\${escapeHtml(p.version ?? "")}</td>
+    <td>\${escapeHtml(p.platform ?? "")}</td>
+    <td><button data-install="\${p.title_id}">Install on host...</button></td>
+  </tr>\`).join("");
+}
+
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s ?? "";
+  return div.innerHTML;
+}
+
+function setStatus(id, message, isError) {
+  const el = document.getElementById(id);
+  el.textContent = message;
+  el.className = "status-msg" + (isError ? " error" : "");
+}
+
+document.getElementById("add-rule-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  try {
+    await api("/api/rules", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        identifier: form.get("identifier"),
+        rule_type: form.get("rule_type"),
+        policy: form.get("policy"),
+      }),
+    });
+    e.target.reset();
+    setStatus("rules-status", "Rule added.", false);
+    await loadRules();
+  } catch (err) {
+    setStatus("rules-status", "Failed to add rule: " + err.message, true);
+  }
+});
+
+document.getElementById("rules-body").addEventListener("click", async (e) => {
+  const loosenId = e.target.getAttribute("data-loosen");
+  const cancelId = e.target.getAttribute("data-cancel");
+  if (loosenId) {
+    const password = prompt("Password to request loosening this rule:");
+    if (!password) return;
+    try {
+      await api(\`/api/rules/\${loosenId}/loosen-request\`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      setStatus("rules-status", "Loosen queued - takes effect after the 24h delay.", false);
+      await loadRules();
+    } catch (err) {
+      setStatus("rules-status", "Failed to request loosen: " + err.message, true);
+    }
+  } else if (cancelId) {
+    try {
+      await api(\`/api/loosen-requests/\${cancelId}/cancel\`, { method: "POST" });
+      setStatus("rules-status", "Loosen request cancelled.", false);
+      await loadRules();
+    } catch (err) {
+      setStatus("rules-status", "Failed to cancel: " + err.message, true);
+    }
+  }
+});
+
+document.getElementById("upload-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  try {
+    await api("/api/software", { method: "POST", body: form });
+    e.target.reset();
+    setStatus("software-status", "Package uploaded.", false);
+    await loadSoftware();
+  } catch (err) {
+    setStatus("software-status", "Upload failed: " + err.message, true);
+  }
+});
+
+document.getElementById("software-body").addEventListener("click", async (e) => {
+  const titleId = e.target.getAttribute("data-install");
+  if (!titleId) return;
+  const host = prompt("Hostname, serial, or UUID of the target host:");
+  if (!host) return;
+  try {
+    await api(\`/api/software/\${titleId}/install\`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ host }),
+    });
+    setStatus("software-status", "Install requested on " + host + ".", false);
+  } catch (err) {
+    setStatus("software-status", "Install failed: " + err.message, true);
+  }
+});
+
+loadRules().catch((err) => setStatus("rules-status", "Failed to load rules: " + err.message, true));
+loadSoftware().catch((err) => setStatus("software-status", "Failed to load software: " + err.message, true));
+</script>
+</body>
+</html>`;
+}

@@ -261,6 +261,22 @@ export async function cancelLoosenRequest(db: D1Database, requestId: number): Pr
     .run();
 }
 
+// Every request still in flight (not yet applied or cancelled) - for the
+// dashboard to show "loosen requested, applies at <time>" and offer a
+// cancel action. Distinct from getDueLoosenRequests below: this includes
+// ones that aren't due yet, that one is only what's ready to apply now.
+export async function listActiveLoosenRequests(db: D1Database): Promise<PendingLoosenRequest[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, rule_id, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_loosen_requests
+       WHERE applied_at IS NULL AND cancelled_at IS NULL
+       ORDER BY applies_at ASC`
+    )
+    .all<PendingLoosenRequest>();
+  return result.results ?? [];
+}
+
 // Returns every request whose 24h delay has elapsed and hasn't already
 // been applied or cancelled - called from the scheduled handler, and
 // callable directly for tests (see index.ts's scheduled export).

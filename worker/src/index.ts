@@ -11,13 +11,12 @@
 //    mac/docs/PHASE_4_DASHBOARD_SETUP.md's setup steps - this Worker's
 //    own JWT check is defense-in-depth on top of that, not instead of it.
 //
-// The dashboard frontend itself is still NOT implemented - see
-// mac/docs/PHASE_4_DASHBOARD_SETUP.md's status for what's real versus
-// planned.
+//  - GET / - the dashboard page itself (dashboard.ts), also Access-gated.
 
 import { verifyLoosenPassword } from "./auth";
 import { requireCloudflareAccess } from "./cloudflareAccess";
-import { cancelLoosenRequest, getRuleById, listRules, upsertRule } from "./db";
+import { renderDashboard } from "./dashboard";
+import { cancelLoosenRequest, getRuleById, listActiveLoosenRequests, listRules, upsertRule } from "./db";
 import { LoosenAlreadyPendingError, applyDueLoosenRequests, requestLoosen } from "./ratchet";
 import { handleEventUpload, handlePostflight, handlePreflight, handleRuleDownload } from "./santaSync";
 import { handleInstallPackage, handleListSoftwarePackages, handleUploadPackage } from "./softwareApi";
@@ -76,6 +75,10 @@ async function handleListRules(env: Env): Promise<Response> {
   return jsonResponse(await listRules(env.DB));
 }
 
+async function handleListActiveLoosenRequests(env: Env): Promise<Response> {
+  return jsonResponse(await listActiveLoosenRequests(env.DB));
+}
+
 async function handleLoosenRequest(ruleId: number, request: Request, env: Env): Promise<Response> {
   const body = await request.json<{ password?: string }>();
   if (!body.password || !(await verifyLoosenPassword(body.password, env))) {
@@ -127,6 +130,7 @@ export default {
     // --- Rule-management API (Cloudflare Access-gated, see cloudflareAccess.ts) ---
     const isRulesApiRoute =
       url.pathname === "/api/rules" ||
+      url.pathname === "/api/loosen-requests" ||
       url.pathname.match(/^\/api\/rules\/\d+\/loosen-request$/) ||
       url.pathname.match(/^\/api\/loosen-requests\/\d+\/cancel$/);
     if (isRulesApiRoute) {
@@ -138,6 +142,9 @@ export default {
       }
       if (url.pathname === "/api/rules" && request.method === "POST") {
         return handleCreateRule(request, env);
+      }
+      if (url.pathname === "/api/loosen-requests" && request.method === "GET") {
+        return handleListActiveLoosenRequests(env);
       }
       const loosenMatch = url.pathname.match(/^\/api\/rules\/(\d+)\/loosen-request$/);
       if (loosenMatch && request.method === "POST") {
@@ -172,6 +179,13 @@ export default {
         return handleInstallPackage(Number(installMatch[1]), request, env);
       }
       return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    // --- Dashboard page (Cloudflare Access-gated, same as the API it calls) ---
+    if (url.pathname === "/" && request.method === "GET") {
+      const authError = await requireCloudflareAccess(request, env);
+      if (authError) return authError;
+      return new Response(renderDashboard(), { headers: { "content-type": "text/html; charset=utf-8" } });
     }
 
     return new Response("Not Found", { status: 404 });
