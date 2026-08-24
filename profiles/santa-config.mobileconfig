@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>B9EFAEA3-D5BE-4766-A5D3-BAABC33A4278</string>
     <key>PayloadVersion</key>
-    <integer>2</integer>
+    <integer>3</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>AA383881-96D1-49E5-A703-D1B91C0F19DD</string>
             <key>PayloadVersion</key>
-            <integer>2</integer>
+            <integer>3</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Santa Payload</string>
 
@@ -84,14 +84,19 @@
               been set to the exact value below (`wrangler secret put
               SANTA_SYNC_TOKEN`) before pushing this profile through Fleet -
               otherwise every sync attempt 503s (safe, fails closed, but
-              non-functional) until they match.
+              non-functional) until they match. This value was rotated once
+              (PayloadVersion 2 -> 3) before ever being pushed through Fleet -
+              the value first used to verify the sync-token fix end-to-end
+              had appeared in plaintext across more than one debugging
+              session's transcript, so it was replaced here rather than kept
+              as the value this profile ships with long-term.
             -->
             <key>SyncBaseURL</key>
             <string>https://contentguard-worker.yl1nbjaww6741-4.workers.dev/</string>
             <key>SyncExtraHeaders</key>
             <dict>
                 <key>X-ContentGuard-Sync-Token</key>
-                <string>0ec3a926e81aaa439a62f7f91588707d44ec31b526c81e48c1e3414752b1ba61</string>
+                <string>6086caa49d6f375578e4fc3d8847ff1defd779b9c3560a01f91f7160a88340f3</string>
             </dict>
 
             <key>StaticRules</key>
