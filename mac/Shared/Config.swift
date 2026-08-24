@@ -10,9 +10,16 @@ import Foundation
 enum ContentGuardConfig {
     // MARK: - Capture / detection
 
-    /// Fixed at 3 seconds - matches the Android app's cadence intentionally,
-    /// not something to tune per-device. See mac/README.md.
-    static let captureIntervalSeconds: TimeInterval = 3.0
+    /// 5 seconds, changed from the original 3.0 by explicit user decision
+    /// (2026-08-24) as a battery measure - a deliberate divergence from the
+    /// Android app's 3s cadence this originally matched. The real tradeoff,
+    /// stated rather than buried: worst-case detection latency moves from
+    /// ~3s to ~5s. Everything downstream that is defined as a multiple of
+    /// this interval (frameStallGraceSeconds at 10x,
+    /// captureStreamStallGraceSeconds at 5x) was rescaled in the same
+    /// change - the margins those grace windows exist to provide are
+    /// relative to the cadence, not absolute numbers.
+    static let captureIntervalSeconds: TimeInterval = 5.0
 
     /// Longest-side pixel dimension SCStream is asked to deliver, rather
     /// than the display's own full resolution (what CaptureManager used to
@@ -103,12 +110,14 @@ enum ContentGuardConfig {
     /// capture is genuinely alive (FrameProcessor.process() bumps it via a
     /// deferred call on every frame, regardless of skin-ratio outcome) - so
     /// HeartbeatMonitor tracks when that count last actually changed, not
-    /// just when a heartbeat last arrived. 30s is generous versus the
-    /// nominal 3s cadence specifically because real multi-display capture
-    /// jitter was observed going as high as ~6s between frames even in
-    /// confirmed-healthy operation - this needs comfortable margin above
-    /// that, not a tight bound.
-    static let frameStallGraceSeconds: TimeInterval = 30.0
+    /// just when a heartbeat last arrived. Generous versus the nominal
+    /// cadence specifically because real multi-display capture jitter was
+    /// observed going as high as ~2x nominal between frames (measured as
+    /// ~6s at the original 3s cadence) even in confirmed-healthy operation
+    /// - this needs comfortable margin above that, not a tight bound.
+    /// Rescaled 30 -> 50 when captureIntervalSeconds moved 3 -> 5: the
+    /// margin is a multiple of the cadence, not an absolute number.
+    static let frameStallGraceSeconds: TimeInterval = 50.0
 
     /// How long CaptureManager (agent-side) waits since the last frame it
     /// actually delivered before concluding its own SCStream has silently
@@ -122,8 +131,13 @@ enum ContentGuardConfig {
     /// shorter than frameStallGraceSeconds (30s) - this should resolve a
     /// stall well before the daemon's more disruptive fail-closed response
     /// ever needs to fire at all, not race it. See CaptureManager.swift's
-    /// startStreamHealthCheck().
-    static let captureStreamStallGraceSeconds: TimeInterval = 15.0
+    /// startStreamHealthCheck(). Rescaled 15 -> 25 alongside
+    /// captureIntervalSeconds moving 3 -> 5 (same 5x-the-cadence ratio as
+    /// before): at a 5s cadence with observed healthy jitter of up to ~2x
+    /// nominal, a 15s threshold would sit close enough to real inter-frame
+    /// gaps to risk rebuilding perfectly healthy streams - churn that would
+    /// itself cost battery, the exact thing the cadence change is for.
+    static let captureStreamStallGraceSeconds: TimeInterval = 25.0
 
     /// Found the hard way, on the real Mac, via a full `sudo reboot` (not
     /// just a launchd bootout/bootstrap cycle - see mac/README.md): the

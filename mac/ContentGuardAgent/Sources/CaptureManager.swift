@@ -1,5 +1,7 @@
-// One SCStream per display, delivering frames to FrameProcessor at a fixed
-// 3-second interval. Owns the display-hotplug and sleep/wake lifecycle -
+// One SCStream per display, delivering frames to FrameProcessor at
+// ContentGuardConfig.captureIntervalSeconds (see that constant's doc
+// comment for the current value and why it changed from the original
+// 3s). Owns the display-hotplug and sleep/wake lifecycle -
 // SCStream dies on sleep and needs rebuilding on wake, per Apple's own
 // documented behavior, not a bug in this code. Also self-heals a silently
 // dead stream that no OS notification ever fires for - see
@@ -151,9 +153,11 @@ final class CaptureManager: NSObject {
         let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
 
         let config = SCStreamConfiguration()
-        // 0.33 fps, matching ContentGuardConfig.captureIntervalSeconds - a
-        // fixed cadence, not something to tune per-device (see
-        // mac/README.md's key decisions).
+        // One frame per ContentGuardConfig.captureIntervalSeconds - stated
+        // in terms of the constant rather than a hardcoded fps figure,
+        // which went stale the moment the interval changed (see that
+        // constant's own doc comment for the 3s -> 5s decision and its
+        // rescaled dependents).
         config.minimumFrameInterval = CMTime(
             seconds: ContentGuardConfig.captureIntervalSeconds,
             preferredTimescale: 600
