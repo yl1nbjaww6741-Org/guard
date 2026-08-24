@@ -21,6 +21,19 @@ protocol CaptureManagerDelegate: AnyObject {
     /// daemon reads a healthy agent as stalled. See the implementation in
     /// main.swift for the real failure mode this exists to prevent.
     func captureManagerDidSkipUnchangedFrame(_ manager: CaptureManager)
+
+    /// Called when every display has gone to sleep and CaptureManager has
+    /// stopped its streams in response - see handleScreensSleep()'s doc
+    /// comment. The delegate must stop reporting captureActive=true for the
+    /// duration (main.swift sets heartbeatClient.captureActive = false),
+    /// the same way the capture-failed-to-start path already does - a
+    /// legitimate pause looks identical to a dead stream from the daemon's
+    /// side (framesProcessed frozen) unless captureActive says otherwise.
+    func captureManagerDidPauseForDisplaySleep(_ manager: CaptureManager)
+
+    /// Called once capture has resumed after handleScreensWake() rebuilt
+    /// streams following a captureManagerDidPauseForDisplaySleep(_:) call.
+    func captureManagerDidResumeFromDisplaySleep(_ manager: CaptureManager)
 }
 
 final class CaptureManager: NSObject {
@@ -52,6 +65,16 @@ final class CaptureManager: NSObject {
     /// ever touched from outputQueue, same as the other state above.
     private var hasStartedOnce = false
 
+    /// True while capture is intentionally paused because every display is
+    /// asleep - see handleScreensSleep()'s doc comment. Exists specifically
+    /// to guard checkStreamHealth(): an intentional stop() looks identical
+    /// to a real stall from that check's perspective (streams empty,
+    /// lastFrameDeliveredAt going stale), and without this the self-heal
+    /// timer would rebuild everything within captureStreamStallGraceSeconds
+    /// of the display going to sleep - undoing the pause this exists for,
+    /// every 25 seconds, for as long as the display stays off.
+    private var isPausedForDisplaySleep = false
+
     init(appScopeManager: AppScopeManager, overlayManager: OverlayManager) {
         self.appScopeManager = appScopeManager
         self.overlayManager = overlayManager
@@ -68,6 +91,18 @@ final class CaptureManager: NSObject {
             self,
             selector: #selector(handleDisplayChange),
             name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleScreensSleep),
+            name: NSWorkspace.screensDidSleepNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleScreensWake),
+            name: NSWorkspace.screensDidWakeNotification,
             object: nil
         )
     }
@@ -102,6 +137,19 @@ final class CaptureManager: NSObject {
         // pointless rebuild storm; worst case without it is a redundant
         // extra rebuild, not a crash.
         guard !isRebuilding else { return }
+
+        // Guards every rebuild trigger, not just the self-heal timer above -
+        // appScopeManagerDidUpdateScope (a safe app launching/quitting),
+        // handleDisplayChange, and didStopWithError can all fire while
+        // every display is asleep just as easily as while one is on (none
+        // of them require the screen to be lit), and none of them know
+        // about the pause on their own. Centralizing the check here, rather
+        // than guarding each call site individually, means every rebuild
+        // path - present and future - respects the pause automatically.
+        // handleScreensWake() clears the flag before calling this, so the
+        // one rebuild that's supposed to happen during a pause still does.
+        guard !isPausedForDisplaySleep else { return }
+
         isRebuilding = true
         defer { isRebuilding = false }
 
@@ -256,6 +304,12 @@ final class CaptureManager: NSObject {
         // case for the real incident that surfaced this.
         guard hasStartedOnce else { return }
 
+        // A deliberate pause (every display asleep) is not a stall - see
+        // isPausedForDisplaySleep's doc comment. Without this, this check
+        // would spend the whole pause rebuilding streams it was just told
+        // to stop.
+        guard !isPausedForDisplaySleep else { return }
+
         let reference = lastFrameDeliveredAt ?? .distantPast
         guard Date().timeIntervalSince(reference) > ContentGuardConfig.captureStreamStallGraceSeconds else { return }
 
@@ -279,6 +333,65 @@ final class CaptureManager: NSObject {
     @objc private func handleDisplayChange() {
         Task {
             try? await rebuildAllStreams()
+        }
+    }
+
+    /// Display-only sleep (screen(s) off, machine fully awake - the idle-
+    /// timeout / lid-closed-with-external-display case) - distinct from
+    /// handleWake() above, which is full system sleep/wake and always needs
+    /// a rebuild because SCStream doesn't survive that at all. A stream
+    /// generally keeps running through display sleep, still delivering
+    /// frames on schedule, just with SCFrameStatus reporting
+    /// `.blank`/`.suspended` (already skipped before the downscale/
+    /// prefilter/inference pipeline - see carriesNewContent()) - so the
+    /// capture stream itself, the outputQueue dispatch behind it, and the
+    /// compositor work feeding it all keep running the whole time every
+    /// display is dark, for nothing: no content is visible to anyone while
+    /// every screen is off, so there is nothing this pipeline could ever
+    /// need to catch during that window. Stopping capture outright here is
+    /// not a weaker detection posture, the same reasoning that already
+    /// applies to skipping `.blank`/`.suspended` frames - it isn't scanning
+    /// less of what's on screen, because there is nothing on screen.
+    ///
+    /// Also correctly covers FallbackCover's own `pmset displaysleepnow`
+    /// (HeartbeatMonitor.swift/FallbackCover.swift, daemon side): that's
+    /// the same system-level display-sleep event as an idle timeout as far
+    /// as this notification is concerned, so a fail-closed cover pauses
+    /// capture here too. Still correct, not a new gap - the display the
+    /// daemon just put to sleep is, by definition, not showing anything
+    /// either, and handleScreensWake() below resumes the instant it's
+    /// woken (by the user's password, per FallbackCover's own
+    /// documented dependency on "require password immediately after
+    /// sleep").
+    ///
+    /// Reasoned from NSWorkspace's own published behavior for this
+    /// notification pair (system-wide, not per-monitor - matches
+    /// `pmset displaysleepnow` also being system-wide), not re-confirmed
+    /// against real SDK headers the way SCFrameStatus was - worth watching
+    /// the real Mac's log after install to confirm this actually fires as
+    /// expected with an external display attached, same as every other
+    /// "reasoned but not yet independently verified" note in this file.
+    @objc private func handleScreensSleep() {
+        guard !isPausedForDisplaySleep else { return }
+        isPausedForDisplaySleep = true
+        NSLog("ContentGuardAgent: display(s) asleep - pausing capture")
+        Task {
+            await stop()
+            delegate?.captureManagerDidPauseForDisplaySleep(self)
+        }
+    }
+
+    /// Resumes from handleScreensSleep() above. A full rebuild, not a
+    /// resume of the old streams - stop() already tore them down, same
+    /// "clean rebuild rather than repair a half-dead stream" reasoning
+    /// handleWake() already uses.
+    @objc private func handleScreensWake() {
+        guard isPausedForDisplaySleep else { return }
+        isPausedForDisplaySleep = false
+        NSLog("ContentGuardAgent: display(s) awake - resuming capture")
+        Task {
+            try? await rebuildAllStreams()
+            delegate?.captureManagerDidResumeFromDisplaySleep(self)
         }
     }
 }

@@ -77,11 +77,32 @@ final class NudeNetClassifier {
         let options = try ORTSessionOptions()
         do {
             try options.appendCoreMLExecutionProvider(with: ORTCoreMLExecutionProviderOptions())
+            // Confirms the EP was actually appended, not that inference
+            // will actually land on the Neural Engine/GPU for every op -
+            // ORT's CoreML EP can still partition individual ops back to
+            // CPU per-node if CoreML itself refuses one, which this log
+            // line alone can't distinguish from a fully-engaged EP. Real
+            // confirmation of that needs powermetrics/Activity Monitor GPU
+            // or ANE usage during actual detection on the real Mac, still
+            // unverified. What this line DOES distinguish, which nothing
+            // did before: "CPU fallback because appendCoreMLExecutionProvider
+            // never ran" from "CPU because CoreML silently declined" -
+            // without it, this whole catch block was unobservable -
+            // inference worked either way, just slower, with nothing on the
+            // real Mac showing which path was actually taken.
+            NSLog("ContentGuardAgent: CoreML execution provider appended")
         } catch {
             // Not fatal on its own - ORT falls back to CPU execution, just
             // slower. Only the session creation below is worth failing
             // closed over; a missing Neural Engine path specifically isn't
-            // a security concern, just a performance one.
+            // a security concern, just a performance one. Previously silent
+            // (a bare comment, no log) - logged now because "slower" was
+            // never actually confirmed as not-happening on the real Mac;
+            // this makes it checkable instead of assumed. If this line ever
+            // shows up in `log stream` / Console.app on the real install,
+            // that's a real, measurable battery cost this file's own doc
+            // comment had been quietly assuming away.
+            NSLog("ContentGuardAgent: CoreML execution provider unavailable (\(error)) - falling back to CPU execution, will be slower")
         }
         let newSession = try ORTSession(env: ortEnv, modelPath: ContentGuardPaths.modelFile, sessionOptions: options)
         guard let firstInput = try newSession.inputNames().first,

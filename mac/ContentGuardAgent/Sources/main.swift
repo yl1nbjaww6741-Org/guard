@@ -94,6 +94,25 @@ extension AppDelegate: CaptureManagerDelegate {
     func captureManagerDidSkipUnchangedFrame(_ manager: CaptureManager) {
         heartbeatClient.recordFrameProcessed()
     }
+
+    /// See CaptureManager.handleScreensSleep()'s doc comment.
+    /// captureActive going false here is load-bearing, not cosmetic: it's
+    /// what keeps HeartbeatMonitor.checkGraceWindow() on the daemon side
+    /// from reading this intentional pause as the exact dead-stream
+    /// signature ContentGuardConfig.frameStallGraceSeconds exists to catch
+    /// (frozen framesProcessed + captureActive still claiming true). With
+    /// this honestly reporting false instead, that check's own
+    /// `captureActive == true` gate excludes the pause entirely - no
+    /// false "failing closed" against a display that's already off.
+    func captureManagerDidPauseForDisplaySleep(_ manager: CaptureManager) {
+        NSLog("ContentGuardAgent: capture paused for display sleep")
+        heartbeatClient.captureActive = false
+    }
+
+    func captureManagerDidResumeFromDisplaySleep(_ manager: CaptureManager) {
+        NSLog("ContentGuardAgent: capture resumed after display wake")
+        heartbeatClient.captureActive = true
+    }
 }
 
 extension AppDelegate: FrameProcessorDelegate {
