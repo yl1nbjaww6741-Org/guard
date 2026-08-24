@@ -21,8 +21,13 @@ primary_region = "iad"  # match the other three apps - same region, same private
 [build]
   image = "cloudflare/cloudflared:latest"
 
+# The image's ENTRYPOINT is already ["cloudflared", "--no-autoupdate"], and Fly
+# appends this as arguments to it - so this is the subcommand only, not a full
+# command line. cloudflared reads the connector token from the TUNNEL_TOKEN env
+# var (set via `fly secrets set`), so no --token flag is needed or wanted here;
+# passing one on the command line would also expose it in `fly status` output.
 [processes]
-  app = "sh -c 'cloudflared tunnel --no-autoupdate run --token \"$TUNNEL_TOKEN\"'"
+  app = "tunnel run"
 
 [[vm]]
   size = "shared-cpu-1x"

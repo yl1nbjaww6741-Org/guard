@@ -41,7 +41,17 @@ final class AppLockManager {
 
     init(log: @escaping (String) -> Void) {
         self.log = log
-        startPolling()
+        // Deliberately does NOT start polling here. There is nothing to
+        // enforce until some app is actually locked out, and this daemon
+        // runs for the machine's entire uptime - an unconditional
+        // appLockPollIntervalSeconds timer meant a strict-deadline wakeup
+        // every 2 seconds, forever, whose handler almost always found
+        // lockedPaths empty and returned immediately. The handler was
+        // cheap; the wakeup itself is not free on battery, because a
+        // recurring strict-deadline timer keeps the CPU from settling into
+        // its deeper idle states. Polling now starts when a lock is
+        // created (recordDetectionQuit) and stops when the last one
+        // expires (enforceLocks).
     }
 
     /// Call every time the agent reports a real detection-triggered quit
@@ -77,17 +87,33 @@ final class AppLockManager {
             self.lockedUntil[bundleID] = Date().addingTimeInterval(ContentGuardConfig.appLockDurationSeconds)
             self.lockedPaths[bundleID] = executablePath
             self.log("\(bundleID) hit \(ContentGuardConfig.appBlockCountThreshold) detections - locking it out for \(Int(ContentGuardConfig.appLockDurationSeconds))s")
+            self.startPollingIfNeeded()
         }
     }
 
-    private func startPolling() {
+    /// Must be called on `queue` - reads pollTimer and is called from
+    /// recordDetectionQuit's queue.async block.
+    private func startPollingIfNeeded() {
+        guard pollTimer == nil else { return }
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + ContentGuardConfig.appLockPollIntervalSeconds, repeating: ContentGuardConfig.appLockPollIntervalSeconds)
+        // No leeway, unlike the daemon's other timers: this one is active
+        // enforcement, and appLockPollIntervalSeconds is already justified
+        // as tight on purpose (see its doc comment - a locked app visibly
+        // flashing open before getting killed undermines the lock). It
+        // only runs while a lock is actually held, which is the bounded
+        // case worth spending precision on.
         t.setEventHandler { [weak self] in
             self?.enforceLocks()
         }
         t.resume()
         pollTimer = t
+    }
+
+    /// Must be called on `queue`, same as startPollingIfNeeded.
+    private func stopPolling() {
+        pollTimer?.cancel()
+        pollTimer = nil
     }
 
     private func enforceLocks() {
@@ -103,7 +129,13 @@ final class AppLockManager {
             log("app lock expired: \(bundleID)")
         }
 
-        guard !lockedPaths.isEmpty else { return }
+        guard !lockedPaths.isEmpty else {
+            // Last lock just expired - nothing left to enforce, so stop
+            // waking up for it. recordDetectionQuit restarts the timer the
+            // next time a lock is actually created.
+            stopPolling()
+            return
+        }
 
         let processes = ProcessEnumeration.runningProcesses()
         for (bundleID, path) in lockedPaths {

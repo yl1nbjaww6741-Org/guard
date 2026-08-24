@@ -227,7 +227,17 @@ final class HeartbeatMonitor {
         // Check at roughly the heartbeat interval - frequent enough to
         // notice a gap close to the actual grace deadline, not so frequent
         // it's pointless overhead.
-        t.schedule(deadline: .now(), repeating: ContentGuardConfig.heartbeatIntervalSeconds)
+        // Leeway for the same reason as HeartbeatClient's own timer (see
+        // there): a coalescible wakeup rather than a guaranteed one. Costs
+        // at most a second of extra detection latency on top of the grace
+        // deadline itself - this check exists to catch an agent that has
+        // been silent for heartbeatGraceSeconds, so a deadline measured in
+        // seconds is not sensitive to a second of tick jitter.
+        t.schedule(
+            deadline: .now(),
+            repeating: ContentGuardConfig.heartbeatIntervalSeconds,
+            leeway: .seconds(1)
+        )
         t.setEventHandler { [weak self] in
             self?.checkGraceWindow()
         }

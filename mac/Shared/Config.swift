@@ -14,6 +14,27 @@ enum ContentGuardConfig {
     /// not something to tune per-device. See mac/README.md.
     static let captureIntervalSeconds: TimeInterval = 3.0
 
+    /// Longest-side pixel dimension SCStream is asked to deliver, rather
+    /// than the display's own full resolution (what CaptureManager used to
+    /// request). Nothing downstream can use more: FrameProcessor downscales
+    /// every frame to 64px for the change-hash and skin prefilter, and
+    /// NudeNetClassifier's preprocess() hard-rejects anything above 640 in
+    /// either dimension because the 640m model's input is a fixed
+    /// 640x640 canvas. Capturing a full 1512x982 (a 14" MBP) to feed a
+    /// 640px pipeline meant compositing and moving ~5.6x more pixels per
+    /// frame, per display, every captureIntervalSeconds, then paying a
+    /// second full-resolution CoreImage render pass to throw most of it
+    /// away - pure battery cost with nothing to show for it, since the
+    /// classifier is mathematically incapable of seeing the extra detail.
+    /// Asking ScreenCaptureKit for this size directly gets the scale done
+    /// once, in hardware, on the capture path.
+    ///
+    /// Deliberately equal to the model's input dimension, not smaller:
+    /// this is the largest size that costs nothing in detection quality.
+    /// Going below 640 WOULD start discarding detail the classifier could
+    /// have used, so it is not a free tuning knob for more battery.
+    static let maxCaptureDimension: Int = 640
+
     /// Confidence threshold for NudeNetClassifier before triggering a
     /// blackout. A single borderline frame at ~0.6 shouldn't cost 10
     /// minutes - this is the confirmation gate, distinct from the
