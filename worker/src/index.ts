@@ -8,15 +8,15 @@
 //    dashboard, gated by `requireApiToken` as an interim stopgap until
 //    Cloudflare Access is actually wired in - see auth.ts's doc comment.
 //
-// Fleet API integration (.pkg deployment), Cloudflare Access auth, and
-// the dashboard itself are still NOT implemented - see
-// mac/docs/PHASE_4_DASHBOARD_SETUP.md's status for what's real versus
-// planned.
+// Cloudflare Access auth and the dashboard itself are still NOT
+// implemented - see mac/docs/PHASE_4_DASHBOARD_SETUP.md's status for
+// what's real versus planned.
 
 import { requireApiToken, verifyLoosenPassword } from "./auth";
 import { cancelLoosenRequest, getRuleById, listRules, upsertRule } from "./db";
 import { LoosenAlreadyPendingError, applyDueLoosenRequests, requestLoosen } from "./ratchet";
 import { handleEventUpload, handlePostflight, handlePreflight, handleRuleDownload } from "./santaSync";
+import { handleInstallPackage, handleListSoftwarePackages, handleUploadPackage } from "./softwareApi";
 import type { Env, Policy, RuleType } from "./types";
 
 const SYNC_ROUTES: Record<
@@ -146,6 +146,26 @@ export default {
         // needs no extra friction; only reducing a restriction does.
         await cancelLoosenRequest(env.DB, Number(cancelMatch[1]));
         return jsonResponse({ cancelled: true });
+      }
+      return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    // --- Software-deployment API (interim-token-gated, see auth.ts) ---
+    const isSoftwareApiRoute =
+      url.pathname === "/api/software" || url.pathname.match(/^\/api\/software\/\d+\/install$/);
+    if (isSoftwareApiRoute) {
+      const authError = await requireApiToken(request, env);
+      if (authError) return authError;
+
+      if (url.pathname === "/api/software" && request.method === "GET") {
+        return handleListSoftwarePackages(env);
+      }
+      if (url.pathname === "/api/software" && request.method === "POST") {
+        return handleUploadPackage(request, env);
+      }
+      const installMatch = url.pathname.match(/^\/api\/software\/(\d+)\/install$/);
+      if (installMatch && request.method === "POST") {
+        return handleInstallPackage(Number(installMatch[1]), request, env);
       }
       return new Response("Method Not Allowed", { status: 405 });
     }

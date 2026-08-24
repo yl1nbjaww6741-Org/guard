@@ -114,4 +114,38 @@ export interface Env {
   // and why they're deliberately separate from each other.
   API_TOKEN?: string;
   LOOSEN_PASSWORD_HASH?: string;
+  // Fleet API credentials - see fleetClient.ts's doc comment for the
+  // real API reference this was built against. FLEET_BASE_URL is the
+  // real deployed Fleet URL (mac/fleet/README.md's `fleet.yourdomain.com`,
+  // once real), not committed as a var since it's specific to this
+  // project's own Fleet deployment, same "don't guess a real value"
+  // treatment as everything else.
+  FLEET_BASE_URL?: string;
+  FLEET_API_TOKEN?: string;
+}
+
+// --- Fleet's own REST API shapes (the subset this Worker uses) ---
+// Built directly against fleetdm/fleet's docs/REST API/rest-api.md,
+// fetched from the real repo, not guessed - see fleetClient.ts.
+
+export interface FleetSoftwarePackage {
+  title_id: number;
+  name: string;
+  version: string;
+  platform: string;
+  hash_sha256: string;
+  uploaded_at: string;
+}
+
+export interface FleetAddPackageResponse {
+  software_package: FleetSoftwarePackage;
+}
+
+export interface FleetHost {
+  id: number;
+  hostname: string;
+}
+
+export interface FleetListHostsResponse {
+  hosts: FleetHost[];
 }

@@ -283,6 +283,41 @@ export async function markLoosenRequestApplied(db: D1Database, requestId: number
     .run();
 }
 
+// --- Software packages (Fleet API integration) ---
+
+export interface SoftwarePackageRecord {
+  title_id: number;
+  name: string;
+  version: string | null;
+  platform: string | null;
+  hash_sha256: string | null;
+  uploaded_at: number;
+}
+
+export async function recordUploadedPackage(
+  db: D1Database,
+  pkg: { titleId: number; name: string; version?: string; platform?: string; hashSha256?: string }
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO software_packages (title_id, name, version, platform, hash_sha256, uploaded_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+       ON CONFLICT(title_id) DO UPDATE SET
+         name = excluded.name, version = excluded.version,
+         platform = excluded.platform, hash_sha256 = excluded.hash_sha256,
+         uploaded_at = excluded.uploaded_at`
+    )
+    .bind(pkg.titleId, pkg.name, pkg.version ?? null, pkg.platform ?? null, pkg.hashSha256 ?? null, Date.now())
+    .run();
+}
+
+export async function listSoftwarePackages(db: D1Database): Promise<SoftwarePackageRecord[]> {
+  const result = await db
+    .prepare(`SELECT title_id, name, version, platform, hash_sha256, uploaded_at FROM software_packages ORDER BY uploaded_at DESC`)
+    .all<SoftwarePackageRecord>();
+  return result.results ?? [];
+}
+
 export async function recordEvents(db: D1Database, machineId: string, events: EventEntry[]): Promise<void> {
   if (events.length === 0) return;
   const now = Date.now();

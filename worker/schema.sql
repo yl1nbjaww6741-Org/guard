@@ -97,3 +97,18 @@ CREATE TABLE events (
 );
 
 CREATE INDEX events_device_id_idx ON events(device_id);
+
+-- Software packages uploaded to Fleet through this Worker (fleetClient.ts,
+-- Fleet's own POST /api/v1/fleet/software/package - see that file's doc
+-- comment for the real API reference this was built against). Keyed by
+-- Fleet's own title_id, not an autoincrement of our own, since that's
+-- the identifier every later action (install, re-install) needs and
+-- there's no reason to invent a second one.
+CREATE TABLE software_packages (
+    title_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    version TEXT,
+    platform TEXT,
+    hash_sha256 TEXT,
+    uploaded_at INTEGER NOT NULL
+);
