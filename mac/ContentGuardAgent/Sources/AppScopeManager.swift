@@ -88,7 +88,33 @@ final class AppScopeManager: NSObject {
     /// API is async) - so this just kicks off a Task rather than doing the
     /// refresh inline. Marked @objc because #selector() in init() above
     /// requires it.
+    ///
+    /// Filtered to safe-listed apps only - a real battery fix, not a
+    /// cosmetic one. These notifications fire for EVERY app launch and
+    /// quit, and this handler used to react to all of them unconditionally:
+    /// each one cost an SCShareableContent snapshot here, then the delegate
+    /// fired appScopeManagerDidUpdateScope, and CaptureManager's response
+    /// to that is rebuildAllStreams() - stop every capture stream, take a
+    /// SECOND full SCShareableContent snapshot, and rebuild one SCStream
+    /// per display. All of that, on every launch or quit of any app all
+    /// day, when the exclusion list this class exists to maintain can only
+    /// actually change when one of the five safeAppBundleIDs apps launches
+    /// or quits. (Each needless rebuild also left a brief capture gap - so
+    /// this was costing a little safety along with the battery.)
+    ///
+    /// Fails toward the old behavior, not away from it: if the notification
+    /// doesn't identify the app (userInfo missing or unparseable), refresh
+    /// anyway rather than guessing it was irrelevant - refreshing too often
+    /// is the cheap mistake, going stale on a real safe-app change is the
+    /// expensive one.
     @objc private func handleAppLifecycleChange(_ notification: Notification) {
+        if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+           let bundleID = app.bundleIdentifier,
+           !ContentGuardConfig.safeAppBundleIDs.contains(bundleID) {
+            // Positively identified as an app whose launch/quit cannot
+            // change the exclusion set - nothing to do.
+            return
+        }
         Task {
             do {
                 try await refresh()

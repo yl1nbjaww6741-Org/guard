@@ -27,6 +27,15 @@ final class HeartbeatMonitor {
     private var lastFramesProcessed: Int?
     private var lastFramesChangedAt: Date?
 
+    /// Heartbeats since the last logged one - see the heartbeat handler
+    /// below for why heartbeats are no longer logged individually.
+    private var heartbeatsSinceLastLog = 0
+
+    /// ~10 minutes at the 5s heartbeat cadence. A breadcrumb, not a metric -
+    /// just enough that "was the agent alive around 3pm?" stays answerable
+    /// from the log without every single tick being written down.
+    private let heartbeatLogEveryN = 120
+
     /// True from the moment EscalationManager's kill-counter crosses its
     /// threshold until a real admin release - see markEscalationLockActive()
     /// and the heartbeat handler's auto-clear condition below. Found the
@@ -156,6 +165,7 @@ final class HeartbeatMonitor {
             queue.async { [weak self] in
                 guard let self else { return }
                 let isNewProcess = self.lastHeartbeatData?.pid != data.pid
+                let captureStateChanged = self.lastHeartbeatData?.captureActive != data.captureActive
                 self.lastHeartbeatAt = Date()
                 self.lastHeartbeatData = data
 
@@ -174,7 +184,22 @@ final class HeartbeatMonitor {
                 if isNewProcess {
                     self.escalationManager.watchNewAgentProcess(pid: data.pid)
                 }
-                self.log("heartbeat: pid=\(data.pid) captureActive=\(data.captureActive) frames=\(data.framesProcessed) modelHash=\(data.modelHash)")
+
+                // Log on transitions (new agent process, captureActive
+                // flipping) plus a periodic breadcrumb - NOT on every
+                // heartbeat, which is what this used to do: one line every
+                // 5 seconds, ~17k lines a day, each write keeping the disk
+                // from idling, through a log with no rotation, for as long
+                // as the machine is up. The transitions are the information;
+                // a steady stream of identical healthy lines was pure cost.
+                // Unhealthy states still log through their own paths
+                // (checkGraceWindow, the escalation-lock branch below), so
+                // nothing that mattered for debugging is quieter than it was.
+                self.heartbeatsSinceLastLog += 1
+                if isNewProcess || captureStateChanged || self.heartbeatsSinceLastLog >= self.heartbeatLogEveryN {
+                    self.heartbeatsSinceLastLog = 0
+                    self.log("heartbeat: pid=\(data.pid) captureActive=\(data.captureActive) frames=\(data.framesProcessed) modelHash=\(data.modelHash)")
+                }
 
                 // Used to be "a heartbeat arriving at all means the agent
                 // can cover the screen itself" - proven wrong on the real

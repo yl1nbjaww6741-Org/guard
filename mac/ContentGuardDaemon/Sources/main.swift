@@ -20,8 +20,17 @@ func currentConsoleUsername() -> String? {
     return name == "loginwindow" ? nil : name
 }
 
+// One formatter for the daemon's whole lifetime, not one per log line -
+// ISO8601DateFormatter construction is expensive (locale/calendar setup),
+// and logLine used to allocate a fresh one on every call, which for the
+// per-heartbeat logging that existed until recently meant a new formatter
+// every 5 seconds for the machine's entire uptime. Formatting through a
+// shared ISO8601DateFormatter is thread-safe per Apple's own documentation
+// (unlike configuring one), and nothing here reconfigures it after init.
+let logTimestampFormatter = ISO8601DateFormatter()
+
 func logLine(_ message: String) {
-    let timestamp = ISO8601DateFormatter().string(from: Date())
+    let timestamp = logTimestampFormatter.string(from: Date())
     let line = "[\(timestamp)] \(message)\n"
     FileHandle.standardError.write(line.data(using: .utf8)!)
     // TODO: also append to ContentGuardPaths.daemonLogFile once the
