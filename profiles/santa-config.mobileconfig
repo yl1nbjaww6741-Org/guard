@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>B9EFAEA3-D5BE-4766-A5D3-BAABC33A4278</string>
     <key>PayloadVersion</key>
-    <integer>3</integer>
+    <integer>4</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>AA383881-96D1-49E5-A703-D1B91C0F19DD</string>
             <key>PayloadVersion</key>
-            <integer>3</integer>
+            <integer>4</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Santa Payload</string>
 
@@ -56,11 +56,17 @@
               Cloudflare Worker (mac/README.md's Phase 4 row,
               mac/docs/PHASE_4_DASHBOARD_SETUP.md) is now real, deployed, and
               verified, so this profile points at it for real:
-              - SyncBaseURL is the real deployed workers.dev URL
-                (worker/wrangler.toml has no route/custom domain configured,
-                so this IS the real address, not a placeholder standing in
-                for one) - confirmed via the real deploy output, not guessed.
-                Trailing slash matters: Santa resolves each stage
+              - SyncBaseURL is the real custom domain, panel.lukep009.download
+                (worker/wrangler.toml's `routes`, custom_domain=true, on the
+                user's own real Cloudflare account/zone - confirmed live via
+                a direct curl against the real deployed URL after this
+                exact deploy, not guessed). Originally the bare workers.dev
+                URL Cloudflare assigns by default
+                (contentguard-worker.yl1nbjaww6741-4.workers.dev) - that
+                still works too (worker/wrangler.toml sets `workers_dev =
+                true` explicitly, confirmed live both URLs return 200) but
+                is no longer what this profile points Santa at. Trailing
+                slash matters: Santa resolves each stage
                 (`preflight/<machine_id>`, etc - SNTSyncPreflight.mm's
                 stageURL) as a relative URL against this string, per
                 RFC 3986, same as the trailing-slash form in Santa's own
@@ -74,25 +80,24 @@
                 Worker's own SANTA_SYNC_TOKEN secret (auth.ts's
                 requireSyncToken) - this is the real fix for the
                 unauthenticated-sync-endpoint gap found live during Phase 4
-                (see this repo's git history), not optional. StaticRules
+                (see this repo's git history), not optional. Unchanged by
+                this domain switch - only SyncBaseURL moved, the token
+                still matches what's already set on the Worker. StaticRules
                 below stay in place regardless - they're the tamper-resistant
                 layer that keeps enforcing even if this Worker ever goes
                 down, gets misconfigured, or the sync token is ever rotated
                 without this profile being repushed in time (see
                 PHASE_4_DASHBOARD_SETUP.md's "StaticRules vs. sync" section).
-              CONFIRM the Worker's real SANTA_SYNC_TOKEN secret has actually
-              been set to the exact value below (`wrangler secret put
-              SANTA_SYNC_TOKEN`) before pushing this profile through Fleet -
-              otherwise every sync attempt 503s (safe, fails closed, but
-              non-functional) until they match. This value was rotated once
-              (PayloadVersion 2 -> 3) before ever being pushed through Fleet -
-              the value first used to verify the sync-token fix end-to-end
-              had appeared in plaintext across more than one debugging
-              session's transcript, so it was replaced here rather than kept
-              as the value this profile ships with long-term.
+              BEFORE pushing this updated profile through Fleet: add a new
+              Cloudflare Gateway allow rule for panel.lukep009.download
+              (narrow, exact hostname - not a wildcard, same reasoning as
+              the original workers.dev rule's own history) - otherwise
+              Gateway will block this new domain exactly the way it
+              originally blocked the workers.dev one, the first real gap
+              found in this whole sync rollout.
             -->
             <key>SyncBaseURL</key>
-            <string>https://contentguard-worker.yl1nbjaww6741-4.workers.dev/</string>
+            <string>https://panel.lukep009.download/</string>
             <key>SyncExtraHeaders</key>
             <dict>
                 <key>X-ContentGuard-Sync-Token</key>

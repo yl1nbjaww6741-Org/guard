@@ -322,7 +322,10 @@ locally: `GET /` on the real deployed URL shows the login page, logging in
 with the real password sets a working session cookie, `/api/rules` 401s
 without one and 200s with one, and a wrong-password attempt correctly
 401s. Dashboard is live at
-`https://contentguard-worker.yl1nbjaww6741-4.workers.dev`.
+`https://contentguard-worker.yl1nbjaww6741-4.workers.dev`, and later also
+at a real custom domain on the user's own Cloudflare zone,
+`https://panel.lukep009.download` - see "Real custom domain" below for
+that migration and a real gotcha it surfaced.
 `wrangler.toml`'s two placeholders (`__CLOUDFLARE_ACCOUNT_ID__`,
 `__D1_DATABASE_ID__`) are filled in on the real deployed machine as a
 result of this; they're kept as placeholders in this repo deliberately,
@@ -460,3 +463,51 @@ Cloudflare secrets this Worker needs at runtime (`SESSION_SIGNING_KEY`,
 `SANTA_SYNC_TOKEN`, `FLEET_BASE_URL`, `FLEET_API_TOKEN`, the D1-stored
 dashboard password) are unaffected by this - those still only need
 setting once, not on every deploy, same as before.
+
+## Real custom domain
+
+`worker/wrangler.toml`'s `routes` config points the Worker at
+`panel.lukep009.download`, a real domain on the user's own Cloudflare
+account - not a placeholder. The exact TOML shape
+(`{ pattern, custom_domain = true }`, no `zone_id`/`zone_name` needed)
+was verified directly against wrangler's own bundled
+`config-schema.json` rather than guessed, since a wrong field name here
+would silently misconfigure the deploy.
+
+**Two real things went wrong on the first attempt, both caught live,
+not assumed correct:**
+
+1. TOML tables are order-sensitive - the first attempt placed
+   `routes = [...]` after the `[vars]` header, so it silently parsed as
+   `vars.routes` instead of a real top-level route. Caught by validating
+   the file with a real TOML parser (Python's `tomllib`) instead of
+   trusting the diff looked right; fixed by moving it above the first
+   `[table]` header in the file.
+2. Adding any `routes` entry silently flips wrangler's `workers_dev`
+   default to `false` - confirmed directly in wrangler's own source
+   (`wrangler-dist/cli.js`'s `getSubdomainValues`:
+   `defaultWorkersDev = routes.length === 0`). The deploy that added the
+   custom domain broke the original
+   `contentguard-worker.yl1nbjaww6741-4.workers.dev` URL within about a
+   minute - caught by the same live-curl-check-after-every-deploy habit
+   this whole project runs on (`curl` both URLs immediately after every
+   deploy, not just trust CI's green checkmark), not left standing as an
+   incorrect assumption. Fixed with an explicit `workers_dev = true`.
+
+**Confirmed live after both fixes**: `https://panel.lukep009.download/`
+and `https://contentguard-worker.yl1nbjaww6741-4.workers.dev/` both
+return 200.
+
+**Not yet done**: `profiles/santa-config.mobileconfig`'s `SyncBaseURL`
+has been updated to the new domain (`PayloadVersion` bumped 3->4), but
+this has **not been pushed through Fleet yet**. Before pushing it:
+1. Add a new Cloudflare Gateway allow rule for `panel.lukep009.download`
+   - narrow, exact hostname, not a wildcard, same requirement the
+     original workers.dev rule needed (see "Real end-to-end
+     confirmation" above for why that mattered the first time).
+2. Push the updated profile through Fleet (**Controls -> OS settings ->
+   Custom settings**, same as every other profile push in this
+   project).
+3. Confirm with `sudo santactl sync --debug` on the real Mac - same
+   verification bar as the original sync rollout, not just "Fleet says
+   it applied."
