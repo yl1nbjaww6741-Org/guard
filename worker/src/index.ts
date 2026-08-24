@@ -41,6 +41,7 @@ import {
   requestPasswordChange,
 } from "./ratchet";
 import { clearSessionCookie, createSessionCookie, hasValidSession } from "./session";
+import { STATIC_RULES } from "./staticRules";
 import { handleEventUpload, handlePostflight, handlePreflight, handleRuleDownload } from "./santaSync";
 import {
   handleInstallPackage,
@@ -104,6 +105,14 @@ async function handleCreateRule(request: Request, env: Env): Promise<Response> {
 
 async function handleListRules(env: Env): Promise<Response> {
   return jsonResponse(await listRules(env.DB));
+}
+
+// StaticRules from profiles/santa-config.mobileconfig - see
+// staticRules.ts's doc comment. Purely for dashboard visibility; there's
+// no create/edit/delete for these here, they're not stored in D1 at
+// all.
+function handleListStaticRules(): Response {
+  return jsonResponse(STATIC_RULES);
 }
 
 async function handleListActiveLoosenRequests(env: Env): Promise<Response> {
@@ -235,6 +244,7 @@ export default {
     // --- Rule-management API (session-gated, see auth.ts's requireSession) ---
     const isRulesApiRoute =
       url.pathname === "/api/rules" ||
+      url.pathname === "/api/static-rules" ||
       url.pathname === "/api/loosen-requests" ||
       url.pathname.match(/^\/api\/rules\/\d+\/loosen-request$/) ||
       url.pathname.match(/^\/api\/loosen-requests\/\d+\/cancel$/);
@@ -244,6 +254,9 @@ export default {
 
       if (url.pathname === "/api/rules" && request.method === "GET") {
         return handleListRules(env);
+      }
+      if (url.pathname === "/api/static-rules" && request.method === "GET") {
+        return handleListStaticRules();
       }
       if (url.pathname === "/api/rules" && request.method === "POST") {
         return handleCreateRule(request, env);

@@ -40,6 +40,8 @@ const SHARED_STYLES = `
   form.inline { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; align-items: center; }
   input, select { background: #1c1e23; color: #e8e8ea; border: 1px solid #3a3e46; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem; }
   .pending-note { color: #ffd43b; font-size: 0.78rem; }
+  .static-rule { opacity: 0.7; }
+  .static-rule td { font-style: italic; }
   .empty { color: #6b6f78; font-size: 0.85rem; font-style: italic; padding: 0.75rem 0; }
   .error { color: #ff6b6b; font-size: 0.85rem; margin-top: 0.5rem; }
   .status-msg { font-size: 0.8rem; margin-top: 0.5rem; min-height: 1.2em; }
@@ -202,35 +204,54 @@ function timeUntil(ms) {
 }
 
 async function loadRules() {
-  const [rules, pending] = await Promise.all([
+  const [staticRules, rules, pending] = await Promise.all([
+    api("/api/static-rules"),
     api("/api/rules"),
     api("/api/loosen-requests"),
   ]);
   const pendingByRuleId = Object.fromEntries(pending.map((p) => [p.rule_id, p]));
   const body = document.getElementById("rules-body");
+
+  // StaticRules from santa-config.mobileconfig - permanent, tamper-
+  // resistant, not editable from here at all (see staticRules.ts).
+  // Shown first and visually dimmed so it's clear at a glance these
+  // aren't dashboard-managed, but still shown - an empty-looking table
+  // here previously made it look like Santa was enforcing nothing, when
+  // e.g. Tor Browser's block was working the whole time.
+  const staticRowsHtml = staticRules.map((r) => \`<tr class="static-rule">
+    <td>\${escapeHtml(r.identifier)}</td>
+    <td>\${r.rule_type}</td>
+    <td class="policy-\${r.policy}">\${r.policy}</td>
+    <td>profile (static)</td>
+    <td><span class="pending-note" style="color:#6b6f78;">edit santa-config.mobileconfig</span></td>
+  </tr>\`).join("");
+
+  let dynamicRowsHtml;
   if (rules.length === 0) {
-    body.innerHTML = '<tr><td colspan="5" class="empty">No rules yet - StaticRules in santa-config.mobileconfig still apply regardless.</td></tr>';
-    return;
+    dynamicRowsHtml = '<tr><td colspan="5" class="empty">No dashboard-added rules yet.</td></tr>';
+  } else {
+    dynamicRowsHtml = rules.map((r) => {
+      const p = pendingByRuleId[r.id];
+      const canLoosen = r.policy !== "REMOVE" && !p;
+      let actionCell;
+      if (p) {
+        actionCell = \`<span class="pending-note">loosen queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel="\${p.id}">Cancel</button>\`;
+      } else if (canLoosen) {
+        actionCell = \`<button data-loosen="\${r.id}">Request loosen</button>\`;
+      } else {
+        actionCell = "";
+      }
+      return \`<tr>
+        <td>\${escapeHtml(r.identifier)}</td>
+        <td>\${r.rule_type}</td>
+        <td class="policy-\${r.policy}">\${r.policy}</td>
+        <td>\${r.device_id ?? "all devices"}</td>
+        <td>\${actionCell}</td>
+      </tr>\`;
+    }).join("");
   }
-  body.innerHTML = rules.map((r) => {
-    const p = pendingByRuleId[r.id];
-    const canLoosen = r.policy !== "REMOVE" && !p;
-    let actionCell;
-    if (p) {
-      actionCell = \`<span class="pending-note">loosen queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel="\${p.id}">Cancel</button>\`;
-    } else if (canLoosen) {
-      actionCell = \`<button data-loosen="\${r.id}">Request loosen</button>\`;
-    } else {
-      actionCell = "";
-    }
-    return \`<tr>
-      <td>\${escapeHtml(r.identifier)}</td>
-      <td>\${r.rule_type}</td>
-      <td class="policy-\${r.policy}">\${r.policy}</td>
-      <td>\${r.device_id ?? "all devices"}</td>
-      <td>\${actionCell}</td>
-    </tr>\`;
-  }).join("");
+
+  body.innerHTML = staticRowsHtml + dynamicRowsHtml;
 }
 
 async function loadInstalledApps(host) {
