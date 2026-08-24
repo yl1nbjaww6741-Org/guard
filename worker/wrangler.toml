@@ -14,6 +14,30 @@ main = "src/index.ts"
 compatibility_date = "2025-01-01"
 account_id = "442630b07c6b3eed257dfed98b49cfcd"
 
+# Real custom domain, on the user's own Cloudflare account (same account
+# this Worker already deploys to, confirmed - Cloudflare only lets a
+# Worker claim a custom domain on a zone the deploying account actually
+# owns). No zone_id/zone_name needed here - custom_domain:true auto-
+# resolves the zone from the domain itself. Cloudflare provisions the
+# DNS record and TLS cert automatically on the next deploy; no manual
+# DNS step needed. The original workers.dev URL
+# (contentguard-worker.yl1nbjaww6741-4.workers.dev) keeps working
+# alongside this - workers_dev isn't disabled here, deliberately: cutting
+# it off immediately would break Santa's sync and the Fleet install flow
+# the moment this deploys, before profiles/santa-config.mobileconfig is
+# repushed and a matching Cloudflare Gateway allow rule exists for the
+# new domain (same real failure mode already hit once in this project's
+# history with the workers.dev URL itself). Disable workers_dev later,
+# once everything's confirmed cut over to the real domain. This has to
+# be placed before any [table] header below - TOML keys after a [table]
+# belong to that table, not the top-level document, so this was
+# originally (wrongly) written after [vars] and silently became
+# vars.routes instead of a real top-level route - caught by validating
+# the file with a real TOML parser rather than trusting it looked right.
+routes = [
+  { pattern = "panel.lukep009.download", custom_domain = true }
+]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "contentguard"
@@ -30,15 +54,6 @@ database_id = "8cb09d1d-1497-449f-86d5-f7c754c5f884"
 # instead of requiring it typed in every time.
 [vars]
 DEFAULT_FLEET_HOST = "GGV7PVVR96"
-
-# No route/custom domain configured yet - defaults to the workers.dev
-# subdomain Cloudflare assigns on first deploy. Santa's SyncBaseURL in
-# profiles/santa-config.mobileconfig gets updated to point at whatever
-# real URL this ends up at, once deployed - not before, since guessing
-# that URL ahead of time would be exactly the kind of unverified
-# real-value placeholder this project has repeatedly caught and fixed
-# this session (pppc.mobileconfig, santa-config.mobileconfig's own two
-# placeholders).
 
 # Dashboard auth was originally going to reuse the existing Cloudflare
 # Zero Trust instance (mac/README.md's Phase 4 row, first draft), but
