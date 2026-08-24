@@ -77,12 +77,36 @@ flipping a due rule to `REMOVE`, and a separately-cancelled request
 correctly *not* applying even when forced due and the scheduled handler
 re-run.
 
+## Also real and verified: Fleet API integration
+
+`worker/src/fleetClient.ts` implements the three Fleet REST API
+endpoints this needs, built directly against `fleetdm/fleet`'s own
+`docs/REST API/rest-api.md` (fetched from the real repo, not guessed):
+upload (`POST /api/v1/fleet/software/package`), find a host by
+hostname/serial/UUID (`GET /api/v1/fleet/hosts?query=...`), and trigger
+an install (`POST /api/v1/fleet/hosts/:id/software/:title_id/install`).
+New routes: `POST`/`GET /api/software` (upload, list what's been
+uploaded - tracked in a new `software_packages` table) and
+`POST /api/software/:titleId/install` (resolves a human-meaningful host
+identifier first, never a raw Fleet host ID directly from a caller).
+
+**Verified against a real mock server speaking Fleet's documented API
+shape** (this sandbox has no network access to the actual deployed Fleet
+instance, and shouldn't be making unsupervised changes to production
+infra anyway) - confirmed a real multipart upload reaches the endpoint
+correctly, the response is parsed and recorded correctly, install
+resolves a hostname to a host ID before calling Fleet, an unknown
+hostname 404s rather than silently no-op'ing, and `FLEET_API_TOKEN`
+(forwarded to Fleet) is never confused with `API_TOKEN` (this Worker's
+own dashboard gate) - confirmed as two genuinely distinct secrets via
+the mock server's own request log, not just intended to be. **This
+proves the Worker's own request construction is correct against the
+documented contract - it does NOT prove Fleet's real server accepts
+these exact requests**, which still needs the real deployed instance and
+real credentials (see setup steps below, not run yet).
+
 ## Not built yet
 
-- **Fleet API integration** for `.pkg` deployment from the dashboard -
-  no code written yet. Fleet's REST API (the same one its own web UI
-  uses) supports uploading software and targeting installs
-  programmatically; this Worker doesn't call it yet.
 - **Cloudflare Access auth** - not wired into the Worker at all yet. The
   plan (reuse the existing Zero Trust instance from Phase 1) is an
   infrastructure/configuration step done in Cloudflare's dashboard, not
@@ -141,6 +165,14 @@ same pattern as every other real-value placeholder in this repo.
    # LOOSEN_PASSWORD_HASH must be a SHA-256 hex digest, not the raw
    # password - e.g. on macOS: echo -n 'your real password' | shasum -a 256
    npx wrangler secret put LOOSEN_PASSWORD_HASH
+   ```
+   Also needed for `fleetClient.ts` to work at all - the real deployed
+   Fleet URL (`mac/fleet/README.md`'s `fleet.yourdomain.com`, once real)
+   and a real Fleet API token (Fleet's own UI: "My account" -> "Get API
+   token"):
+   ```bash
+   npx wrangler secret put FLEET_BASE_URL
+   npx wrangler secret put FLEET_API_TOKEN
    ```
 6. `npm run deploy` - first real deploy, to a `workers.dev` subdomain by
    default.
