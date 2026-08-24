@@ -109,4 +109,9 @@ export type PostflightResponse = Record<string, never>;
 
 export interface Env {
   DB: D1Database;
+  // Both secrets, not vars - set via `wrangler secret put`, never
+  // committed. See auth.ts's doc comments for what each actually gates
+  // and why they're deliberately separate from each other.
+  API_TOKEN?: string;
+  LOOSEN_PASSWORD_HASH?: string;
 }

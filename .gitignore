@@ -35,3 +35,4 @@ mac/Installer/*.pkg
 ## worker/ (Cloudflare Worker, Phase 4)
 worker/node_modules/
 worker/.wrangler/
+worker/.dev.vars

@@ -126,6 +126,163 @@ export async function markRulesSynced(db: D1Database, ruleIds: number[]): Promis
     .run();
 }
 
+// --- Rule management (tighten path + ratchet) ---
+// See ratchet.ts for the loosen-request queueing/application logic that
+// builds on top of these - this file stays limited to raw D1 access,
+// same separation as the sync-protocol helpers above.
+
+export interface RuleRecord extends RuleRow {
+  device_id: string | null;
+}
+
+// Tightening a rule (new BLOCKLIST/ALLOWLIST/etc, or editing an existing
+// one to be MORE restrictive) applies immediately - no queue, no delay.
+// Only loosening goes through pending_loosen_requests (see ratchet.ts).
+// This intentionally does not attempt to distinguish "is this edit
+// actually a tightening" - that's the caller's responsibility (the
+// dashboard/API route), since a generic upsert has no way to know
+// whether e.g. changing a rule's custom_msg counts as tightening.
+export async function upsertRule(
+  db: D1Database,
+  fields: {
+    deviceId: string | null;
+    identifier: string;
+    policy: Policy;
+    ruleType: RuleType;
+    customMsg?: string;
+    customUrl?: string;
+    notificationAppName?: string;
+  }
+): Promise<number> {
+  const now = Date.now();
+  const result = await db
+    .prepare(
+      `INSERT INTO rules (device_id, identifier, policy, rule_type, custom_msg, custom_url, notification_app_name, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+       RETURNING id`
+    )
+    .bind(
+      fields.deviceId,
+      fields.identifier,
+      fields.policy,
+      fields.ruleType,
+      fields.customMsg ?? null,
+      fields.customUrl ?? null,
+      fields.notificationAppName ?? null,
+      now
+    )
+    .first<{ id: number }>();
+  if (!result) throw new Error("upsertRule: INSERT ... RETURNING id returned no row");
+  return result.id;
+}
+
+export async function getRuleById(db: D1Database, ruleId: number): Promise<RuleRecord | null> {
+  return db
+    .prepare(
+      `SELECT id, device_id, identifier, policy, rule_type, custom_msg, custom_url, notification_app_name
+       FROM rules WHERE id = ?1`
+    )
+    .bind(ruleId)
+    .first<RuleRecord>();
+}
+
+export async function listRules(db: D1Database): Promise<RuleRecord[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, device_id, identifier, policy, rule_type, custom_msg, custom_url, notification_app_name
+       FROM rules ORDER BY id DESC`
+    )
+    .all<RuleRecord>();
+  return result.results ?? [];
+}
+
+// Applies a loosen: sets the rule's policy to REMOVE and marks it
+// unsynced so it propagates to Santa on the next sync. Does NOT delete
+// the row - keeping loosened rules around (rather than hard-deleting)
+// preserves the audit trail of what was ever blocked and later un-blocked,
+// which matters more here than in a typical CRUD app given what this
+// project is for.
+export async function applyLoosen(db: D1Database, ruleId: number): Promise<void> {
+  await db
+    .prepare(`UPDATE rules SET policy = 'REMOVE', synced_at = NULL, updated_at = ?1 WHERE id = ?2`)
+    .bind(Date.now(), ruleId)
+    .run();
+}
+
+// --- Ratchet: pending loosen requests ---
+
+export interface PendingLoosenRequest {
+  id: number;
+  rule_id: number;
+  requested_at: number;
+  applies_at: number;
+  applied_at: number | null;
+  cancelled_at: number | null;
+}
+
+const LOOSEN_DELAY_MS = 24 * 60 * 60 * 1000; // 24h, per mac/README.md's
+// Phase 4 row - not configurable per-request, deliberately: a
+// dashboard-exposed "how long should this delay be" setting would just
+// move the impulse-control problem one level up.
+
+export async function hasActivePendingLoosen(db: D1Database, ruleId: number): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT id FROM pending_loosen_requests
+       WHERE rule_id = ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(ruleId)
+    .first<{ id: number }>();
+  return row !== null;
+}
+
+export async function queueLoosenRequest(db: D1Database, ruleId: number): Promise<PendingLoosenRequest> {
+  const now = Date.now();
+  const appliesAt = now + LOOSEN_DELAY_MS;
+  const result = await db
+    .prepare(
+      `INSERT INTO pending_loosen_requests (rule_id, requested_at, applies_at)
+       VALUES (?1, ?2, ?3)
+       RETURNING id, rule_id, requested_at, applies_at, applied_at, cancelled_at`
+    )
+    .bind(ruleId, now, appliesAt)
+    .first<PendingLoosenRequest>();
+  if (!result) throw new Error("queueLoosenRequest: INSERT ... RETURNING returned no row");
+  return result;
+}
+
+export async function cancelLoosenRequest(db: D1Database, requestId: number): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE pending_loosen_requests SET cancelled_at = ?1
+       WHERE id = ?2 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now(), requestId)
+    .run();
+}
+
+// Returns every request whose 24h delay has elapsed and hasn't already
+// been applied or cancelled - called from the scheduled handler, and
+// callable directly for tests (see index.ts's scheduled export).
+export async function getDueLoosenRequests(db: D1Database): Promise<PendingLoosenRequest[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, rule_id, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_loosen_requests
+       WHERE applies_at <= ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now())
+    .all<PendingLoosenRequest>();
+  return result.results ?? [];
+}
+
+export async function markLoosenRequestApplied(db: D1Database, requestId: number): Promise<void> {
+  await db
+    .prepare(`UPDATE pending_loosen_requests SET applied_at = ?1 WHERE id = ?2`)
+    .bind(Date.now(), requestId)
+    .run();
+}
+
 export async function recordEvents(db: D1Database, machineId: string, events: EventEntry[]): Promise<void> {
   if (events.length === 0) return;
   const now = Date.now();

@@ -32,3 +32,18 @@ database_id = "__D1_DATABASE_ID__"
 # Cloudflare dashboard/Zero Trust level, not here - an Access Application
 # needs to be created pointing at this Worker's route once one exists.
 # See mac/docs/PHASE_4_DASHBOARD_SETUP.md's setup steps.
+
+# Ratchet mechanism (src/ratchet.ts, src/index.ts's `scheduled` export) -
+# checks for due loosen requests every 15 minutes. Not every minute:
+# a 24h delay doesn't need minute-level precision, and this keeps the
+# free-tier Cron Trigger invocation count sane.
+[triggers]
+crons = ["*/15 * * * *"]
+
+# Two secrets referenced by src/auth.ts, neither set yet - `wrangler
+# secret put API_TOKEN` and `wrangler secret put LOOSEN_PASSWORD_HASH`
+# (the latter as a SHA-256 hex digest of the real password, never the
+# raw password itself - see auth.ts's verifyLoosenPassword). Both fail
+# closed when unset (auth.ts rejects every request until they're real),
+# so leaving them unset is safe, just non-functional, until Phase 4's
+# actual deployment.
