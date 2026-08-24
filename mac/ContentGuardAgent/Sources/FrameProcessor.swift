@@ -107,20 +107,16 @@ final class FrameProcessor {
         lastFrameHash[displayID] = hash
 
         let (skinRatio, maxBlockSkinRatio) = skinAnalysis(of: thumbnail)
-        // TEMPORARY - kept from the prior debug pass to confirm the grid-
-        // size fix below against real data. The last round of real logging
-        // found the actual cause of the renewed Energy Impact spike: NOT
-        // the whole-frame threshold (YouTube thumbnail scrolling legitimately
-        // pushed skinRatio to 0.17-0.44 - real skin-tone-heavy content,
-        // working as intended), but maxBlockSkinRatio pegged at exactly
-        // 0.55 repeatedly while skinRatio sat at the ordinary ~0.05 noise
-        // floor - a static UI element (icon/avatar) small enough to fully
-        // saturate one 8x8 grid cell on its own, re-triggering every tick
-        // regardless of real content. Fixed by coarsening the grid to 4x4
-        // (see skinAnalysis's doc comment). Remove this logging once that
-        // fix is confirmed against real data the same way every other
-        // change in this file has been.
-        NSLog("ContentGuardAgent: [debug] skinRatio=\(skinRatio) maxBlockSkinRatio=\(maxBlockSkinRatio) threshold=\(skinRatioPrefilterThreshold) blockThreshold=\(skinRatioPrefilterBlockThreshold)")
+        // No per-frame logging here, deliberately. The 4x4-grid fix this
+        // file's skinAnalysis doc comment describes was confirmed against
+        // real data, so the TEMPORARY debug NSLog that confirmed it is
+        // gone - it ran unconditionally on every captured frame, on every
+        // display, indefinitely, and per-frame logging has already been
+        // removed once before for exactly that reason (see this file's
+        // git history: "perf: fix prefilter barely shedding any load,
+        // remove per-frame debug logging"). If a future diagnostic pass
+        // needs it back, re-add it TEMPORARY the same way - and remove it
+        // again once it has served its purpose.
         guard skinRatio >= skinRatioPrefilterThreshold || maxBlockSkinRatio >= skinRatioPrefilterBlockThreshold else {
             // Below both thresholds -> skip the full classifier. Still a
             // load shedder, not an acquitter, on both paths: each
@@ -133,7 +129,34 @@ final class FrameProcessor {
             return
         }
 
-        guard let scaledForModel = downscale(pixelBuffer, targetDimension: 640) else {
+        // NudeNetClassifier.preprocess() requires both dimensions <= 640
+        // (the 640m model's fixed input canvas) and letterboxes whatever it
+        // gets into the top-left of that canvas, so a frame already within
+        // budget can go straight through untouched. Since CaptureManager
+        // now asks SCStream for at most
+        // ContentGuardConfig.maxCaptureDimension on the longer side, that
+        // is the normal path - and the downscale() call it replaces was a
+        // full CoreImage render pass that, at a 1:1 scale factor, produced
+        // a pixel-identical copy of its input for nothing.
+        //
+        // The downscale fallback stays for the cases where a frame can
+        // still arrive oversized: a display smaller than the cap is
+        // captured at its own size (fine, still under), but a rebuild races
+        // a resolution change, or maxCaptureDimension is ever raised above
+        // the model's 640, and this must not hand the classifier something
+        // it will reject. Checked against the real buffer's dimensions
+        // rather than assuming the configured size took effect.
+        let modelInputDimension = 640
+        let frameWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let frameHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let scaledForModel: CVPixelBuffer?
+        if frameWidth > 0, frameHeight > 0,
+           frameWidth <= modelInputDimension, frameHeight <= modelInputDimension {
+            scaledForModel = pixelBuffer
+        } else {
+            scaledForModel = downscale(pixelBuffer, targetDimension: modelInputDimension)
+        }
+        guard let scaledForModel else {
             reportUncertainAsPositive(displayID: displayID)
             return
         }

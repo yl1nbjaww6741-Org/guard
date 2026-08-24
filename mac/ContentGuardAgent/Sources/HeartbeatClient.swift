@@ -18,7 +18,20 @@ final class HeartbeatClient {
     func start() {
         connectSocket()
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now(), repeating: ContentGuardConfig.heartbeatIntervalSeconds)
+        // Leeway lets the OS coalesce this wakeup with others already
+        // scheduled nearby instead of demanding its own, which is what
+        // actually costs battery on an otherwise idle machine - the work
+        // in sendHeartbeat() is trivial, the guaranteed wakeup every
+        // heartbeatIntervalSeconds for the machine's whole uptime is not.
+        // Safe against the daemon's heartbeatGraceSeconds (15s): this
+        // jitter is per-tick, not cumulative, so even a consistently
+        // late 6s cadence leaves the "time since last heartbeat" the
+        // daemon actually measures far below its deadline.
+        t.schedule(
+            deadline: .now(),
+            repeating: ContentGuardConfig.heartbeatIntervalSeconds,
+            leeway: .seconds(1)
+        )
         t.setEventHandler { [weak self] in
             self?.sendHeartbeat()
         }

@@ -6,6 +6,7 @@
 // startStreamHealthCheck()'s doc comment.
 
 import AppKit
+import CoreVideo
 import ScreenCaptureKit
 
 protocol CaptureManagerDelegate: AnyObject {
@@ -143,8 +144,35 @@ final class CaptureManager: NSObject {
             preferredTimescale: 600
         )
         config.showsCursor = false
-        config.width = display.width
-        config.height = display.height
+
+        // Capture at the smallest size the pipeline can actually use, not
+        // the display's own resolution (what this used to request). See
+        // ContentGuardConfig.maxCaptureDimension's doc comment for why
+        // full resolution was pure waste. Aspect ratio is preserved
+        // explicitly rather than letting SCStream letterbox a mismatched
+        // box: black bars would be real pixels as far as FrameProcessor's
+        // skin prefilter is concerned, diluting every ratio it computes.
+        // Dimensions are rounded to even numbers - odd capture sizes are
+        // accepted but awkward for the compositor, and the rounding error
+        // is at most one pixel.
+        let captureScale = Double(ContentGuardConfig.maxCaptureDimension)
+            / Double(max(display.width, display.height))
+        if captureScale < 1.0 {
+            config.width = max(2, (Int(Double(display.width) * captureScale) / 2) * 2)
+            config.height = max(2, (Int(Double(display.height) * captureScale) / 2) * 2)
+        } else {
+            // Display is already smaller than the cap - don't upscale it,
+            // that would cost bandwidth to invent detail that isn't there.
+            config.width = display.width
+            config.height = display.height
+        }
+
+        // Explicit now that FrameProcessor reads these buffers' bytes
+        // directly rather than only ever seeing its own downscale output:
+        // BGRA is already SCStreamConfiguration's default, but every
+        // byte-offset in FrameProcessor and NudeNetClassifier assumes it,
+        // so it should not be left to a default that could change.
+        config.pixelFormat = kCVPixelFormatType_32BGRA
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
