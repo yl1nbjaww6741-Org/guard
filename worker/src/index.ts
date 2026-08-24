@@ -17,7 +17,7 @@
 //    the request already carries a valid session, same as the Android
 //    sibling app's pattern this whole design is modeled on.
 
-import { hashPassword, requireSession, requireSyncToken, verifyPasswordHash } from "./auth";
+import { hashPassword, requireDaemonSyncToken, requireSession, requireSyncToken, verifyPasswordHash } from "./auth";
 import { renderDashboard, renderLoginPage } from "./dashboard";
 import {
   cancelLoosenRequest,
@@ -38,6 +38,7 @@ import {
   applyDueLoosenRequests,
   applyDuePasswordChanges,
   applyDueProfileChanges,
+  applyDueSafeAppAdditions,
   requestLoosen,
   requestPasswordChange,
 } from "./ratchet";
@@ -51,7 +52,15 @@ import {
   handleUpdateConfigProfile,
   handleUploadConfigProfile,
 } from "./configProfilesApi";
+import { handleSafeAppsSync } from "./daemonSync";
 import { handleEventUpload, handlePostflight, handlePreflight, handleRuleDownload } from "./santaSync";
+import {
+  handleCancelSafeAppAddition,
+  handleListPendingSafeAppAdditions,
+  handleListSafeApps,
+  handleRemoveSafeApp,
+  handleRequestAddSafeApp,
+} from "./safeAppsApi";
 import {
   handleInstallPackage,
   handleListInstalledSoftware,
@@ -242,6 +251,15 @@ export default {
       }
     }
 
+    // --- ContentGuardDaemon's own sync (static-token-gated, see
+    // auth.ts's requireDaemonSyncToken - a separate token from Santa's
+    // above, two different clients) ---
+    if (url.pathname === "/sync/safe-apps" && request.method === "GET") {
+      const tokenError = await requireDaemonSyncToken(request, env);
+      if (tokenError) return tokenError;
+      return handleSafeAppsSync(env);
+    }
+
     // --- Login/logout (unauthenticated by nature - these ARE the auth) ---
     if (url.pathname === "/api/login" && request.method === "POST") {
       return handleLogin(request, env);
@@ -355,6 +373,38 @@ export default {
       return new Response("Method Not Allowed", { status: 405 });
     }
 
+    // --- Safe-app-bundle-ID API (session-gated) - see safeAppsApi.ts's
+    // doc comment: adding queues through the same ratchet as everything
+    // else (requestAddSafeApp), removing is immediate. ---
+    const isSafeAppsApiRoute =
+      url.pathname === "/api/safe-apps" ||
+      url.pathname === "/api/safe-app-additions" ||
+      url.pathname.match(/^\/api\/safe-apps\/[^/]+$/) ||
+      url.pathname.match(/^\/api\/safe-app-additions\/\d+\/cancel$/);
+    if (isSafeAppsApiRoute) {
+      const authError = await requireSession(request, env);
+      if (authError) return authError;
+
+      if (url.pathname === "/api/safe-apps" && request.method === "GET") {
+        return handleListSafeApps(env);
+      }
+      if (url.pathname === "/api/safe-apps" && request.method === "POST") {
+        return handleRequestAddSafeApp(request, env);
+      }
+      if (url.pathname === "/api/safe-app-additions" && request.method === "GET") {
+        return handleListPendingSafeAppAdditions(env);
+      }
+      const removeMatch = url.pathname.match(/^\/api\/safe-apps\/([^/]+)$/);
+      if (removeMatch && request.method === "DELETE") {
+        return handleRemoveSafeApp(decodeURIComponent(removeMatch[1]!), env);
+      }
+      const cancelAdditionMatch = url.pathname.match(/^\/api\/safe-app-additions\/(\d+)\/cancel$/);
+      if (cancelAdditionMatch && request.method === "POST") {
+        return handleCancelSafeAppAddition(Number(cancelAdditionMatch[1]), env);
+      }
+      return new Response("Method Not Allowed", { status: 405 });
+    }
+
     // --- Dashboard password-change API (session-gated) ---
     const isPasswordApiRoute =
       url.pathname === "/api/password/change-request" ||
@@ -408,6 +458,10 @@ export default {
     const appliedProfileChanges = await applyDueProfileChanges(env);
     if (appliedProfileChanges > 0) {
       console.log(`applied ${appliedProfileChanges} due profile change(s)`);
+    }
+    const appliedSafeAppAdditions = await applyDueSafeAppAdditions(env.DB);
+    if (appliedSafeAppAdditions > 0) {
+      console.log(`applied ${appliedSafeAppAdditions} due safe-app addition(s)`);
     }
   },
 };

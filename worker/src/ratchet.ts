@@ -7,23 +7,35 @@
 // are applied from the same scheduled handler below.
 
 import {
+  addSafeAppBundleId,
   applyLoosen,
   getDueLoosenRequests,
   getDuePasswordChanges,
   getDueProfileChanges,
+  getDueSafeAppAdditions,
   hasActivePendingLoosen,
   hasActivePendingPasswordChange,
   hasActivePendingProfileChange,
+  hasActivePendingSafeAppAddition,
+  isSafeAppBundleIdApproved,
   markLoosenRequestApplied,
   markPasswordChangeApplied,
   markProfileChangeApplied,
   markProfileChangeFailed,
+  markSafeAppAdditionApplied,
   queueLoosenRequest,
   queuePasswordChange,
   queueProfileChange,
+  queueSafeAppAddition,
   setDashboardPasswordHash,
 } from "./db";
-import type { PendingLoosenRequest, PendingPasswordChange, PendingProfileChangeSummary, ProfileChangeAction } from "./db";
+import type {
+  PendingLoosenRequest,
+  PendingPasswordChange,
+  PendingProfileChangeSummary,
+  PendingSafeAppAddition,
+  ProfileChangeAction,
+} from "./db";
 import { createConfigurationProfile, updateConfigurationProfile } from "./fleetClient";
 import type { Env } from "./types";
 
@@ -42,6 +54,18 @@ export class PasswordChangeAlreadyPendingError extends Error {
 export class ProfileChangeAlreadyPendingError extends Error {
   constructor(profileUuid: string) {
     super(`profile ${profileUuid} already has an active pending change`);
+  }
+}
+
+export class SafeAppAlreadyApprovedError extends Error {
+  constructor(bundleId: string) {
+    super(`${bundleId} is already an approved safe app`);
+  }
+}
+
+export class SafeAppAdditionAlreadyPendingError extends Error {
+  constructor(bundleId: string) {
+    super(`${bundleId} already has an active pending addition request`);
   }
 }
 
@@ -141,4 +165,31 @@ export async function applyDueProfileChanges(env: Env): Promise<number> {
     }
   }
   return appliedCount;
+}
+
+// A safe-app addition is unambiguously a loosening (mirrors
+// safeAppBundleIDs's own "every bundle ID here is a blind spot" comment
+// in Config.swift) - queued through the same ratchet as everything else.
+// Called by the dashboard API once the current-password re-check has
+// already passed (same contract as requestLoosen/requestProfileChange
+// above). Rejects both "already approved" and "already queued" up front
+// rather than letting a duplicate silently queue a second, redundant
+// 24h wait.
+export async function requestAddSafeApp(db: D1Database, bundleId: string): Promise<PendingSafeAppAddition> {
+  if (await isSafeAppBundleIdApproved(db, bundleId)) {
+    throw new SafeAppAlreadyApprovedError(bundleId);
+  }
+  if (await hasActivePendingSafeAppAddition(db, bundleId)) {
+    throw new SafeAppAdditionAlreadyPendingError(bundleId);
+  }
+  return queueSafeAppAddition(db, bundleId);
+}
+
+export async function applyDueSafeAppAdditions(db: D1Database): Promise<number> {
+  const due = await getDueSafeAppAdditions(db);
+  for (const request of due) {
+    await addSafeAppBundleId(db, request.bundle_id);
+    await markSafeAppAdditionApplied(db, request.id);
+  }
+  return due.length;
 }

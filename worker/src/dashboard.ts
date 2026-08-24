@@ -191,6 +191,22 @@ export function renderDashboard(): string {
   </section>
 
   <section>
+    <h2>Safe apps (not scanned)</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Bundle IDs ContentGuardDaemon excludes from screen-capture monitoring, in addition to the compiled baseline in Config.swift - every entry here is a blind spot, kept short and deliberate. Adding one takes effect after a 24h delay, same as loosening a Santa rule; removing one is immediate.</div>
+    <table id="safe-apps-table">
+      <thead><tr><th>Bundle ID</th><th>Added</th><th></th></tr></thead>
+      <tbody id="safe-apps-body"><tr><td colspan="3" class="empty">Loading...</td></tr></tbody>
+    </table>
+    <form class="inline" id="add-safe-app-form">
+      <input name="bundle_id" placeholder="Bundle ID (e.g. com.example.app)" required style="flex: 1; min-width: 220px;">
+      <input type="password" name="password" placeholder="Password to confirm" required style="min-width: 160px;">
+      <button type="submit">Queue add (24h delay)</button>
+    </form>
+    <div class="status-msg" id="safe-apps-status"></div>
+    <div id="safe-app-additions-pending"></div>
+  </section>
+
+  <section>
     <h2>Installed apps</h2>
     <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory - one click to block or allow, instead of manually finding a Team ID in Terminal.</div>
     <table id="installed-apps-table">
@@ -494,6 +510,44 @@ async function loadRules() {
   body.innerHTML = staticRowsHtml + dynamicRowsHtml;
 }
 
+async function loadSafeApps() {
+  const [approved, pending] = await Promise.all([
+    api("/api/safe-apps"),
+    api("/api/safe-app-additions"),
+  ]);
+  renderSafeApps(approved);
+  renderSafeAppAdditionsPending(pending);
+}
+
+function renderSafeApps(approved) {
+  const body = document.getElementById("safe-apps-body");
+  if (approved.length === 0) {
+    body.innerHTML = '<tr><td colspan="3" class="empty">No dashboard-added safe apps yet - the compiled baseline in Config.swift still applies regardless.</td></tr>';
+    return;
+  }
+  body.innerHTML = approved.map((a) => \`<tr>
+    <td>\${escapeHtml(a.bundle_id)}</td>
+    <td>\${timeAgo(a.added_at)}</td>
+    <td><button class="danger" data-remove-safe-app="\${escapeHtml(a.bundle_id)}">Remove</button></td>
+  </tr>\`).join("");
+}
+
+// Static, lives outside #safe-apps-body on purpose - same reasoning as
+// #profile-changes-pending: that table gets fully rebuilt on every
+// loadSafeApps() call, including the one a successful add/cancel here
+// itself triggers, so a listener attached inside renderSafeApps would
+// either vanish or double up across renders.
+function renderSafeAppAdditionsPending(pending) {
+  const el = document.getElementById("safe-app-additions-pending");
+  if (!pending || pending.length === 0) {
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = pending.map((p) =>
+    \`<div class="status-row">Add "\${escapeHtml(p.bundle_id)}": <span class="pending-note">queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel-safe-app-addition="\${p.id}">Cancel</button></div>\`
+  ).join("");
+}
+
 async function loadInstalledApps(host) {
   // No host -> the Worker falls back to DEFAULT_FLEET_HOST (this
   // project's one real Mac) - see softwareApi.ts's handleListInstalledSoftware.
@@ -645,6 +699,49 @@ document.getElementById("rules-body").addEventListener("click", async (e) => {
   }
 });
 
+// Static, same placement reasoning as upload-profile-form above.
+document.getElementById("add-safe-app-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  try {
+    await api("/api/safe-apps", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ bundle_id: form.get("bundle_id"), password: form.get("password") }),
+    });
+    e.target.reset();
+    setStatus("safe-apps-status", "Queued - applies in ~24h, same as any other loosening on this dashboard.", false);
+    await loadSafeApps();
+  } catch (err) {
+    setStatus("safe-apps-status", "Failed to queue: " + err.message, true);
+  }
+});
+
+document.getElementById("safe-apps-body").addEventListener("click", async (e) => {
+  const bundleId = e.target.getAttribute("data-remove-safe-app");
+  if (!bundleId) return;
+  try {
+    await api(\`/api/safe-apps/\${encodeURIComponent(bundleId)}\`, { method: "DELETE" });
+    setStatus("safe-apps-status", "Removed - takes effect immediately.", false);
+    await loadSafeApps();
+  } catch (err) {
+    setStatus("safe-apps-status", "Failed to remove: " + err.message, true);
+  }
+});
+
+// Static, same placement reasoning as profile-changes-pending above.
+document.getElementById("safe-app-additions-pending").addEventListener("click", async (e) => {
+  const cancelId = e.target.getAttribute("data-cancel-safe-app-addition");
+  if (!cancelId) return;
+  try {
+    await api(\`/api/safe-app-additions/\${cancelId}/cancel\`, { method: "POST" });
+    setStatus("safe-apps-status", "Cancelled.", false);
+    await loadSafeApps();
+  } catch (err) {
+    setStatus("safe-apps-status", "Failed to cancel: " + err.message, true);
+  }
+});
+
 document.getElementById("load-apps-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const host = new FormData(e.target).get("host");
@@ -763,6 +860,7 @@ window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 showTab(location.hash.slice(1));
 
 loadRules().catch((err) => setStatus("rules-status", "Failed to load rules: " + err.message, true));
+loadSafeApps().catch((err) => setStatus("safe-apps-status", "Failed to load: " + err.message, true));
 loadSoftware().catch((err) => setStatus("software-status", "Failed to load software: " + err.message, true));
 loadPendingPasswordChange().catch(() => {});
 loadInstalledApps().catch((err) => setStatus("installed-apps-status", "Failed to load: " + err.message, true));

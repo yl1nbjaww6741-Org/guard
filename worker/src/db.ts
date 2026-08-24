@@ -627,3 +627,125 @@ export async function markProfileChangeFailed(db: D1Database, requestId: number,
     .bind(errorMessage.slice(0, 500), requestId)
     .run();
 }
+
+// --- Safe app bundle IDs (ContentGuardDaemon's own capture-scope
+// whitelist, synced from here - see schema.sql's safe_app_bundle_ids
+// comment and daemonSync.ts for the read side). Adding is a loosening,
+// ratchet-gated below; removing is a tightening, immediate, same
+// asymmetry as upsertRule/applyLoosen above. ---
+
+export interface SafeAppBundleIdRecord {
+  bundle_id: string;
+  added_at: number;
+}
+
+export async function listSafeAppBundleIds(db: D1Database): Promise<SafeAppBundleIdRecord[]> {
+  const result = await db
+    .prepare(`SELECT bundle_id, added_at FROM safe_app_bundle_ids ORDER BY added_at DESC`)
+    .all<SafeAppBundleIdRecord>();
+  return result.results ?? [];
+}
+
+export async function isSafeAppBundleIdApproved(db: D1Database, bundleId: string): Promise<boolean> {
+  const row = await db.prepare(`SELECT bundle_id FROM safe_app_bundle_ids WHERE bundle_id = ?1`).bind(bundleId).first();
+  return row !== null;
+}
+
+// Called only from applyDueSafeAppAdditions once a request's 24h delay
+// has elapsed - INSERT OR IGNORE since re-applying an already-approved
+// ID (shouldn't happen, but not worth a hard failure over) is a no-op,
+// not an error.
+export async function addSafeAppBundleId(db: D1Database, bundleId: string): Promise<void> {
+  await db
+    .prepare(`INSERT OR IGNORE INTO safe_app_bundle_ids (bundle_id, added_at) VALUES (?1, ?2)`)
+    .bind(bundleId, Date.now())
+    .run();
+}
+
+// Tightening - applies immediately, no queue, no password re-check, same
+// as cancelling a loosen request: staying (or returning to) monitored
+// needs no extra friction, only reducing monitoring does. Removing a
+// bundle ID that was never approved is a harmless no-op.
+export async function removeSafeAppBundleId(db: D1Database, bundleId: string): Promise<void> {
+  await db.prepare(`DELETE FROM safe_app_bundle_ids WHERE bundle_id = ?1`).bind(bundleId).run();
+}
+
+// --- Ratchet: pending safe-app additions (same shape as
+// pending_loosen_requests - see ratchet.ts) ---
+
+export interface PendingSafeAppAddition {
+  id: number;
+  bundle_id: string;
+  requested_at: number;
+  applies_at: number;
+  applied_at: number | null;
+  cancelled_at: number | null;
+}
+
+const SAFE_APP_ADDITION_DELAY_MS = 24 * 60 * 60 * 1000; // Same 24h as
+// every other ratchet delay in this file - deliberately not configurable,
+// same reasoning as LOOSEN_DELAY_MS.
+
+export async function hasActivePendingSafeAppAddition(db: D1Database, bundleId: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT id FROM pending_safe_app_additions
+       WHERE bundle_id = ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(bundleId)
+    .first<{ id: number }>();
+  return row !== null;
+}
+
+export async function queueSafeAppAddition(db: D1Database, bundleId: string): Promise<PendingSafeAppAddition> {
+  const now = Date.now();
+  const appliesAt = now + SAFE_APP_ADDITION_DELAY_MS;
+  const result = await db
+    .prepare(
+      `INSERT INTO pending_safe_app_additions (bundle_id, requested_at, applies_at)
+       VALUES (?1, ?2, ?3)
+       RETURNING id, bundle_id, requested_at, applies_at, applied_at, cancelled_at`
+    )
+    .bind(bundleId, now, appliesAt)
+    .first<PendingSafeAppAddition>();
+  if (!result) throw new Error("queueSafeAppAddition: INSERT ... RETURNING returned no row");
+  return result;
+}
+
+export async function cancelSafeAppAddition(db: D1Database, requestId: number): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE pending_safe_app_additions SET cancelled_at = ?1
+       WHERE id = ?2 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now(), requestId)
+    .run();
+}
+
+export async function listActiveSafeAppAdditions(db: D1Database): Promise<PendingSafeAppAddition[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, bundle_id, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_safe_app_additions
+       WHERE applied_at IS NULL AND cancelled_at IS NULL
+       ORDER BY applies_at ASC`
+    )
+    .all<PendingSafeAppAddition>();
+  return result.results ?? [];
+}
+
+export async function getDueSafeAppAdditions(db: D1Database): Promise<PendingSafeAppAddition[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, bundle_id, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_safe_app_additions
+       WHERE applies_at <= ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now())
+    .all<PendingSafeAppAddition>();
+  return result.results ?? [];
+}
+
+export async function markSafeAppAdditionApplied(db: D1Database, requestId: number): Promise<void> {
+  await db.prepare(`UPDATE pending_safe_app_additions SET applied_at = ?1 WHERE id = ?2`).bind(Date.now(), requestId).run();
+}

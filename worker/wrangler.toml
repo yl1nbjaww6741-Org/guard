@@ -90,6 +90,14 @@ crons = ["*/15 * * * *"]
 #     secret put SANTA_SYNC_TOKEN`, a static shared token sent by Santa
 #     via SyncExtraHeaders (profiles/santa-config.mobileconfig) and
 #     checked on every sync-protocol request.
+#   - CONTENTGUARD_DAEMON_SYNC_TOKEN (src/auth.ts's requireDaemonSyncToken)
+#     - `wrangler secret put CONTENTGUARD_DAEMON_SYNC_TOKEN`, a static
+#     shared token ContentGuardDaemon itself sends (X-ContentGuard-Daemon-
+#     Token header) to fetch the safe-app-bundle-ID list from GET
+#     /sync/safe-apps - see schema.sql's safe_app_bundle_ids comment.
+#     Deliberately separate from SANTA_SYNC_TOKEN - see that field's own
+#     doc comment in types.ts for why. Provisioned onto the Mac itself via
+#     Installer/build-pkg.sh (see mac/README.md), not committed anywhere.
 #   - SESSION_SIGNING_KEY (src/session.ts) - `wrangler secret put
 #     SESSION_SIGNING_KEY`, an internal HMAC key for signing dashboard
 #     session cookies. Not user-facing and not the dashboard password

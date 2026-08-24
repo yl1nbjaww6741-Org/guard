@@ -113,6 +113,12 @@ export interface Env {
   // auth.ts's requireSyncToken doc comment) - protects the sync
   // endpoints, which are otherwise reachable by anyone on the internet.
   SANTA_SYNC_TOKEN?: string;
+  // Static shared token ContentGuardDaemon itself sends (see
+  // auth.ts's requireDaemonSyncToken) to fetch the current safe-app-
+  // bundle-ID list from GET /sync/safe-apps (daemonSync.ts). Deliberately
+  // separate from SANTA_SYNC_TOKEN - two different sync clients, no
+  // reason to share a credential.
+  CONTENTGUARD_DAEMON_SYNC_TOKEN?: string;
   // Signs/verifies dashboard session cookies (session.ts) - internal
   // cryptographic key, not user-facing, so it stays a static Wrangler
   // secret rather than going through the password ratchet the way the

@@ -63,6 +63,27 @@ export async function requireSyncToken(request: Request, env: { SANTA_SYNC_TOKEN
   return null;
 }
 
+// Gates GET /sync/safe-apps (daemonSync.ts) - ContentGuardDaemon's own
+// sync client, not a human dashboard session, same reasoning as
+// requireSyncToken above for Santa. A genuinely separate token from
+// SANTA_SYNC_TOKEN, deliberately: these gate two different clients
+// (ContentGuardDaemon vs. Santa) that have no reason to share a
+// credential - rotating one should never require rotating the other, and
+// a leak of one shouldn't imply the other is compromised too.
+export async function requireDaemonSyncToken(
+  request: Request,
+  env: { CONTENTGUARD_DAEMON_SYNC_TOKEN?: string }
+): Promise<Response | null> {
+  if (!env.CONTENTGUARD_DAEMON_SYNC_TOKEN) {
+    return new Response("Daemon sync token not configured", { status: 503 });
+  }
+  const provided = request.headers.get("X-ContentGuard-Daemon-Token") ?? "";
+  if (!timingSafeEqual(provided, env.CONTENTGUARD_DAEMON_SYNC_TOKEN)) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+  return null;
+}
+
 export async function hashPassword(password: string): Promise<string> {
   return sha256Hex(password);
 }

@@ -199,3 +199,44 @@ CREATE TABLE pending_profile_changes (
                           -- scheduled tick retries automatically, not
                           -- silently dropped
 );
+
+-- The Mac-side counterpart to ContentGuardConfig.safeAppBundleIDs
+-- (mac/Shared/Config.swift) - moved here so it's dashboard-adjustable
+-- instead of requiring a source edit + recompile + codesign + `sudo make
+-- install` every time. This is the first table ContentGuardDaemon itself
+-- reads (via GET /sync/safe-apps, daemonSync.ts) - previously the daemon
+-- made no network calls at all, by deliberate design (Shared/Config.swift's
+-- own header: "no dylib to tamper with"). That tradeoff is accepted
+-- explicitly here, not by accident: every bundle ID in this table is a
+-- screen-capture blind spot (mirrors safeAppBundleIDs's own "every bundle
+-- ID here is a blind spot" comment), so adding one is a loosening and goes
+-- through the exact same ratchet as everything else on this dashboard
+-- (pending_safe_app_additions below) - removing one is a tightening and
+-- applies immediately, same asymmetry as rules/upsertRule.
+--
+-- The compiled ContentGuardConfig.safeAppBundleIDs list is NOT replaced by
+-- this table, it's the fallback: the daemon ships with that baseline
+-- built in and only ever ADDS to it from what this table (once
+-- successfully, authentically fetched) contains - never a source of
+-- truth the daemon trusts blindly, and never able to shrink protection
+-- below the compiled baseline just because a fetch returned something
+-- unexpected or empty.
+CREATE TABLE safe_app_bundle_ids (
+    bundle_id TEXT PRIMARY KEY,
+    added_at INTEGER NOT NULL
+);
+
+-- Ratchet for ADDING a bundle ID to safe_app_bundle_ids - same shape as
+-- pending_loosen_requests/pending_password_changes/pending_profile_changes
+-- (24h delay, applied from the same scheduled handler, see ratchet.ts).
+-- No table for removals - those are tightenings and apply immediately
+-- via db.ts's removeSafeAppBundleId, same as every other tightening
+-- action in this project.
+CREATE TABLE pending_safe_app_additions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bundle_id TEXT NOT NULL,
+    requested_at INTEGER NOT NULL,
+    applies_at INTEGER NOT NULL,
+    applied_at INTEGER,
+    cancelled_at INTEGER
+);
