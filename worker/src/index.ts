@@ -4,15 +4,19 @@
 //  - Santa's 4 sync-protocol stages (santaSync.ts) - called by Santa
 //    itself on the Mac, not by a human, so no auth beyond the
 //    machine_id/body consistency check santaSync.ts already does.
-//  - The rule-management API (/api/...) - meant for the (not-yet-built)
-//    dashboard, gated by `requireApiToken` as an interim stopgap until
-//    Cloudflare Access is actually wired in - see auth.ts's doc comment.
+//  - The rule-management/software-deployment API (/api/...) - meant for
+//    the (not-yet-built) dashboard, gated by Cloudflare Access
+//    (cloudflareAccess.ts). The real access-control boundary is the
+//    Access Application itself, configured at the Cloudflare edge - see
+//    mac/docs/PHASE_4_DASHBOARD_SETUP.md's setup steps - this Worker's
+//    own JWT check is defense-in-depth on top of that, not instead of it.
 //
-// Cloudflare Access auth and the dashboard itself are still NOT
-// implemented - see mac/docs/PHASE_4_DASHBOARD_SETUP.md's status for
-// what's real versus planned.
+// The dashboard frontend itself is still NOT implemented - see
+// mac/docs/PHASE_4_DASHBOARD_SETUP.md's status for what's real versus
+// planned.
 
-import { requireApiToken, verifyLoosenPassword } from "./auth";
+import { verifyLoosenPassword } from "./auth";
+import { requireCloudflareAccess } from "./cloudflareAccess";
 import { cancelLoosenRequest, getRuleById, listRules, upsertRule } from "./db";
 import { LoosenAlreadyPendingError, applyDueLoosenRequests, requestLoosen } from "./ratchet";
 import { handleEventUpload, handlePostflight, handlePreflight, handleRuleDownload } from "./santaSync";
@@ -120,13 +124,13 @@ export default {
       }
     }
 
-    // --- Rule-management API (interim-token-gated, see auth.ts) ---
+    // --- Rule-management API (Cloudflare Access-gated, see cloudflareAccess.ts) ---
     const isRulesApiRoute =
       url.pathname === "/api/rules" ||
       url.pathname.match(/^\/api\/rules\/\d+\/loosen-request$/) ||
       url.pathname.match(/^\/api\/loosen-requests\/\d+\/cancel$/);
     if (isRulesApiRoute) {
-      const authError = await requireApiToken(request, env);
+      const authError = await requireCloudflareAccess(request, env);
       if (authError) return authError;
 
       if (url.pathname === "/api/rules" && request.method === "GET") {
@@ -150,11 +154,11 @@ export default {
       return new Response("Method Not Allowed", { status: 405 });
     }
 
-    // --- Software-deployment API (interim-token-gated, see auth.ts) ---
+    // --- Software-deployment API (Cloudflare Access-gated, see cloudflareAccess.ts) ---
     const isSoftwareApiRoute =
       url.pathname === "/api/software" || url.pathname.match(/^\/api\/software\/\d+\/install$/);
     if (isSoftwareApiRoute) {
-      const authError = await requireApiToken(request, env);
+      const authError = await requireCloudflareAccess(request, env);
       if (authError) return authError;
 
       if (url.pathname === "/api/software" && request.method === "GET") {

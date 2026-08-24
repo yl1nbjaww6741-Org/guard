@@ -9,6 +9,9 @@
     "db:migrate:local": "wrangler d1 execute contentguard --local --file=./schema.sql",
     "db:migrate:remote": "wrangler d1 execute contentguard --remote --file=./schema.sql"
   },
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
     "typescript": "^5.7.0",

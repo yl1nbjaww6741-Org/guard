@@ -109,11 +109,17 @@ export type PostflightResponse = Record<string, never>;
 
 export interface Env {
   DB: D1Database;
-  // Both secrets, not vars - set via `wrangler secret put`, never
-  // committed. See auth.ts's doc comments for what each actually gates
-  // and why they're deliberately separate from each other.
-  API_TOKEN?: string;
+  // Secret, not var - set via `wrangler secret put`, never committed.
+  // See auth.ts's doc comment on why this is deliberately a separate
+  // credential from whatever Cloudflare Access itself gates.
   LOOSEN_PASSWORD_HASH?: string;
+  // Cloudflare Access config - see cloudflareAccess.ts. Not secret in
+  // the sense of granting access on their own (they're the audience/issuer
+  // a real Access-issued JWT must match, not a credential), but treated
+  // as configuration specific to this project's real deployment, same
+  // "don't guess a real value" placeholder treatment as everything else.
+  CF_ACCESS_TEAM_DOMAIN?: string;
+  CF_ACCESS_AUD?: string;
   // Fleet API credentials - see fleetClient.ts's doc comment for the
   // real API reference this was built against. FLEET_BASE_URL is the
   // real deployed Fleet URL (mac/fleet/README.md's `fleet.yourdomain.com`,
