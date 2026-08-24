@@ -141,6 +141,20 @@ export function renderDashboard(): string {
   </section>
 
   <section>
+    <h2>Installed apps</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory for a host - one click to block or allow, instead of manually finding a Team ID in Terminal.</div>
+    <form class="inline" id="load-apps-form">
+      <input name="host" placeholder="Hostname, serial, or UUID" required style="flex: 1; min-width: 220px;">
+      <button type="submit">Load installed apps</button>
+    </form>
+    <table id="installed-apps-table">
+      <thead><tr><th>Name</th><th>Version</th><th>Detected identifier</th><th></th></tr></thead>
+      <tbody id="installed-apps-body"><tr><td colspan="4" class="empty">Enter a host above and load its installed apps.</td></tr></tbody>
+    </table>
+    <div class="status-msg" id="installed-apps-status"></div>
+  </section>
+
+  <section>
     <h2>Software (Fleet)</h2>
     <table id="software-table">
       <thead><tr><th>Name</th><th>Version</th><th>Platform</th><th></th></tr></thead>
@@ -215,6 +229,29 @@ async function loadRules() {
       <td class="policy-\${r.policy}">\${r.policy}</td>
       <td>\${r.device_id ?? "all devices"}</td>
       <td>\${actionCell}</td>
+    </tr>\`;
+  }).join("");
+}
+
+async function loadInstalledApps(host) {
+  const apps = await api(\`/api/installed-software?host=\${encodeURIComponent(host)}\`);
+  const body = document.getElementById("installed-apps-body");
+  if (apps.length === 0) {
+    body.innerHTML = '<tr><td colspan="4" class="empty">No installed apps returned - Fleet may not have inventoried this host recently.</td></tr>';
+    return;
+  }
+  body.innerHTML = apps.map((a) => {
+    const idCell = a.identifier
+      ? \`\${escapeHtml(a.identifier)} <span class="pending-note" style="color:#8b8f98;">(\${a.rule_type})</span>\`
+      : '<span class="empty" style="padding:0;">no identifier available</span>';
+    const actions = a.identifier
+      ? \`<button data-block="\${escapeHtml(a.identifier)}" data-rule-type="\${a.rule_type}">Block</button> <button data-allow="\${escapeHtml(a.identifier)}" data-rule-type="\${a.rule_type}">Allow</button>\`
+      : "";
+    return \`<tr>
+      <td>\${escapeHtml(a.name)}</td>
+      <td>\${escapeHtml(a.version ?? "")}</td>
+      <td>\${idCell}</td>
+      <td>\${actions}</td>
     </tr>\`;
   }).join("");
 }
@@ -307,6 +344,38 @@ document.getElementById("rules-body").addEventListener("click", async (e) => {
     } catch (err) {
       setStatus("rules-status", "Failed to cancel: " + err.message, true);
     }
+  }
+});
+
+document.getElementById("load-apps-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const host = new FormData(e.target).get("host");
+  try {
+    setStatus("installed-apps-status", "Loading...", false);
+    await loadInstalledApps(host);
+    setStatus("installed-apps-status", "", false);
+  } catch (err) {
+    setStatus("installed-apps-status", "Failed to load: " + err.message, true);
+  }
+});
+
+document.getElementById("installed-apps-body").addEventListener("click", async (e) => {
+  const blockId = e.target.getAttribute("data-block");
+  const allowId = e.target.getAttribute("data-allow");
+  const identifier = blockId || allowId;
+  if (!identifier) return;
+  const ruleType = e.target.getAttribute("data-rule-type");
+  const policy = blockId ? "BLOCKLIST" : "ALLOWLIST";
+  try {
+    await api("/api/rules", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ identifier, rule_type: ruleType, policy }),
+    });
+    setStatus("installed-apps-status", (blockId ? "Blocked " : "Allowed ") + identifier + ".", false);
+    await loadRules();
+  } catch (err) {
+    setStatus("installed-apps-status", "Failed to add rule: " + err.message, true);
   }
 });
 

@@ -3,9 +3,9 @@
 // mac/README.md's Phase 4 scope decision. Thin wrappers around
 // fleetClient.ts + db.ts, same separation as ratchet.ts/santaSync.ts.
 
-import { findHostId, installOnHost, uploadPackage } from "./fleetClient";
+import { findHostId, getHostSoftware, installOnHost, uploadPackage } from "./fleetClient";
 import { listSoftwarePackages, recordUploadedPackage } from "./db";
-import type { Env } from "./types";
+import type { Env, FleetHostSoftwareItem, RuleType } from "./types";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -67,4 +67,64 @@ export async function handleInstallPackage(titleId: number, request: Request, en
   // completion - see fleetClient.ts's doc comment on why that's not
   // wired up yet.
   return jsonResponse({ hostId, titleId, status: "install requested" }, 202);
+}
+
+export interface InstalledSoftwareRow {
+  name: string;
+  version: string | null;
+  bundle_identifier: string | null;
+  // null when Fleet has no usable code-signing identifier for this app
+  // yet (e.g. hasn't been queried recently, or isn't a signed macOS
+  // .app) - the dashboard disables the Block/Allow buttons for that row
+  // rather than sending a request that can only fail.
+  identifier: string | null;
+  rule_type: RuleType | null;
+}
+
+// Preference order matches this project's own existing pattern (Tor
+// Browser's rule is TEAMID, not a hash) - a Team ID rule survives the
+// app updating itself, a hash-based one doesn't. CDHASH before BINARY
+// since Fleet's `hash_sha256` field is actually a cdhash_sha256 (see
+// types.ts's FleetSignatureInfo comment) and is more commonly populated
+// than `executable_sha256` in Fleet's current data.
+function pickIdentifier(item: FleetHostSoftwareItem): { identifier: string; rule_type: RuleType } | null {
+  const sig = item.installed_versions?.[0]?.signature_information?.[0];
+  if (!sig) return null;
+  if (sig.team_identifier) return { identifier: sig.team_identifier, rule_type: "TEAMID" };
+  if (sig.hash_sha256) return { identifier: sig.hash_sha256, rule_type: "CDHASH" };
+  if (sig.executable_sha256) return { identifier: sig.executable_sha256, rule_type: "BINARY" };
+  return null;
+}
+
+// Surfaces Fleet's own osquery-based software inventory for a host -
+// see fleetClient.ts's getHostSoftware doc comment for why (avoids the
+// user needing to manually `codesign -dv` in Terminal the way Tor
+// Browser's original Phase 3 rule was found). Same host-resolution rule
+// as handleInstallPackage: a human-meaningful identifier only, never a
+// raw Fleet host ID from a caller.
+export async function handleListInstalledSoftware(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const host = url.searchParams.get("host");
+  if (!host) {
+    return jsonResponse({ error: "missing required 'host' query parameter (hostname, serial, or UUID)" }, 400);
+  }
+
+  const hostId = await findHostId(env, host);
+  if (hostId === null) {
+    return jsonResponse({ error: `no host found matching '${host}'` }, 404);
+  }
+
+  const software = await getHostSoftware(env, hostId);
+  const rows: InstalledSoftwareRow[] = software.map((item) => {
+    const picked = pickIdentifier(item);
+    const version = item.installed_versions?.[0];
+    return {
+      name: item.name,
+      version: version?.version ?? null,
+      bundle_identifier: version?.bundle_identifier ?? null,
+      identifier: picked?.identifier ?? null,
+      rule_type: picked?.rule_type ?? null,
+    };
+  });
+  return jsonResponse(rows);
 }

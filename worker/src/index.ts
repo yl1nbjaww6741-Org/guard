@@ -42,7 +42,12 @@ import {
 } from "./ratchet";
 import { clearSessionCookie, createSessionCookie, hasValidSession } from "./session";
 import { handleEventUpload, handlePostflight, handlePreflight, handleRuleDownload } from "./santaSync";
-import { handleInstallPackage, handleListSoftwarePackages, handleUploadPackage } from "./softwareApi";
+import {
+  handleInstallPackage,
+  handleListInstalledSoftware,
+  handleListSoftwarePackages,
+  handleUploadPackage,
+} from "./softwareApi";
 import type { Env, Policy, RuleType } from "./types";
 
 const SYNC_ROUTES: Record<
@@ -263,7 +268,9 @@ export default {
 
     // --- Software-deployment API (session-gated) ---
     const isSoftwareApiRoute =
-      url.pathname === "/api/software" || url.pathname.match(/^\/api\/software\/\d+\/install$/);
+      url.pathname === "/api/software" ||
+      url.pathname === "/api/installed-software" ||
+      url.pathname.match(/^\/api\/software\/\d+\/install$/);
     if (isSoftwareApiRoute) {
       const authError = await requireSession(request, env);
       if (authError) return authError;
@@ -273,6 +280,9 @@ export default {
       }
       if (url.pathname === "/api/software" && request.method === "POST") {
         return handleUploadPackage(request, env);
+      }
+      if (url.pathname === "/api/installed-software" && request.method === "GET") {
+        return handleListInstalledSoftware(request, env);
       }
       const installMatch = url.pathname.match(/^\/api\/software\/(\d+)\/install$/);
       if (installMatch && request.method === "POST") {

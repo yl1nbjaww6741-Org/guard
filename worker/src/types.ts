@@ -154,3 +154,38 @@ export interface FleetHost {
 export interface FleetListHostsResponse {
   hosts: FleetHost[];
 }
+
+// --- Get host's software (GET /api/v1/fleet/hosts/:id/software) ---
+// Only the fields this Worker actually reads are kept required; Fleet's
+// real response has many more (vulnerabilities, software_package,
+// app_store_app, etc) - see fleetClient.ts's getHostSoftware doc comment
+// for what this is used for and the identifier-type nuance.
+
+export interface FleetSignatureInfo {
+  installed_path: string;
+  team_identifier: string | null;
+  // Per Fleet's own docs (rest-api.md's "Get host's software" section):
+  // "hash_sha256 is the cdhash_sha256" - this is a Santa CDHASH-type
+  // identifier, NOT a binary SHA-256, despite the field name. Do not
+  // treat it as a BINARY rule identifier.
+  hash_sha256: string | null;
+  executable_sha256: string | null;
+}
+
+export interface FleetInstalledVersion {
+  version: string;
+  bundle_identifier: string | null;
+  signature_information: FleetSignatureInfo[] | null;
+}
+
+export interface FleetHostSoftwareItem {
+  id: number;
+  name: string;
+  source: string;
+  installed_versions: FleetInstalledVersion[] | null;
+}
+
+export interface FleetListHostSoftwareResponse {
+  count: number;
+  software: FleetHostSoftwareItem[];
+}

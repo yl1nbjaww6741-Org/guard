@@ -20,7 +20,13 @@
 // to be a real value from the real Fleet instance, same as every other
 // real-value secret in this project.
 
-import type { Env, FleetAddPackageResponse, FleetListHostsResponse } from "./types";
+import type {
+  Env,
+  FleetAddPackageResponse,
+  FleetHostSoftwareItem,
+  FleetListHostSoftwareResponse,
+  FleetListHostsResponse,
+} from "./types";
 
 export class FleetApiError extends Error {
   constructor(
@@ -100,4 +106,30 @@ export async function installOnHost(env: Env, hostId: number, softwareTitleId: n
     const bodyText = await response.text();
     throw new FleetApiError(endpoint, response.status, bodyText);
   }
+}
+
+// Returns everything Fleet's own osquery-based inventory already knows
+// is installed on a host - built directly against fleetdm/fleet's real
+// "Get host's software" docs (rest-api.md), not guessed. This is the
+// software-inventory feature: rather than the dashboard user manually
+// running `codesign -dv` in Terminal to find an app's Team ID (the
+// Tor Browser rule's own original workflow, from Phase 3), Fleet already
+// has this via its `signature_information` per installed version - this
+// just surfaces it so a Santa rule can be created with one click instead.
+// `macos_applications=true` scopes this to top-level /Applications
+// entries only (Fleet's own param for this) - keeps the list to things a
+// human would actually recognize and want to block/allow, not every
+// framework/library osquery's `apps` source happens to enumerate.
+export async function getHostSoftware(env: Env, hostId: number): Promise<FleetHostSoftwareItem[]> {
+  const { baseUrl, token } = requireFleetConfig(env);
+  const endpoint = `/api/v1/fleet/hosts/${hostId}/software?macos_applications=true&per_page=200`;
+  const response = await fetch(`${baseUrl}${endpoint}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const bodyText = await response.text();
+  if (!response.ok) {
+    throw new FleetApiError(endpoint, response.status, bodyText);
+  }
+  const parsed = JSON.parse(bodyText) as FleetListHostSoftwareResponse;
+  return parsed.software ?? [];
 }
