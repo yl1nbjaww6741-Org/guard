@@ -1,22 +1,23 @@
 # Cloudflare Worker config for the ContentGuard control panel.
 #
-# __CLOUDFLARE_ACCOUNT_ID__ and __D1_DATABASE_ID__ are deliberately left as
-# placeholders rather than guessed, same reasoning as every other
-# real-value placeholder in this repo (see profiles/santa-config.mobileconfig's
-# history) - these only exist once real Cloudflare resources are created
-# on the real account, and a wrong ID silently pointing at nothing (or
-# someone else's account) is worse than an obvious placeholder. Fill in
-# once mac/docs/PHASE_4_DASHBOARD_SETUP.md's setup steps are actually run.
+# account_id and the D1 database_id below are real values, filled in on
+# 2026-08-24 from `wrangler whoami` and `wrangler d1 create contentguard`
+# respectively - not guessed. Everything else that still reads as a
+# placeholder in this repo follows the same rule (see
+# profiles/santa-config.mobileconfig's history): a wrong ID silently
+# pointing at nothing, or at someone else's account, is worse than an
+# obvious placeholder. Remaining setup steps live in
+# mac/docs/PHASE_4_DASHBOARD_SETUP.md.
 
 name = "contentguard-worker"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
-account_id = "__CLOUDFLARE_ACCOUNT_ID__"
+account_id = "442630b07c6b3eed257dfed98b49cfcd"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "contentguard"
-database_id = "__D1_DATABASE_ID__"
+database_id = "8cb09d1d-1497-449f-86d5-f7c754c5f884"
 
 # No route/custom domain configured yet - defaults to the workers.dev
 # subdomain Cloudflare assigns on first deploy. Santa's SyncBaseURL in
