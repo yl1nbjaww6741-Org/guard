@@ -40,13 +40,28 @@ build:
 pkg:
 	./Installer/build-pkg.sh
 
-# Installs the most recently built pkg. Requires `make pkg` (or an
-# equivalent manual build) to have run first - this target doesn't rebuild,
-# it only installs whatever .pkg already exists, so a stale pkg installs
-# stale code. Requires sudo; not run as part of this target so the
-# password prompt is visible.
+# Installs the three sub-packages `make pkg` just built. Requires `make pkg`
+# (or an equivalent manual build) to have run first - this target doesn't
+# rebuild, it only installs whatever .pkg files already exist, so a stale
+# build installs stale code. Requires sudo; not run as part of this target
+# so the password prompt is visible.
+#
+# Installs the THREE sub-packages directly, not the combined
+# ContentGuard-1.0.0.pkg productbuild wraps them into - confirmed live on
+# the real Mac (macOS 26.5): `sudo installer` refuses the combined product
+# with "This package requires Rosetta 2 to be installed," even though
+# every binary in it is 100% native arm64 (build-pkg.sh's own final step
+# checks this with `file` on every Mach-O and greps every
+# PackageInfo/Distribution for an architecture restriction - there is
+# none). The Rosetta check is a bug in productbuild's product-archive
+# wrapper on this macOS version, not anything this install actually
+# needs. build-pkg.sh's own final echo already prints this exact fix and
+# confirms it as working - this target just automates what it says to do
+# by hand.
 install:
-	sudo installer -pkg Installer/ContentGuard-1.0.0.pkg -target /
+	sudo installer -pkg Installer/contentguard-app.pkg -target /
+	sudo installer -pkg Installer/daemon-plist.pkg -target /
+	sudo installer -pkg Installer/agent-plist.pkg -target /
 
 # Reverses `make install`: unloads both launchd jobs and removes every
 # file this project puts on disk. Does NOT touch the profiles pushed via
