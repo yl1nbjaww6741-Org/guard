@@ -109,21 +109,16 @@ export type PostflightResponse = Record<string, never>;
 
 export interface Env {
   DB: D1Database;
-  // Secret, not var - set via `wrangler secret put`, never committed.
-  // See auth.ts's doc comment on why this is deliberately a separate
-  // credential from whatever Cloudflare Access itself gates.
-  LOOSEN_PASSWORD_HASH?: string;
   // Static shared token Santa sends via SyncExtraHeaders (see
   // auth.ts's requireSyncToken doc comment) - protects the sync
   // endpoints, which are otherwise reachable by anyone on the internet.
   SANTA_SYNC_TOKEN?: string;
-  // Cloudflare Access config - see cloudflareAccess.ts. Not secret in
-  // the sense of granting access on their own (they're the audience/issuer
-  // a real Access-issued JWT must match, not a credential), but treated
-  // as configuration specific to this project's real deployment, same
-  // "don't guess a real value" placeholder treatment as everything else.
-  CF_ACCESS_TEAM_DOMAIN?: string;
-  CF_ACCESS_AUD?: string;
+  // Signs/verifies dashboard session cookies (session.ts) - internal
+  // cryptographic key, not user-facing, so it stays a static Wrangler
+  // secret rather than going through the password ratchet the way the
+  // dashboard password itself does (see schema.sql's dashboard_auth
+  // comment for why that one lives in D1 instead).
+  SESSION_SIGNING_KEY?: string;
   // Fleet API credentials - see fleetClient.ts's doc comment for the
   // real API reference this was built against. FLEET_BASE_URL is the
   // real deployed Fleet URL (mac/fleet/README.md's `fleet.yourdomain.com`,

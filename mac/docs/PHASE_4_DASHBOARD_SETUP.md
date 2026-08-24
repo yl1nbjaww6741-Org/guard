@@ -1,11 +1,29 @@
 # Cloudflare Worker + dashboard setup (Phase 4)
 
 Scope and the three design decisions behind it (ratchet mechanics,
-dashboard auth via Cloudflare Access, Santa+Fleet-only for now) are
-already made and documented in `mac/README.md`'s Phase 4 row - not
-revisited here. This doc tracks what's actually been built and verified
-versus what's still ahead, the same way `PHASE_3_SANTA_SETUP.md` did for
-Santa.
+dashboard auth, Santa+Fleet-only for now) are already made and
+documented in `mac/README.md`'s Phase 4 row - not revisited here. This
+doc tracks what's actually been built and verified versus what's still
+ahead, the same way `PHASE_3_SANTA_SETUP.md` did for Santa.
+
+**Dashboard auth changed mid-Phase 4.** The original plan was to sit the
+dashboard behind the existing Cloudflare Zero Trust instance from Phase
+1. That was fully built and verified (see this doc's git history), then
+abandoned once it turned out what actually gates that Zero Trust
+instance day-to-day is a **Device Profile** setting (Team & Resources ->
+Devices -> Device Profiles), not an Access Policy - a different Zero
+Trust primitive that an Access Application can't reference. Rather than
+build a parallel IP-range Access Policy to replicate the "only
+changeable from the office" constraint, the dashboard now has its own
+password gate, deliberately modeled on the same proven pattern already
+in use in the sibling ContentGuard Android app: a password re-entered to
+log in, a "change password" flow that goes through the identical 24h
+ratchet as every other loosening action, and the same real office
+password reused for both (the user's explicit, informed choice - see
+"Dashboard password auth" below for the one real tradeoff this accepts
+and how it's mitigated). `src/cloudflareAccess.ts` and the Access
+Application setup that was in progress for it have both been removed/
+abandoned.
 
 ## What's real and verified so far
 
@@ -105,69 +123,124 @@ documented contract - it does NOT prove Fleet's real server accepts
 these exact requests**, which still needs the real deployed instance and
 real credentials (see setup steps below, not run yet).
 
-## Also real and verified: Cloudflare Access auth
+## Real Cloudflare deployment, and a real gap it found
 
-`worker/src/cloudflareAccess.ts` verifies Access JWTs (`Cf-Access-Jwt-Assertion`
-header, RS256 against Access's real JWKS endpoint, `aud`/`iss` claim
-checks) using `jose`, built against Cloudflare's own documented method
-(not guessed). Replaces the earlier interim `API_TOKEN` stopgap entirely
-on all `/api/...` routes - decided in favor of replacing rather than
-layering both, since a Cloudflare-signed per-session JWT is strictly
-stronger than a static shared token and keeping both would add
-complexity without adding real security.
+Santa sync, the ratchet mechanism, and Fleet integration above were
+actually deployed to a real Cloudflare account (D1 database created and
+migrated, Worker deployed to a `workers.dev` subdomain, Cron Trigger
+registered) before this auth rewrite started, and re-verified live
+against that real deployment, not just locally.
 
-`LOOSEN_PASSWORD_HASH` is set to the same real password as the Access
-login itself - the user's explicit, informed choice (simplicity over the
-extra friction a genuinely separate credential would add). The two
-checks stay functionally independent in code regardless - the loosen
-password is still re-checked separately at the moment of a loosen
-request, never skipped just because Access already passed.
+That real deployment surfaced a genuine, previously-missed gap:
+`preflight`/`eventupload`/`ruledownload`/`postflight` had **no
+authentication at all** - a mistake this sandbox couldn't have caught on
+its own, since it never had a public endpoint to probe. Confirmed live:
+anyone could `POST /preflight/{any-id}` and get a real response,
+creating device rows; far worse, `/ruledownload` would have handed out
+this project's entire denylist to anyone who asked. Fixed using Santa's
+own real, documented `SyncExtraHeaders` mechanism (confirmed via
+northpole.dev, not guessed): a static shared token
+(`X-ContentGuard-Sync-Token` header) checked by `auth.ts`'s
+`requireSyncToken` against a new `SANTA_SYNC_TOKEN` secret, fails closed
+(503) when unset. Verified against the real deployment: wrong/missing
+token 401s, correct token works exactly as before, and the probe data
+created while the gap was open was cleaned up afterward.
+`profiles/santa-config.mobileconfig` will need a matching
+`SyncExtraHeaders` entry once `SyncBaseURL` is actually wired up - a
+separate, deliberate step, not done yet.
 
-**Verified in two parts**, since Access's real JWKS endpoint is TLS-only
-and this sandbox can't cheaply fake that:
-1. The security-critical part (signature + claims verification) tested
-   directly with the exact same `jose` calls this code makes, against
-   real RSA-signed test tokens from a local mock JWKS server: valid
-   token accepted; wrong-audience, expired, tampered-signature, and
-   garbage tokens all correctly rejected (5/5 correct outcomes).
-2. The route-level fail-closed paths tested through a live `wrangler dev`
-   instance: no Access config at all correctly 500s ("not configured")
-   on every `/api/...` route rather than silently allowing access;
-   config set but no `Cf-Access-Jwt-Assertion` header correctly 401s, on
-   both the rules and software APIs.
+This dashboard-password-auth rewrite has **not** been deployed to that
+real Cloudflare account yet - it's been verified locally only (see
+above). Redeploying it, including the new D1 migration and bootstrapping
+the real password hash, is the next real infra step (below).
 
-**Not verified**: an actual end-to-end request through a real deployed
-Access Application - needs real Zero Trust configuration, not done yet
-(see setup steps below).
+## Also real and verified: dashboard password auth
+
+Replaces Cloudflare Access entirely (see this doc's intro for why). A
+single password gates the whole dashboard, stored as a SHA-256 hash in
+D1's `dashboard_auth` table (`worker/schema.sql`) - never as a Wrangler
+secret, since it now goes through its own 24h ratchet exactly like a
+Santa rule loosen, and D1 is where every other piece of mutable state
+already lives.
+
+- `POST /api/login` - checks a login-lockout window first (`db.ts`'s
+  `isLoginLockedOut`: 5 failures / 15 minutes, mitigating the one real
+  tradeoff this design accepts - no more edge-level brute-force blocking
+  now that Cloudflare Access's own login is out of the picture), then
+  the password itself. On success, sets a stateless HMAC-signed session
+  cookie (`worker/src/session.ts`, `SESSION_SIGNING_KEY`, 24h expiry,
+  `HttpOnly`/`Secure`/`SameSite=Strict`) - no sessions table, nothing to
+  clean up.
+- `POST /api/logout` - clears the cookie.
+- `requireSession` (`worker/src/auth.ts`) gates every `/api/rules...`,
+  `/api/loosen-requests...`, `/api/software...`, and
+  `/api/password/...` route. `GET /` itself is never hard-blocked -
+  `index.ts` renders `renderLoginPage()` or `renderDashboard()` directly
+  depending on whether the request already carries a valid session,
+  matching the Android sibling app's pattern this design is modeled on.
+- **Changing the password** goes through the identical ratchet as
+  loosening a Santa rule (`worker/src/ratchet.ts`'s
+  `requestPasswordChange`/`applyDuePasswordChanges`, `db.ts`'s
+  `pending_password_changes` table): requires the current password,
+  queues the new hash with `applies_at` 24h out, cancellable before then,
+  applied by the same Cron-triggered `scheduled` handler that applies due
+  rule loosens. Deliberately the *same* stored password for both general
+  login and the loosen-request re-check (`handleLoosenRequest` in
+  `index.ts`) - not two independently-configured secrets that could
+  drift apart, per the user's explicit choice.
+
+**Verified against a real local `wrangler dev` instance**, same bar as
+the ratchet mechanism above: `GET /` with no session shows the login
+page, with a valid session shows the real dashboard; every `/api/...`
+route 401s with no session and 200s with one; wrong password 401s,
+correct password 200s with a `Set-Cookie` that then authenticates
+subsequent requests; 5 failed logins correctly 429 a 6th attempt *before*
+even checking the password; the password-change flow end-to-end - wrong
+current-password 403s, correct-password 202s and queues a
+`pending_password_changes` row, a duplicate request 409s, `GET
+/api/password/pending-change` shows it, cancelling clears it, and
+(forcing `applies_at` into the past and triggering the scheduled handler
+via `wrangler dev`'s real `/__scheduled` test endpoint, not simulated)
+the new password actually takes over - the old one 401s, the new one
+logs in - and a rule's loosen-request re-check correctly accepts that
+same new password afterward, confirming the two really do share one
+hash. Sync-protocol and rule-tighten/loosen routes re-verified unchanged
+after this rewiring.
 
 ## Also real and verified: the dashboard itself
 
 `worker/src/dashboard.ts` - a single-page HTML+vanilla-JS dashboard
 (no build step, no external CDN dependency), served at `GET /` by the
-Worker itself, gated by the same `requireCloudflareAccess` check as
-every `/api/...` route. Two sections matching the "single control
-panel" scope: Santa rules (list, add, request-loosen with a password
-prompt, cancel a pending loosen, a live countdown to when a queued
-loosen applies) and Fleet software (list, upload, install on a host).
+Worker itself (`renderLoginPage()` or `renderDashboard()` depending on
+session validity - see "dashboard password auth" above). Three sections
+matching the "single control panel" scope plus the password gate itself:
+Santa rules (list, add, request-loosen with a password prompt, cancel a
+pending loosen, a live countdown to when a queued loosen applies), Fleet
+software (list, upload, install on a host), and change password (current/
+new password form, a pending-change note with its own countdown and
+cancel button, mirroring the rules section's pending-loosen display).
 
 One small backend addition the dashboard needed: `GET /api/loosen-requests`,
 listing every loosen request still in flight - `db.ts`'s
 `listActiveLoosenRequests`.
 
-**Verified against a real headless Chromium browser** - this sandbox
-can't complete an actual Cloudflare Access login, so the page was
-served by a local mock server implementing this project's real API
-response shapes, bypassing only the Access gate itself, not the
-dashboard's own logic. Confirmed: both tables render correctly from
-real-shaped data, and all five interactive actions (add rule,
-request-loosen with its password dialog, cancel, install-on-host with
-its own prompt) fire the exact right HTTP method/path/JSON body. `GET /`
-also confirmed to fail closed (500) with no Access config, same as the
-API routes.
+**Verified against a real headless Chromium browser** for the original
+Cloudflare-Access-era build (both tables rendering correctly, all five
+interactive actions firing the right HTTP request), and against a real
+`wrangler dev` instance via curl for the password-auth rewrite (see
+above) - the login page renders and posts to `/api/login` correctly, the
+real dashboard renders once a session cookie is set, and the new change-
+password section's three actions (request, view pending, cancel) were
+exercised through the same live-instance verification as the rest of the
+password auth work.
 
 **Phase 4's original scope is now fully built and verified** - Santa
-sync, ratchet, Fleet API, Cloudflare Access, and the dashboard. Real
-Cloudflare deployment (see setup steps below) is the one remaining step.
+sync, ratchet, Fleet API, dashboard password auth, and the dashboard
+itself. Real Cloudflare deployment of this final architecture (see setup
+steps below) is the one remaining step; Santa sync, the rule ratchet,
+and the sync-token fix below were already deployed for real and verified
+live against the actual Cloudflare account before this auth rewrite
+started, and need redeploying with these changes.
 
 ## StaticRules vs. sync - decided
 
@@ -192,11 +265,16 @@ table and `StaticRules` are two independent, additive enforcement
 sources from Santa's perspective - a binary gets blocked if *either*
 denies it, not "whichever one wins."
 
-## Real infra setup steps (not run yet)
+## Real infra setup steps
 
-None of this has been done on a real Cloudflare account yet - `wrangler.toml`
-has two placeholders (`__CLOUDFLARE_ACCOUNT_ID__`, `__D1_DATABASE_ID__`),
-same pattern as every other real-value placeholder in this repo.
+The D1 database and Worker deploy (steps 1-5 below) are already done for
+real, on the real Cloudflare account - see "Real Cloudflare deployment,
+and a real gap it found" above. `wrangler.toml`'s two placeholders
+(`__CLOUDFLARE_ACCOUNT_ID__`, `__D1_DATABASE_ID__`) should already be
+filled in locally as a result; they're left as placeholders in this repo
+deliberately, same pattern as every other real-value placeholder here.
+What's **not** done yet is redeploying with this auth rewrite - steps 6
+onward.
 
 1. `cd worker && npx wrangler login` (authenticates the CLI to your real
    Cloudflare account).
@@ -207,31 +285,50 @@ same pattern as every other real-value placeholder in this repo.
    dashboard's sidebar, or `wrangler whoami`).
 4. `npm run db:migrate:remote` - applies `schema.sql` to the real,
    remote D1 database (mirrors the local verification already done
-   above).
-5. `npm run deploy` - first real deploy, to a `workers.dev` subdomain by
-   default.
-6. In Cloudflare's Zero Trust dashboard, create an Access Application
-   pointing at that Worker's route, using the same Access policy already
-   locked down in Phase 1. Note its team domain and AUD tag - both
-   shown in the Application's settings once created.
-7. Set the secrets `worker/src/auth.ts`, `worker/src/cloudflareAccess.ts`,
-   and `worker/src/fleetClient.ts` need (all fail closed if left unset,
-   so none of this needs to happen before the deploy above):
+   above). Already run once for the original tables; running it again
+   is a no-op for those (`CREATE TABLE` without `IF NOT EXISTS` will
+   error on tables that already exist, which is why step 6 below uses a
+   separate incremental migration file instead of re-running the whole
+   schema).
+5. `npm run deploy` - deploys to the `workers.dev` subdomain.
+6. `npx wrangler d1 execute contentguard --remote --file=./migrations/0002_dashboard_auth.sql` -
+   adds this auth rewrite's three new tables (`dashboard_auth`,
+   `pending_password_changes`, `failed_login_attempts`) to the
+   already-deployed remote database without re-running the whole schema.
+7. Set the secrets this rewrite needs (both fail closed if left unset -
+   `SESSION_SIGNING_KEY` unset means no session can ever validate, so
+   `GET /` just keeps showing the login page; `SANTA_SYNC_TOKEN` unset
+   503s every sync request):
    ```bash
-   npx wrangler secret put CF_ACCESS_TEAM_DOMAIN   # from step 6
-   npx wrangler secret put CF_ACCESS_AUD           # from step 6
-   # LOOSEN_PASSWORD_HASH must be a SHA-256 hex digest, not the raw
-   # password - e.g. on macOS: echo -n 'your real password' | shasum -a 256.
-   # Deliberately set to the SAME password as your Cloudflare Access
-   # login - see this file's "Cloudflare Access auth" section above for
-   # why that's a real, considered tradeoff and not an oversight.
-   npx wrangler secret put LOOSEN_PASSWORD_HASH
+   # Any long random string - it's an internal HMAC key, not something
+   # you type in, so there's no "remember this" constraint like the
+   # dashboard password has.
+   npx wrangler secret put SESSION_SIGNING_KEY
+   npx wrangler secret put SANTA_SYNC_TOKEN
    # Fleet's own UI: "My account" -> "Get API token"
    npx wrangler secret put FLEET_BASE_URL
    npx wrangler secret put FLEET_API_TOKEN
    ```
-8. Only once the above is live: update
-   `profiles/santa-config.mobileconfig` with the real `SyncBaseURL` and
-   resolve the open design question above before actually pushing it -
-   this changes real enforcement behavior on the real Mac, same
-   "confirm before implementing" bar as everything else in this project.
+8. Bootstrap the real dashboard password - deliberately a manual D1
+   write, not a code path, so "no password set yet" can never mean
+   "anyone can set one" (see `db.ts`'s `getDashboardPasswordHash` doc
+   comment):
+   ```bash
+   # On macOS: echo -n 'your real password' | shasum -a 256
+   # (the same real office password from Team & Resources -> Devices ->
+   # Device Profiles, per the user's explicit choice - see this doc's
+   # intro for why.)
+   npx wrangler d1 execute contentguard --remote --command \
+     "INSERT INTO dashboard_auth (id, password_hash, updated_at) VALUES (1, '<hash>', <unix_ms_now>)"
+   ```
+9. Redeploy (`npm run deploy`) so the new routes/secrets take effect,
+   then confirm `GET /` on the real `workers.dev` URL shows the login
+   page and logs in with the real password before considering this done.
+10. Abandon the in-progress Cloudflare Access Application setup in the
+    Zero Trust dashboard - no longer needed.
+11. Only once all of the above is live: update
+    `profiles/santa-config.mobileconfig` with the real `SyncBaseURL` and
+    a `SyncExtraHeaders` entry carrying the real `SANTA_SYNC_TOKEN` value
+    before actually pushing it - this changes real enforcement behavior
+    on the real Mac, same "confirm before implementing" bar as everything
+    else in this project.

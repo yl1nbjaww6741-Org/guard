@@ -98,6 +98,57 @@ CREATE TABLE events (
 
 CREATE INDEX events_device_id_idx ON events(device_id);
 
+-- Dashboard password auth. Cloudflare Access was tried first (see this
+-- file's git history and mac/README.md's Phase 4 row) but abandoned in
+-- favor of this - the user has an existing, proven pattern from the
+-- ContentGuard Android app: a password gate with its own change flow,
+-- and changing the password itself goes through the exact same 24h
+-- ratchet as everything else, rather than being a special case.
+--
+-- Deliberately a SINGLE unified password, not two: the same value gates
+-- both general dashboard login and the loosen-request re-check
+-- (santaSync's rules still need a *separate credential check* at the
+-- moment of a loosen, per mac/README.md's ratchet decision - it's just
+-- checked against this same stored hash now, not a second independent
+-- secret, to avoid the two ever drifting out of sync after a password
+-- change).
+--
+-- Singleton row (id always 1) - there's exactly one password for this
+-- whole system, not per-user, matching the rest of this project's
+-- single-operator design.
+CREATE TABLE dashboard_auth (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    password_hash TEXT NOT NULL, -- SHA-256 hex digest, never the raw password
+    updated_at INTEGER NOT NULL
+);
+-- No seed row - bootstrapping the first password is a deliberate manual
+-- step (see mac/docs/PHASE_4_DASHBOARD_SETUP.md), not a code path that
+-- treats "no row yet" as "let anyone set one." Consistent with this
+-- project's fail-closed default everywhere else.
+
+-- Password changes follow the identical shape as pending_loosen_requests
+-- (queued, 24h delay, cancellable) - see ratchet.ts, which now applies
+-- both kinds of pending change from the same scheduled handler.
+CREATE TABLE pending_password_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    new_password_hash TEXT NOT NULL,
+    requested_at INTEGER NOT NULL,
+    applies_at INTEGER NOT NULL,
+    applied_at INTEGER,
+    cancelled_at INTEGER
+);
+
+-- Login lockout - the one real cost of dropping Cloudflare Access
+-- (mac/README.md's Phase 4 row): this Worker is now fully public, so
+-- login attempts need their own brute-force protection instead of
+-- getting it for free at the edge. Global, not per-IP - there's exactly
+-- one legitimate user of this whole system, so any burst of failures
+-- from anywhere is worth locking out regardless of source.
+CREATE TABLE failed_login_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempted_at INTEGER NOT NULL
+);
+
 -- Software packages uploaded to Fleet through this Worker (fleetClient.ts,
 -- Fleet's own POST /api/v1/fleet/software/package - see that file's doc
 -- comment for the real API reference this was built against). Keyed by

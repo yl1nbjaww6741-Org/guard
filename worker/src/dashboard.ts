@@ -7,20 +7,13 @@
 // the same-origin /api/... endpoints already built and verified in
 // earlier commits - this file adds no new backend logic of its own.
 //
-// Auth: relies entirely on Cloudflare Access protecting this Worker's
-// route at the edge (mac/README.md's Phase 4 row) plus this route's own
-// `requireCloudflareAccess` check in index.ts, same as every /api/...
-// route. No separate login form here - Access's own login page handles
-// that before a request ever reaches this code.
+// Auth: a password gate built into this Worker (session.ts issues a
+// signed cookie after login), not Cloudflare Access - see this project's
+// git history and schema.sql's dashboard_auth comment for why that
+// changed. index.ts decides which of the two functions below to render
+// based on whether the request already carries a valid session.
 
-export function renderDashboard(): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ContentGuard Control Panel</title>
-<style>
+const SHARED_STYLES = `
   :root { color-scheme: dark; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -50,11 +43,77 @@ export function renderDashboard(): string {
   .empty { color: #6b6f78; font-size: 0.85rem; font-style: italic; padding: 0.75rem 0; }
   .error { color: #ff6b6b; font-size: 0.85rem; margin-top: 0.5rem; }
   .status-msg { font-size: 0.8rem; margin-top: 0.5rem; min-height: 1.2em; }
+`;
+
+export function renderLoginPage(errorMessage?: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ContentGuard Control Panel</title>
+<style>
+  ${SHARED_STYLES}
+  body { max-width: 360px; padding-top: 20vh; }
+  form { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 1.5rem; }
+  input { padding: 0.6rem 0.7rem; }
+  button[type="submit"] { padding: 0.6rem; }
 </style>
 </head>
 <body>
   <h1>ContentGuard Control Panel</h1>
-  <div class="subtitle">Phase 4 - Santa rules and Fleet software, one place instead of jumping between apps.</div>
+  <div class="subtitle">Sign in to continue.</div>
+  <form id="login-form">
+    <input type="password" name="password" placeholder="Password" required autofocus>
+    <button type="submit">Log in</button>
+  </form>
+  <div class="error" id="login-error">${errorMessage ? escapeHtmlServer(errorMessage) : ""}</div>
+<script>
+document.getElementById("login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const password = new FormData(e.target).get("password");
+  const res = await fetch("/api/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ password }),
+  });
+  if (res.ok) {
+    location.reload();
+  } else {
+    const text = await res.text().catch(() => res.statusText);
+    document.getElementById("login-error").textContent = res.status === 429 ? "Too many failed attempts - try again later." : "Incorrect password.";
+  }
+});
+</script>
+</body>
+</html>`;
+}
+
+function escapeHtmlServer(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+export function renderDashboard(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ContentGuard Control Panel</title>
+<style>
+  ${SHARED_STYLES}
+  .top-bar { display: flex; justify-content: space-between; align-items: baseline; }
+</style>
+</head>
+<body>
+  <div class="top-bar">
+    <div>
+      <h1>ContentGuard Control Panel</h1>
+      <div class="subtitle">Phase 4 - Santa rules and Fleet software, one place instead of jumping between apps.</div>
+    </div>
+    <button id="logout-btn">Log out</button>
+  </div>
 
   <section>
     <h2>Santa rules</h2>
@@ -94,9 +153,24 @@ export function renderDashboard(): string {
     <div class="status-msg" id="software-status"></div>
   </section>
 
+  <section>
+    <h2>Change password</h2>
+    <div id="password-pending-note"></div>
+    <form class="inline" id="change-password-form">
+      <input type="password" name="current_password" placeholder="Current password" required>
+      <input type="password" name="new_password" placeholder="New password" required>
+      <button type="submit">Request change</button>
+    </form>
+    <div class="status-msg" id="password-status">Takes effect 24 hours after requesting, same as loosening a rule.</div>
+  </section>
+
 <script>
 async function api(path, opts) {
   const res = await fetch(path, { ...opts, credentials: "include" });
+  if (res.status === 401) {
+    location.reload(); // session expired - reload will show the login page
+    throw new Error("session expired");
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(\`\${res.status}: \${text}\`);
@@ -160,6 +234,16 @@ async function loadSoftware() {
   </tr>\`).join("");
 }
 
+async function loadPendingPasswordChange() {
+  const pending = await api("/api/password/pending-change");
+  const note = document.getElementById("password-pending-note");
+  if (!pending) {
+    note.innerHTML = "";
+    return;
+  }
+  note.innerHTML = \`<span class="pending-note">Password change queued, applies in \${timeUntil(pending.applies_at)}</span> <button data-cancel-password="\${pending.id}">Cancel</button>\`;
+}
+
 function escapeHtml(s) {
   const div = document.createElement("div");
   div.textContent = s ?? "";
@@ -171,6 +255,11 @@ function setStatus(id, message, isError) {
   el.textContent = message;
   el.className = "status-msg" + (isError ? " error" : "");
 }
+
+document.getElementById("logout-btn").addEventListener("click", async () => {
+  await fetch("/api/logout", { method: "POST", credentials: "include" });
+  location.reload();
+});
 
 document.getElementById("add-rule-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -251,8 +340,41 @@ document.getElementById("software-body").addEventListener("click", async (e) => 
   }
 });
 
+document.getElementById("change-password-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  try {
+    await api("/api/password/change-request", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        current_password: form.get("current_password"),
+        new_password: form.get("new_password"),
+      }),
+    });
+    e.target.reset();
+    setStatus("password-status", "Change queued - takes effect after the 24h delay.", false);
+    await loadPendingPasswordChange();
+  } catch (err) {
+    setStatus("password-status", "Failed to request change: " + err.message, true);
+  }
+});
+
+document.getElementById("password-pending-note").addEventListener("click", async (e) => {
+  const cancelId = e.target.getAttribute("data-cancel-password");
+  if (!cancelId) return;
+  try {
+    await api(\`/api/password/change-request/\${cancelId}/cancel\`, { method: "POST" });
+    setStatus("password-status", "Password change cancelled.", false);
+    await loadPendingPasswordChange();
+  } catch (err) {
+    setStatus("password-status", "Failed to cancel: " + err.message, true);
+  }
+});
+
 loadRules().catch((err) => setStatus("rules-status", "Failed to load rules: " + err.message, true));
 loadSoftware().catch((err) => setStatus("software-status", "Failed to load software: " + err.message, true));
+loadPendingPasswordChange().catch(() => {});
 </script>
 </body>
 </html>`;

@@ -356,3 +356,122 @@ export async function recordEvents(db: D1Database, machineId: string, events: Ev
   );
   await db.batch(statements);
 }
+
+// --- Dashboard password auth (replaces Cloudflare Access - see
+// schema.sql's dashboard_auth comment) ---
+
+// Returns null if no password has been bootstrapped yet - see
+// mac/docs/PHASE_4_DASHBOARD_SETUP.md's setup steps. Login always fails
+// in that state (fail closed), never treated as "anyone can set one."
+export async function getDashboardPasswordHash(db: D1Database): Promise<string | null> {
+  const row = await db.prepare(`SELECT password_hash FROM dashboard_auth WHERE id = 1`).first<{ password_hash: string }>();
+  return row?.password_hash ?? null;
+}
+
+export async function setDashboardPasswordHash(db: D1Database, passwordHash: string): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      `INSERT INTO dashboard_auth (id, password_hash, updated_at) VALUES (1, ?1, ?2)
+       ON CONFLICT(id) DO UPDATE SET password_hash = excluded.password_hash, updated_at = excluded.updated_at`
+    )
+    .bind(passwordHash, now)
+    .run();
+}
+
+// --- Login lockout (mitigates dropping Cloudflare Access's edge-level
+// brute-force protection - see auth.ts's requireSession doc comment) ---
+
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_LOCKOUT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes - long enough
+// to make brute-forcing impractical, short enough that a genuine
+// mistyped-password lockout for the real user resolves itself quickly
+// without needing any manual unlock mechanism.
+
+export async function recordFailedLoginAttempt(db: D1Database): Promise<void> {
+  await db.prepare(`INSERT INTO failed_login_attempts (attempted_at) VALUES (?1)`).bind(Date.now()).run();
+}
+
+export async function isLoginLockedOut(db: D1Database): Promise<boolean> {
+  const windowStart = Date.now() - LOGIN_LOCKOUT_WINDOW_MS;
+  const row = await db
+    .prepare(`SELECT COUNT(*) as count FROM failed_login_attempts WHERE attempted_at > ?1`)
+    .bind(windowStart)
+    .first<{ count: number }>();
+  return (row?.count ?? 0) >= LOGIN_MAX_FAILURES;
+}
+
+export async function clearFailedLoginAttempts(db: D1Database): Promise<void> {
+  await db.prepare(`DELETE FROM failed_login_attempts`).run();
+}
+
+// --- Password change ratchet (same shape as pending_loosen_requests -
+// see ratchet.ts, which applies both from the same scheduled handler) ---
+
+export interface PendingPasswordChange {
+  id: number;
+  new_password_hash: string;
+  requested_at: number;
+  applies_at: number;
+  applied_at: number | null;
+  cancelled_at: number | null;
+}
+
+const PASSWORD_CHANGE_DELAY_MS = 24 * 60 * 60 * 1000; // Same 24h as the
+// rule-loosen ratchet - deliberately not configurable, same reasoning
+// as ratchet.ts's LOOSEN_DELAY_MS.
+
+export async function hasActivePendingPasswordChange(db: D1Database): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT id FROM pending_password_changes WHERE applied_at IS NULL AND cancelled_at IS NULL`)
+    .first<{ id: number }>();
+  return row !== null;
+}
+
+export async function queuePasswordChange(db: D1Database, newPasswordHash: string): Promise<PendingPasswordChange> {
+  const now = Date.now();
+  const appliesAt = now + PASSWORD_CHANGE_DELAY_MS;
+  const result = await db
+    .prepare(
+      `INSERT INTO pending_password_changes (new_password_hash, requested_at, applies_at)
+       VALUES (?1, ?2, ?3)
+       RETURNING id, new_password_hash, requested_at, applies_at, applied_at, cancelled_at`
+    )
+    .bind(newPasswordHash, now, appliesAt)
+    .first<PendingPasswordChange>();
+  if (!result) throw new Error("queuePasswordChange: INSERT ... RETURNING returned no row");
+  return result;
+}
+
+export async function getActivePendingPasswordChange(db: D1Database): Promise<PendingPasswordChange | null> {
+  return db
+    .prepare(`SELECT id, new_password_hash, requested_at, applies_at, applied_at, cancelled_at
+              FROM pending_password_changes WHERE applied_at IS NULL AND cancelled_at IS NULL`)
+    .first<PendingPasswordChange>();
+}
+
+export async function cancelPasswordChange(db: D1Database, requestId: number): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE pending_password_changes SET cancelled_at = ?1
+       WHERE id = ?2 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now(), requestId)
+    .run();
+}
+
+export async function getDuePasswordChanges(db: D1Database): Promise<PendingPasswordChange[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, new_password_hash, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_password_changes
+       WHERE applies_at <= ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now())
+    .all<PendingPasswordChange>();
+  return result.results ?? [];
+}
+
+export async function markPasswordChangeApplied(db: D1Database, requestId: number): Promise<void> {
+  await db.prepare(`UPDATE pending_password_changes SET applied_at = ?1 WHERE id = ?2`).bind(Date.now(), requestId).run();
+}

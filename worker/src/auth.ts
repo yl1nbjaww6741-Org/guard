@@ -1,9 +1,14 @@
-// Auth helpers. Two unrelated things live here:
-//  - requireSantaSyncToken: gates the Santa sync-protocol endpoints
+// Auth helpers. Three unrelated things live here:
+//  - requireSyncToken: gates the Santa sync-protocol endpoints
 //    (santaSync.ts) - see its own doc comment for why this exists at all.
-//  - verifyLoosenPassword: the ratchet's second, distinct gate on top of
-//    Cloudflare Access (cloudflareAccess.ts), which gates general
-//    /api/... dashboard access.
+//  - hashPassword/verifyPasswordHash: shared password hashing, used by
+//    both the dashboard login (session.ts issues a cookie after this
+//    passes) and the loosen-request's separate re-check.
+//  - requireSession: gates general /api/... dashboard access - replaces
+//    the earlier Cloudflare Access approach entirely (see git history
+//    and schema.sql's dashboard_auth comment for why).
+
+import { hasValidSession } from "./session";
 
 async function sha256Hex(input: string): Promise<string> {
   const data = new TextEncoder().encode(input);
@@ -11,10 +16,9 @@ async function sha256Hex(input: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// Constant-time comparison - real timing-attack resistance matters more
-// here than it did for the now-retired API_TOKEN stopgap, since this is
-// comparing against the actual credential that gates a real security
-// action (loosening a restriction), not just general API access.
+// Constant-time comparison - matters for both the sync token and the
+// dashboard password hash, which each gate a real security-relevant
+// action, not just general noise.
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -45,13 +49,11 @@ function timingSafeEqual(a: string, b: string): boolean {
 // decision - see PHASE_4_DASHBOARD_SETUP.md), sent as the
 // X-ContentGuard-Sync-Token header on every sync request; this function
 // checks it server-side. A plain equality-checked static token, not
-// hashed like the loosen password - this is a machine-generated,
+// hashed like the dashboard password - this is a machine-generated,
 // machine-compared credential exchanged over TLS, not a human-typed
 // password with different reuse-across-contexts risk.
 export async function requireSyncToken(request: Request, env: { SANTA_SYNC_TOKEN?: string }): Promise<Response | null> {
   if (!env.SANTA_SYNC_TOKEN) {
-    // Fail closed on missing config - an unconfigured sync token should
-    // never silently mean "sync is open to anyone."
     return new Response("Sync token not configured", { status: 503 });
   }
   const provided = request.headers.get("X-ContentGuard-Sync-Token") ?? "";
@@ -61,21 +63,24 @@ export async function requireSyncToken(request: Request, env: { SANTA_SYNC_TOKEN
   return null;
 }
 
-// The ratchet's second gate (mac/README.md's Phase 4 row: loosening
-// needs "a re-entered password at the moment of that specific action" -
-// on top of, not instead of, Cloudflare Access getting you into the
-// dashboard at all). Deliberately checked separately from Access's own
-// JWT, even though the user has chosen to set `LOOSEN_PASSWORD_HASH` to
-// the same real password value as their Access login (their explicit
-// call, made for simplicity over the extra friction a genuinely
-// different credential would add - see this project's git history for
-// the tradeoff as discussed). Whatever value it's set to, this function
-// re-checks it independently at the moment of the loosen action, rather
-// than trusting that an already-valid Access session is sufficient on its
-// own - that's what makes this a second gate at all, not just a
-// restatement of the first one.
-export async function verifyLoosenPassword(password: string, env: { LOOSEN_PASSWORD_HASH?: string }): Promise<boolean> {
-  if (!env.LOOSEN_PASSWORD_HASH) return false; // unconfigured = never passes
-  const providedHash = await sha256Hex(password);
-  return timingSafeEqual(providedHash, env.LOOSEN_PASSWORD_HASH);
+export async function hashPassword(password: string): Promise<string> {
+  return sha256Hex(password);
+}
+
+export async function verifyPasswordHash(password: string, storedHash: string): Promise<boolean> {
+  const providedHash = await hashPassword(password);
+  return timingSafeEqual(providedHash, storedHash);
+}
+
+// Gates general dashboard/API access (index.ts's /api/... routes and
+// GET /). Replaces requireCloudflareAccess entirely - see this file's
+// git history for the tradeoff that decision accepts (no edge-level
+// blocking; db.ts's login-lockout functions are the mitigation for
+// that, checked separately in the login handler itself, not here).
+export async function requireSession(request: Request, env: { SESSION_SIGNING_KEY?: string }): Promise<Response | null> {
+  if (!env.SESSION_SIGNING_KEY) {
+    return new Response("Session signing key not configured", { status: 503 });
+  }
+  const valid = await hasValidSession(request, env.SESSION_SIGNING_KEY);
+  return valid ? null : new Response("Unauthorized", { status: 401 });
 }

@@ -27,34 +27,39 @@ database_id = "__D1_DATABASE_ID__"
 # this session (pppc.mobileconfig, santa-config.mobileconfig's own two
 # placeholders).
 
-# Cloudflare Access (mac/README.md's Phase 4 row: dashboard auth reuses
-# the existing Zero Trust instance from Phase 1) is configured at the
-# Cloudflare dashboard/Zero Trust level, not here - an Access Application
-# needs to be created pointing at this Worker's route once one exists.
-# See mac/docs/PHASE_4_DASHBOARD_SETUP.md's setup steps. Once that
-# Application exists, its team domain and AUD tag go into
-# CF_ACCESS_TEAM_DOMAIN/CF_ACCESS_AUD below - src/cloudflareAccess.ts
-# verifies every /api/... request's Access JWT against them.
+# Dashboard auth was originally going to reuse the existing Cloudflare
+# Zero Trust instance (mac/README.md's Phase 4 row, first draft), but
+# that's been abandoned - see this project's git history and
+# schema.sql's dashboard_auth comment. What actually gates the dashboard
+# now is a password gate built directly into this Worker (src/auth.ts,
+# src/session.ts, src/dashboard.ts): a SHA-256 hash of the password lives
+# in the dashboard_auth D1 table (bootstrapped via a `wrangler d1
+# execute` command, not a Wrangler secret - see
+# mac/docs/PHASE_4_DASHBOARD_SETUP.md's setup steps), and changing it
+# goes through the same 24h ratchet as loosening a Santa rule.
 
 # Ratchet mechanism (src/ratchet.ts, src/index.ts's `scheduled` export) -
-# checks for due loosen requests every 15 minutes. Not every minute:
-# a 24h delay doesn't need minute-level precision, and this keeps the
-# free-tier Cron Trigger invocation count sane.
+# checks for due loosen requests AND due password changes every 15
+# minutes. Not every minute: a 24h delay doesn't need minute-level
+# precision, and this keeps the free-tier Cron Trigger invocation count
+# sane.
 [triggers]
 crons = ["*/15 * * * *"]
 
-# Three secrets, none set yet:
-#   - LOOSEN_PASSWORD_HASH (src/auth.ts) - `wrangler secret put
-#     LOOSEN_PASSWORD_HASH`, a SHA-256 hex digest of the real password,
-#     never the raw password. Deliberately set to the same real password
-#     value as the Cloudflare Access login below (the user's explicit
-#     choice, for simplicity over the extra friction a genuinely
-#     different credential would add).
-#   - CF_ACCESS_TEAM_DOMAIN (src/cloudflareAccess.ts) - e.g.
-#     "yourteam.cloudflareaccess.com", from the Access Application's
-#     settings.
-#   - CF_ACCESS_AUD (src/cloudflareAccess.ts) - the Access Application's
-#     AUD tag, also from its settings.
-# All three fail closed when unset (every /api/... request is rejected
-# until they're real), so leaving them unset is safe, just
-# non-functional, until Phase 4's actual deployment.
+# Two secrets, neither set yet:
+#   - SANTA_SYNC_TOKEN (src/auth.ts's requireSyncToken) - `wrangler
+#     secret put SANTA_SYNC_TOKEN`, a static shared token sent by Santa
+#     via SyncExtraHeaders (profiles/santa-config.mobileconfig) and
+#     checked on every sync-protocol request.
+#   - SESSION_SIGNING_KEY (src/session.ts) - `wrangler secret put
+#     SESSION_SIGNING_KEY`, an internal HMAC key for signing dashboard
+#     session cookies. Not user-facing and not the dashboard password
+#     itself, so it stays a plain Wrangler secret rather than going
+#     through D1/the ratchet.
+# Both fail closed when unset (every /api/... or sync request is
+# rejected until they're real, and GET / just keeps showing the login
+# page since no session can ever validate), so leaving them unset is
+# safe, just non-functional, until Phase 4's actual deployment. The
+# dashboard password hash itself is a third piece of required setup, but
+# lives in D1 (dashboard_auth table), not here - see
+# mac/docs/PHASE_4_DASHBOARD_SETUP.md for the bootstrap command.
