@@ -142,15 +142,15 @@ export function renderDashboard(): string {
 
   <section>
     <h2>Installed apps</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory for a host - one click to block or allow, instead of manually finding a Team ID in Terminal.</div>
-    <form class="inline" id="load-apps-form">
-      <input name="host" placeholder="Hostname, serial, or UUID" required style="flex: 1; min-width: 220px;">
-      <button type="submit">Load installed apps</button>
-    </form>
+    <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory - one click to block or allow, instead of manually finding a Team ID in Terminal.</div>
     <table id="installed-apps-table">
       <thead><tr><th>Name</th><th>Version</th><th>Detected identifier</th><th></th></tr></thead>
-      <tbody id="installed-apps-body"><tr><td colspan="4" class="empty">Enter a host above and load its installed apps.</td></tr></tbody>
+      <tbody id="installed-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
     </table>
+    <form class="inline" id="load-apps-form">
+      <input name="host" placeholder="Different host? (hostname, serial, or UUID)" style="flex: 1; min-width: 220px;">
+      <button type="submit">Load</button>
+    </form>
     <div class="status-msg" id="installed-apps-status"></div>
   </section>
 
@@ -234,7 +234,10 @@ async function loadRules() {
 }
 
 async function loadInstalledApps(host) {
-  const apps = await api(\`/api/installed-software?host=\${encodeURIComponent(host)}\`);
+  // No host -> the Worker falls back to DEFAULT_FLEET_HOST (this
+  // project's one real Mac) - see softwareApi.ts's handleListInstalledSoftware.
+  const qs = host ? \`?host=\${encodeURIComponent(host)}\` : "";
+  const apps = await api(\`/api/installed-software\${qs}\`);
   const body = document.getElementById("installed-apps-body");
   if (apps.length === 0) {
     body.innerHTML = '<tr><td colspan="4" class="empty">No installed apps returned - Fleet may not have inventoried this host recently.</td></tr>';
@@ -444,6 +447,7 @@ document.getElementById("password-pending-note").addEventListener("click", async
 loadRules().catch((err) => setStatus("rules-status", "Failed to load rules: " + err.message, true));
 loadSoftware().catch((err) => setStatus("software-status", "Failed to load software: " + err.message, true));
 loadPendingPasswordChange().catch(() => {});
+loadInstalledApps().catch((err) => setStatus("installed-apps-status", "Failed to load: " + err.message, true));
 </script>
 </body>
 </html>`;

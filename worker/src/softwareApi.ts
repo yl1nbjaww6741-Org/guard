@@ -101,12 +101,19 @@ function pickIdentifier(item: FleetHostSoftwareItem): { identifier: string; rule
 // user needing to manually `codesign -dv` in Terminal the way Tor
 // Browser's original Phase 3 rule was found). Same host-resolution rule
 // as handleInstallPackage: a human-meaningful identifier only, never a
-// raw Fleet host ID from a caller.
+// raw Fleet host ID from a caller. Falls back to DEFAULT_FLEET_HOST
+// (types.ts) when no explicit `host` is given - this project only has
+// one real Mac in scope right now, so requiring it be typed in every
+// time is friction, not a safeguard; an explicit `host` still always
+// overrides it.
 export async function handleListInstalledSoftware(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const host = url.searchParams.get("host");
+  const host = url.searchParams.get("host") || env.DEFAULT_FLEET_HOST;
   if (!host) {
-    return jsonResponse({ error: "missing required 'host' query parameter (hostname, serial, or UUID)" }, 400);
+    return jsonResponse(
+      { error: "missing required 'host' query parameter (hostname, serial, or UUID) - or set DEFAULT_FLEET_HOST" },
+      400
+    );
   }
 
   const hostId = await findHostId(env, host);

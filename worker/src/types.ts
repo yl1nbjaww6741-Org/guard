@@ -127,6 +127,18 @@ export interface Env {
   // treatment as everything else.
   FLEET_BASE_URL?: string;
   FLEET_API_TOKEN?: string;
+  // Fleet host identifier (hostname/serial/UUID) to fall back to when
+  // the "Installed apps" dashboard section isn't given an explicit one -
+  // this project only ever has one real Mac in scope (see
+  // mac/README.md's Phase 4 row's forward-compat note: generic enough
+  // for a future second device, not actually built for one yet), so
+  // requiring that identifier to be typed in every single time is pure
+  // friction, not a real safeguard. Not a secret - a serial number isn't
+  // sensitive the way FLEET_API_TOKEN is, so this is a plain wrangler.toml
+  // [vars] entry, not a `wrangler secret put`. The host query param this
+  // falls back from still works and always will, for the day a second
+  // device is genuinely in scope.
+  DEFAULT_FLEET_HOST?: string;
 }
 
 // --- Fleet's own REST API shapes (the subset this Worker uses) ---

@@ -19,6 +19,18 @@ binding = "DB"
 database_name = "contentguard"
 database_id = "8cb09d1d-1497-449f-86d5-f7c754c5f884"
 
+# Not a secret - a Fleet host identifier isn't sensitive the way
+# FLEET_API_TOKEN is, so this is a plain var, not a `wrangler secret
+# put`. Real value: the real Mac's serial number (confirmed via Fleet's
+# own host detail page, GGV7PVVR96) - the most stable identifier for a
+# specific physical device (survives a hostname rename, unlike relying
+# on `Lukes-Air.localdomain`). See types.ts's DEFAULT_FLEET_HOST comment
+# for why this exists at all: this project only has one real Mac in
+# scope, so the "Installed apps" dashboard section defaults to it
+# instead of requiring it typed in every time.
+[vars]
+DEFAULT_FLEET_HOST = "GGV7PVVR96"
+
 # No route/custom domain configured yet - defaults to the workers.dev
 # subdomain Cloudflare assigns on first deploy. Santa's SyncBaseURL in
 # profiles/santa-config.mobileconfig gets updated to point at whatever
@@ -47,7 +59,9 @@ database_id = "8cb09d1d-1497-449f-86d5-f7c754c5f884"
 [triggers]
 crons = ["*/15 * * * *"]
 
-# Two secrets, neither set yet:
+# Secrets (all set on the real deployment as of Phase 4's close-out -
+# see mac/docs/PHASE_4_DASHBOARD_SETUP.md - listed here for reference,
+# not because any are still outstanding):
 #   - SANTA_SYNC_TOKEN (src/auth.ts's requireSyncToken) - `wrangler
 #     secret put SANTA_SYNC_TOKEN`, a static shared token sent by Santa
 #     via SyncExtraHeaders (profiles/santa-config.mobileconfig) and
@@ -57,10 +71,10 @@ crons = ["*/15 * * * *"]
 #     session cookies. Not user-facing and not the dashboard password
 #     itself, so it stays a plain Wrangler secret rather than going
 #     through D1/the ratchet.
-# Both fail closed when unset (every /api/... or sync request is
-# rejected until they're real, and GET / just keeps showing the login
-# page since no session can ever validate), so leaving them unset is
-# safe, just non-functional, until Phase 4's actual deployment. The
-# dashboard password hash itself is a third piece of required setup, but
-# lives in D1 (dashboard_auth table), not here - see
-# mac/docs/PHASE_4_DASHBOARD_SETUP.md for the bootstrap command.
+#   - FLEET_BASE_URL / FLEET_API_TOKEN (src/fleetClient.ts) - the real
+#     Fleet instance and an API token from its own UI ("My account" ->
+#     "Get API token").
+# All fail closed when unset (every /api/... or sync request that needs
+# one is rejected until it's real), so leaving any unset is safe, just
+# non-functional. The dashboard password hash itself is set the same
+# way as before - it lives in D1 (dashboard_auth table), not here.
