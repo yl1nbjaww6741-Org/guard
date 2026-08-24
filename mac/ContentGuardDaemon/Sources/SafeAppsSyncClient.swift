@@ -118,7 +118,7 @@ final class SafeAppsSyncClient {
             // therefore not writable by anything but the daemon itself -
             // that ownership, not the file's readability, is the actual
             // security property this depends on.
-            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemPath: tmpPath)
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tmpPath)
             _ = try FileManager.default.replaceItemAt(URL(fileURLWithPath: path), withItemAt: URL(fileURLWithPath: tmpPath))
         } catch {
             log("SafeAppsSyncClient: failed to write cache: \(error)")
