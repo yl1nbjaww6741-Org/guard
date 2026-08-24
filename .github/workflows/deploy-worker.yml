@@ -1,0 +1,60 @@
+# Auto-deploys worker/ to the real Cloudflare account on every push that
+# touches it - replaces the manual "run this in the Codespace" step this
+# project relied on through Phase 4's build/debug cycle (real wrangler
+# OAuth login kept failing in sandboxed environments, and every deploy
+# needing a human with real Cloudflare credentials was the actual
+# bottleneck, not anything about the code itself).
+#
+# Real, considered tradeoff, not an oversight: whoever/whatever holds
+# CLOUDFLARE_API_TOKEN below can deploy arbitrary code to this Worker,
+# which means bypassing the password gate/ratchet entirely - deploy
+# access has always implied that (the Cloudflare account itself already
+# had this power), this workflow just makes exercising it require a git
+# push instead of a manual `wrangler deploy` from an authenticated
+# machine. Acceptable for a single-user personal project; keep the
+# token scoped narrowly (Workers Scripts:Edit + D1:Edit only, not a
+# full-account token) for the same reason every other Cloudflare API
+# token in this project's history has been scoped down, not broad.
+#
+# tsc --noEmit runs before every deploy, not just at commit time - a
+# type error never reaches the real Worker, even if it somehow slipped
+# past local verification before being pushed.
+
+name: Deploy Cloudflare Worker
+
+on:
+  push:
+    branches:
+      - claude/contentguard-macos-phase-0-47king
+    paths:
+      - "worker/**"
+  # Lets a deploy be triggered by hand from GitHub's Actions tab without
+  # needing a throwaway commit, e.g. to redeploy after only a Cloudflare
+  # secret changed.
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Typecheck and deploy
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: worker

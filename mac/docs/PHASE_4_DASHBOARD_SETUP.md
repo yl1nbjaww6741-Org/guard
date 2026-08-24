@@ -418,3 +418,45 @@ blocking anything.
     firewall allow rule, not a wildcard), and every sync handler crashed
     on Santa's default deflate-compressed request bodies (fixed with a
     decompression step, `worker/src/santaSync.ts`'s `parseJsonBody()`).
+
+## CI auto-deploy
+
+`.github/workflows/deploy-worker.yml` deploys `worker/` to the real
+Cloudflare account automatically on every push that touches it (typecheck
+first, deploy only if that passes) - replaces the manual
+"run this in the Codespace" step every fix in this doc needed up to this
+point, since real `wrangler` OAuth login kept failing in sandboxed
+environments and a human with real credentials being the bottleneck for
+every deploy was the actual friction, not the code changes themselves.
+
+**Real tradeoff, named deliberately, not hidden**: whoever/whatever holds
+the `CLOUDFLARE_API_TOKEN` GitHub Actions secret this workflow uses can
+deploy arbitrary code to this Worker - which means bypassing the
+password gate and the 24h ratchet entirely, by simply deploying a build
+that skips those checks. Deploy access has always implied this (your own
+Cloudflare account already had this power); this just moves *where* that
+power is exercised from "a manually-run `wrangler deploy`" to "a git
+push to this branch." Acceptable for a single-user personal project, and
+mitigated the same way every other Cloudflare API token in this
+project's history has been - scoped narrowly (Workers Scripts:Edit +
+D1:Edit only, not a full-account token), not broad.
+
+**One-time setup, done once by the repo owner** (this session can't do
+this part - creating a GitHub repo secret needs the GitHub web UI, not
+git push access):
+1. Create a scoped Cloudflare API token (same permissions as the one
+   already used for manual deploys - Workers Scripts:Edit, D1:Edit) at
+   `dash.cloudflare.com/profile/api-tokens`.
+2. In this repo's GitHub settings: **Settings -> Secrets and variables ->
+   Actions -> New repository secret**, name `CLOUDFLARE_API_TOKEN`,
+   paste the token value.
+3. Push to `worker/` (or use the workflow's `workflow_dispatch` trigger
+   from the Actions tab to fire it without a new commit) and confirm the
+   run succeeds in the Actions tab.
+
+Once set up, manual `wrangler deploy` runs (via the Codespace or
+otherwise) are no longer needed for `worker/` changes - just push. The
+Cloudflare secrets this Worker needs at runtime (`SESSION_SIGNING_KEY`,
+`SANTA_SYNC_TOKEN`, `FLEET_BASE_URL`, `FLEET_API_TOKEN`, the D1-stored
+dashboard password) are unaffected by this - those still only need
+setting once, not on every deploy, same as before.
