@@ -20,23 +20,32 @@ account_id = "442630b07c6b3eed257dfed98b49cfcd"
 # owns). No zone_id/zone_name needed here - custom_domain:true auto-
 # resolves the zone from the domain itself. Cloudflare provisions the
 # DNS record and TLS cert automatically on the next deploy; no manual
-# DNS step needed. The original workers.dev URL
-# (contentguard-worker.yl1nbjaww6741-4.workers.dev) keeps working
-# alongside this - workers_dev isn't disabled here, deliberately: cutting
-# it off immediately would break Santa's sync and the Fleet install flow
-# the moment this deploys, before profiles/santa-config.mobileconfig is
-# repushed and a matching Cloudflare Gateway allow rule exists for the
-# new domain (same real failure mode already hit once in this project's
-# history with the workers.dev URL itself). Disable workers_dev later,
-# once everything's confirmed cut over to the real domain. This has to
-# be placed before any [table] header below - TOML keys after a [table]
-# belong to that table, not the top-level document, so this was
-# originally (wrongly) written after [vars] and silently became
-# vars.routes instead of a real top-level route - caught by validating
-# the file with a real TOML parser rather than trusting it looked right.
+# DNS step needed. This has to be placed before any [table] header below
+# - TOML keys after a [table] belong to that table, not the top-level
+# document, so this was originally (wrongly) written after [vars] and
+# silently became vars.routes instead of a real top-level route - caught
+# by validating the file with a real TOML parser rather than trusting it
+# looked right.
 routes = [
   { pattern = "panel.lukep009.download", custom_domain = true }
 ]
+
+# Explicit, not left to wrangler's default: per wrangler's own real
+# source (node_modules/wrangler/wrangler-dist/cli.js's
+# getSubdomainValues - `defaultWorkersDev = routes.length === 0`),
+# workers_dev SILENTLY defaults to false the moment any `routes` entry
+# exists, unless set explicitly here. Found live, the hard way: the
+# first deploy of the custom domain above (with no explicit
+# workers_dev) immediately 404'd the original
+# contentguard-worker.yl1nbjaww6741-4.workers.dev URL, breaking it
+# before profiles/santa-config.mobileconfig was ever repushed to point
+# Santa at the new domain - exactly the failure this comment originally
+# (wrongly) claimed wasn't going to happen. Set true here to actually
+# keep both URLs live during the transition; flip to false only once
+# everything (santa-config.mobileconfig, the Fleet install flow, the
+# Cloudflare Gateway allow rule) is confirmed cut over to the real
+# domain.
+workers_dev = true
 
 [[d1_databases]]
 binding = "DB"
