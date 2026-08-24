@@ -74,6 +74,26 @@ extension AppDelegate: CaptureManagerDelegate {
         }
         frameProcessor.process(pixelBuffer: pixelBuffer, displayID: displayID)
     }
+
+    /// A frame ScreenCaptureKit reported as carrying no new content still
+    /// has to bump framesProcessed, exactly like a fully processed one.
+    ///
+    /// This is load-bearing, not bookkeeping: the daemon's frame-stall
+    /// detection (HeartbeatMonitor, ContentGuardConfig.frameStallGraceSeconds)
+    /// treats a frozen framesProcessed count as a silently dead capture
+    /// stream and fails closed by sleeping the display. Skipping unchanged
+    /// frames without reporting them here would freeze that counter during
+    /// any genuinely static screen - reading a long page without touching
+    /// the trackpad is enough - and the daemon would put the display to
+    /// sleep every 30 seconds on a completely healthy agent.
+    ///
+    /// The counter's real meaning is "the capture pipeline is alive and
+    /// keeping up", which an unchanged frame proves just as well as a
+    /// processed one. It was never a count of classifier inferences - the
+    /// skin prefilter has always skipped most frames well before that point.
+    func captureManagerDidSkipUnchangedFrame(_ manager: CaptureManager) {
+        heartbeatClient.recordFrameProcessed()
+    }
 }
 
 extension AppDelegate: FrameProcessorDelegate {

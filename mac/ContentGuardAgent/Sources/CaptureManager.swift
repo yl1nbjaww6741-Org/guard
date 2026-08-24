@@ -11,6 +11,14 @@ import ScreenCaptureKit
 
 protocol CaptureManagerDelegate: AnyObject {
     func captureManager(_ manager: CaptureManager, didCapture pixelBuffer: CVPixelBuffer, on displayID: CGDirectDisplayID)
+
+    /// Called INSTEAD of didCapture when ScreenCaptureKit delivered a frame
+    /// carrying no new content (see frameStatus(of:)). The frame is not
+    /// worth processing, but its arrival still proves the capture pipeline
+    /// is alive - and that liveness has to reach the heartbeat, or the
+    /// daemon reads a healthy agent as stalled. See the implementation in
+    /// main.swift for the real failure mode this exists to prevent.
+    func captureManagerDidSkipUnchangedFrame(_ manager: CaptureManager)
 }
 
 final class CaptureManager: NSObject {
@@ -19,7 +27,14 @@ final class CaptureManager: NSObject {
     private let appScopeManager: AppScopeManager
     private let overlayManager: OverlayManager
     private var streams: [CGDirectDisplayID: SCStream] = [:]
-    private let outputQueue = DispatchQueue(label: "com.contentguard.agent.capture-output")
+    /// Explicitly .utility, matching FrameProcessor's own processing queue
+    /// (which always had it - this one was simply missed). Left unspecified,
+    /// a dispatch queue can inherit the priority of whatever enqueues onto
+    /// it, which on Apple Silicon is the difference between this landing on
+    /// efficiency cores and it landing on performance cores. Nothing here is
+    /// latency-critical: frames arrive on a fixed 3-second cadence and the
+    /// health check runs every 15 seconds.
+    private let outputQueue = DispatchQueue(label: "com.contentguard.agent.capture-output", qos: .utility)
 
     /// Set every time a real frame is delivered, and reset to "now" whenever
     /// streams are (re)built - see startStreamHealthCheck()'s doc comment
@@ -206,9 +221,18 @@ final class CaptureManager: NSObject {
     /// it.
     private func startStreamHealthCheck() {
         let t = DispatchSource.makeTimerSource(queue: outputQueue)
+        // Leeway matching HeartbeatClient's and HeartbeatMonitor's timers,
+        // which both already have it - this one was missed. A strict-deadline
+        // repeating wakeup keeps the CPU from settling into deeper idle
+        // states, the same reasoning AppLockManager's own comments spell out
+        // for why it refuses to poll when there is nothing locked. Detecting
+        // a dead stream a second later than nominal costs nothing: the whole
+        // point of captureStreamStallGraceSeconds being 15s against the
+        // daemon's 30s is that it has comfortable margin to spare.
         t.schedule(
             deadline: .now() + ContentGuardConfig.captureStreamStallGraceSeconds,
-            repeating: ContentGuardConfig.captureStreamStallGraceSeconds
+            repeating: ContentGuardConfig.captureStreamStallGraceSeconds,
+            leeway: .seconds(1)
         )
         t.setEventHandler { [weak self] in
             self?.checkStreamHealth()
@@ -269,13 +293,100 @@ extension CaptureManager: AppScopeManagerDelegate {
 extension CaptureManager: SCStreamOutput {
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, sampleBuffer.isValid else { return }
-        guard let pixelBuffer = sampleBuffer.imageBuffer else { return }
 
         let displayID = streams.first(where: { $0.value === stream })?.key
         guard let displayID else { return }
 
+        // Set before the unchanged-frame branch below, deliberately: a frame
+        // arriving at all is the liveness signal, whether or not it carries
+        // new content. Putting this after that branch would make a static
+        // screen look like a dead stream to checkStreamHealth() and trigger
+        // a pointless full rebuild every captureStreamStallGraceSeconds.
         lastFrameDeliveredAt = Date()
+
+        // Skip everything downstream for a frame ScreenCaptureKit itself
+        // says carries nothing new. On a static screen - most of an ordinary
+        // working day - this used to still cost a full CoreImage GPU render
+        // pass to 64px plus a per-pixel skin scan, every captureInterval, on
+        // every display, purely to re-derive "nothing changed" via the
+        // perceptual hash. The compositor already knows that authoritatively
+        // and tells us for free.
+        //
+        // Not a weakening of detection: this is the OS reporting that no
+        // pixels changed, not a heuristic guessing that nothing interesting
+        // is on screen. The perceptual-hash debounce in FrameProcessor stays
+        // exactly as it was, still catching frames that did change but not
+        // materially.
+        guard carriesNewContent(frameStatus(of: sampleBuffer)) else {
+            delegate?.captureManagerDidSkipUnchangedFrame(self)
+            return
+        }
+
+        // Checked only on the processable path - a skipped frame can
+        // legitimately arrive with no image buffer at all, and returning
+        // early on that before reporting liveness above would reintroduce
+        // the exact stall-detection problem this ordering avoids.
+        guard let pixelBuffer = sampleBuffer.imageBuffer else { return }
+
         delegate?.captureManager(self, didCapture: pixelBuffer, on: displayID)
+    }
+
+    /// Reads SCStreamFrameInfoStatus off the sample buffer's attachments -
+    /// confirmed against the real ScreenCaptureKit headers in the installed
+    /// SDK (SCStream.h), not recalled from memory: Apple's own web docs for
+    /// this rendered as an empty JS shell on every fetch attempt, the same
+    /// failure mode this project already hit with buf.build and Santa's
+    /// docs. The header documents SCFrameStatusIdle verbatim as "new frame
+    /// was not generated because the display did not change."
+    ///
+    ///
+    /// Returns .complete when the status can't be read at all - deliberately
+    /// failing toward doing the work rather than skipping it. This is a load
+    /// shedder, and an unreadable attachment must never become the reason a
+    /// real frame went unscanned, the same "when in doubt, don't shed"
+    /// policy skinAnalysis() already applies on its own failure paths.
+    private func frameStatus(of sampleBuffer: CMSampleBuffer) -> SCFrameStatus {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+            as? [[SCStreamFrameInfo: Any]],
+            let rawStatus = attachments.first?[.status] as? Int,
+            let status = SCFrameStatus(rawValue: rawStatus)
+        else {
+            return .complete
+        }
+        return status
+    }
+
+    /// Which statuses are worth spending the pipeline on.
+    ///
+    /// `.complete` is the ordinary "new frame was generated" case.
+    ///
+    /// `.started` is included deliberately, and it is not an optimisation
+    /// detail - it closes a real gap this change would otherwise have
+    /// introduced. The header defines it as the first frame sent after a
+    /// stream starts, and it carries genuine content. Streams here get
+    /// rebuilt constantly (wake from sleep, display hotplug, a safe app
+    /// launching, the self-heal timer), so if `.started` were skipped and
+    /// the screen then stayed perfectly static, every subsequent frame
+    /// would be `.idle` and whatever was on screen at wake would never be
+    /// scanned at all. Treating it as processable makes each rebuild
+    /// re-examine the screen once, which is exactly the behaviour that
+    /// existed before this change.
+    ///
+    /// Everything else means there is nothing new to look at: `.idle` (the
+    /// display did not change), `.blank` (the display has gone blank),
+    /// `.suspended` (updates suspended), `.stopped` (the stream stopped).
+    private func carriesNewContent(_ status: SCFrameStatus) -> Bool {
+        switch status {
+        case .complete, .started:
+            return true
+        case .idle, .blank, .suspended, .stopped:
+            return false
+        @unknown default:
+            // A status this build has never seen - process it rather than
+            // skip it, same "when in doubt, don't shed" policy as
+            // frameStatus(of:)'s own unreadable-attachment fallback above.
+            return true
+        }
     }
 }
 
