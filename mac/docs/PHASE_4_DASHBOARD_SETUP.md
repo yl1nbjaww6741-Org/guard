@@ -638,3 +638,85 @@ both updated profiles through Fleet (**Controls -> OS settings -> Custom
 settings**, or via the dashboard's own "Update this profile" feature),
 then confirm on the real Mac that MDM reports both profiles verified at
 their new `PayloadVersion`.
+
+## The gap above is now closed: MDM profile changes go through the ratchet too
+
+After living with the gap above for a day, the user asked directly: "Every
+loosening on panel should result in a password and 24 hour cool down - I
+was just able to upload the MDM to panel and didn't have a cool down."
+This closes it - option 1 from the choice offered earlier, now actually
+built.
+
+**Design decision, and why**: this Worker still has no plist-parsing
+dependency (same "minimal moving parts" reasoning as `configProfiles.ts`
+and everywhere else), so it genuinely cannot tell whether an uploaded
+`.mobileconfig` is a tightening or a loosening. Rather than trust a
+self-attested "this is just a tightening, skip the delay" checkbox - which
+would just move the impulse-control problem one level up, since this whole
+system exists precisely because self-attestation in the moment isn't
+trustworthy - **every** profile create/update now goes through the ratchet
+unconditionally, no exceptions. The real cost: a future genuine tightening
+(e.g. adding a new blocked domain to `dns.mobileconfig`) now also waits
+24h and needs a password, same as a loosening would. Accepted as the
+correct fail-closed default, matching this project's existing bar (e.g.
+`dashboard_auth`'s "no seed row" behavior) rather than trying to be clever
+about a case this Worker can't actually distinguish.
+
+**What was built** (`pending_profile_changes` in `schema.sql` +
+`migrations/0003_pending_profile_changes.sql`, same shape as
+`pending_loosen_requests`/`pending_password_changes`):
+- `POST /api/config-profiles` and `PATCH /api/config-profiles/:uuid` no
+  longer call Fleet directly. Both now require a `password` field
+  alongside the file (re-checked against the same dashboard password as
+  every other ratchet re-check - `handleLoosenRequest`'s exact pattern),
+  then queue the change and return `202` with `applies_at` ~24h out,
+  never touching Fleet at queue time.
+- The uploaded file's real bytes are held in D1 as a `BLOB` for the full
+  delay - there's nowhere else to keep them, and Fleet receives nothing
+  until the change actually applies. Small XML plists (a few KB), nowhere
+  near D1's row-size limits.
+- A second update queued for the same `profile_uuid` before the first
+  applies is rejected with `409` (`ProfileChangeAlreadyPendingError`) -
+  same "don't let two competing changes race" reasoning as the Santa
+  rules table's per-rule loosen-request uniqueness.
+- The Cloudflare Cron Trigger's `scheduled` handler (`wrangler.toml`'s
+  `[triggers]`, already firing every 15 minutes for the other two
+  ratchets) now also applies every due profile change -
+  `ratchet.ts`'s `applyDueProfileChanges`, which is the one place that
+  actually calls `fleetClient.ts`'s `createConfigurationProfile`/
+  `updateConfigurationProfile`. A failed apply attempt (Fleet
+  unreachable, a real rejection) leaves the change queued with
+  `apply_error` recorded rather than marking it applied or dropping it -
+  the next scheduled tick retries automatically, and a persistent
+  failure stays visible on the dashboard instead of silently never
+  happening.
+- Dashboard: the per-profile "Update this profile" form and the general
+  "Upload new profile" form both gained a required password field; on
+  success the form is replaced by a "queued, applies in ~Xh" note (per-
+  profile) or added to a new "pending profile changes" list under the
+  upload form (covers pending creates too, which have no profile row of
+  their own to attach to since Fleet hasn't assigned a `profile_uuid`
+  yet) - each with its own Cancel button, no password required to
+  cancel, same as cancelling a rule loosen or a password change.
+
+**Verified against a real local `wrangler dev` + mock Fleet server + real
+headless Chromium session, same bar as everything else in this phase**:
+- Direct curl tests: wrong/missing password -> `403`; correct password ->
+  `202` queued with a real ~24h `applies_at`; a second update on the same
+  `profile_uuid` while one is pending -> `409`; unauthenticated ->
+  `401`.
+- Forced a queued item's `applies_at` into the past and hit the local
+  `scheduled` test endpoint directly: the item applied (left the pending
+  list, mock Fleet received the real create call) and a genuinely
+  unreachable Fleet (mock server killed mid-test) left the item queued
+  with `apply_error` set rather than dropping it - confirmed it retried
+  and succeeded once Fleet was reachable again on the next tick, without
+  any manual intervention.
+- In-browser: a wrong password on the per-profile update form shows an
+  inline error and leaves the form in place; the correct password queues
+  it and replaces the form with a "queued" note (no update form left
+  behind to double-submit against); the general upload form queues and
+  appends to the pending-changes list; cancelling one pending item removes
+  only that one.
+
+`tsc --noEmit` passes clean throughout.

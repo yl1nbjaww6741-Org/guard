@@ -163,3 +163,39 @@ CREATE TABLE software_packages (
     hash_sha256 TEXT,
     uploaded_at INTEGER NOT NULL
 );
+
+-- Ratchet for MDM configuration profile changes - same shape as
+-- pending_loosen_requests/pending_password_changes (24h delay, applied
+-- from the same scheduled handler, see ratchet.ts), added after a real
+-- gap: uploading/replacing a .mobileconfig through the dashboard
+-- previously applied instantly, no delay of any kind, completely
+-- bypassing the ratchet's whole purpose - found live when the user
+-- uploaded a real profile change and noticed there was no cooldown.
+-- This Worker has no way to tell whether an uploaded profile is a
+-- tightening or a loosening (no plist-parsing dependency, same
+-- "minimal moving parts" reasoning as everywhere else in this project -
+-- see configProfiles.ts), so every profile create/update is treated as
+-- a loosening for ratchet purposes, unconditionally - the safe,
+-- fail-closed default, not an attempt to guess.
+--
+-- The uploaded file's bytes have to be held here for the full 24h delay
+-- (there's nowhere else to keep them - Fleet doesn't receive anything
+-- until the change actually applies), hence file_content as a BLOB;
+-- these are small XML plists (a few KB), nowhere near D1's row-size
+-- limits.
+CREATE TABLE pending_profile_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL CHECK (action IN ('create', 'update')),
+    profile_uuid TEXT,   -- NULL for 'create' - Fleet assigns one once applied
+    filename TEXT,       -- original uploaded filename, for dashboard display only
+    file_content BLOB NOT NULL,
+    requested_at INTEGER NOT NULL,
+    applies_at INTEGER NOT NULL,
+    applied_at INTEGER,
+    cancelled_at INTEGER,
+    apply_error TEXT     -- last error if a scheduled apply attempt failed
+                          -- (e.g. Fleet unreachable, a real API rejection) -
+                          -- left un-applied in that case so the next
+                          -- scheduled tick retries automatically, not
+                          -- silently dropped
+);

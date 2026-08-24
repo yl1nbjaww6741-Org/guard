@@ -10,15 +10,22 @@ import {
   applyLoosen,
   getDueLoosenRequests,
   getDuePasswordChanges,
+  getDueProfileChanges,
   hasActivePendingLoosen,
   hasActivePendingPasswordChange,
+  hasActivePendingProfileChange,
   markLoosenRequestApplied,
   markPasswordChangeApplied,
+  markProfileChangeApplied,
+  markProfileChangeFailed,
   queueLoosenRequest,
   queuePasswordChange,
+  queueProfileChange,
   setDashboardPasswordHash,
 } from "./db";
-import type { PendingLoosenRequest, PendingPasswordChange } from "./db";
+import type { PendingLoosenRequest, PendingPasswordChange, PendingProfileChangeSummary, ProfileChangeAction } from "./db";
+import { createConfigurationProfile, updateConfigurationProfile } from "./fleetClient";
+import type { Env } from "./types";
 
 export class LoosenAlreadyPendingError extends Error {
   constructor(ruleId: number) {
@@ -29,6 +36,12 @@ export class LoosenAlreadyPendingError extends Error {
 export class PasswordChangeAlreadyPendingError extends Error {
   constructor() {
     super("a password change is already pending");
+  }
+}
+
+export class ProfileChangeAlreadyPendingError extends Error {
+  constructor(profileUuid: string) {
+    super(`profile ${profileUuid} already has an active pending change`);
   }
 }
 
@@ -75,4 +88,57 @@ export async function applyDuePasswordChanges(db: D1Database): Promise<number> {
     await markPasswordChangeApplied(db, change.id);
   }
   return due.length;
+}
+
+// Every MDM configuration profile create/update now goes through this
+// same ratchet - see schema.sql's pending_profile_changes comment for
+// the real gap this closes: uploading/replacing a .mobileconfig through
+// the dashboard previously applied instantly, no delay of any kind.
+// Called by the dashboard API once the current-password re-check has
+// already passed (same contract as requestLoosen/requestPasswordChange
+// above) - this function itself only enforces the "don't double-queue
+// the same profile" invariant (update only - a create has no
+// profile_uuid yet to collide on) and starts the 24h clock.
+export async function requestProfileChange(
+  db: D1Database,
+  fields: { action: ProfileChangeAction; profileUuid: string | null; filename: string | null; fileContent: ArrayBuffer }
+): Promise<PendingProfileChangeSummary> {
+  if (fields.action === "update" && fields.profileUuid && (await hasActivePendingProfileChange(db, fields.profileUuid))) {
+    throw new ProfileChangeAlreadyPendingError(fields.profileUuid);
+  }
+  return queueProfileChange(db, fields);
+}
+
+// Applies every profile change whose 24h delay has elapsed - unlike the
+// two ratchets above, this one has to actually reach out to Fleet's real
+// API (fleetClient.ts), which can genuinely fail (Fleet unreachable, a
+// real rejection like a PayloadIdentifier mismatch on an update). A
+// failure here does NOT mark the change applied - it's left in the
+// queue with `apply_error` recorded, so the next scheduled tick retries
+// automatically rather than the change silently vanishing. Needs `env`
+// (not just `db`, unlike the other two apply* functions above) since
+// fleetClient.ts's functions need Fleet's own base URL/token.
+export async function applyDueProfileChanges(env: Env): Promise<number> {
+  const due = await getDueProfileChanges(env.DB);
+  let appliedCount = 0;
+  for (const change of due) {
+    try {
+      const formData = new FormData();
+      formData.append("profile", new Blob([change.file_content]), change.filename ?? "profile.mobileconfig");
+      if (change.action === "create") {
+        await createConfigurationProfile(env, formData);
+      } else {
+        if (!change.profile_uuid) {
+          throw new Error(`pending profile change ${change.id} has action 'update' but no profile_uuid`);
+        }
+        await updateConfigurationProfile(env, change.profile_uuid, formData);
+      }
+      await markProfileChangeApplied(env.DB, change.id);
+      appliedCount++;
+    } catch (error) {
+      console.error(`failed to apply pending profile change ${change.id}:`, error);
+      await markProfileChangeFailed(env.DB, change.id, error instanceof Error ? error.message : String(error));
+    }
+  }
+  return appliedCount;
 }

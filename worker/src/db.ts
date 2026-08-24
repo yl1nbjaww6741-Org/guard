@@ -505,3 +505,125 @@ export async function getDuePasswordChanges(db: D1Database): Promise<PendingPass
 export async function markPasswordChangeApplied(db: D1Database, requestId: number): Promise<void> {
   await db.prepare(`UPDATE pending_password_changes SET applied_at = ?1 WHERE id = ?2`).bind(Date.now(), requestId).run();
 }
+
+// --- MDM config profile change ratchet (same shape/delay as
+// pending_loosen_requests and pending_password_changes above - see
+// ratchet.ts and schema.sql's own comment on pending_profile_changes for
+// the real gap this closes) ---
+
+export type ProfileChangeAction = "create" | "update";
+
+// Public/list shape - deliberately excludes file_content (the raw
+// uploaded bytes have no reason to round-trip back to the dashboard,
+// and BLOB columns aren't cheap to shuttle through JSON for no reason).
+export interface PendingProfileChangeSummary {
+  id: number;
+  action: ProfileChangeAction;
+  profile_uuid: string | null;
+  filename: string | null;
+  requested_at: number;
+  applies_at: number;
+  applied_at: number | null;
+  cancelled_at: number | null;
+  apply_error: string | null;
+}
+
+// Only used internally by the scheduled apply step, which is the one
+// place that actually needs the real bytes to hand to Fleet.
+export interface PendingProfileChangeWithContent extends PendingProfileChangeSummary {
+  file_content: ArrayBuffer;
+}
+
+const PROFILE_CHANGE_DELAY_MS = 24 * 60 * 60 * 1000; // Same 24h as every
+// other ratchet delay in this file - deliberately not configurable, same
+// reasoning as LOOSEN_DELAY_MS/PASSWORD_CHANGE_DELAY_MS above.
+
+// Only meaningful for 'update' (a 'create' has no profile_uuid yet to
+// collide on) - prevents queuing two competing updates for the same
+// profile, same "which one applies?" ambiguity this pattern already
+// avoids for rule loosens.
+export async function hasActivePendingProfileChange(db: D1Database, profileUuid: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT id FROM pending_profile_changes
+       WHERE profile_uuid = ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(profileUuid)
+    .first<{ id: number }>();
+  return row !== null;
+}
+
+export async function queueProfileChange(
+  db: D1Database,
+  fields: { action: ProfileChangeAction; profileUuid: string | null; filename: string | null; fileContent: ArrayBuffer }
+): Promise<PendingProfileChangeSummary> {
+  const now = Date.now();
+  const appliesAt = now + PROFILE_CHANGE_DELAY_MS;
+  const result = await db
+    .prepare(
+      `INSERT INTO pending_profile_changes (action, profile_uuid, filename, file_content, requested_at, applies_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+       RETURNING id, action, profile_uuid, filename, requested_at, applies_at, applied_at, cancelled_at, apply_error`
+    )
+    .bind(fields.action, fields.profileUuid, fields.filename, fields.fileContent, now, appliesAt)
+    .first<PendingProfileChangeSummary>();
+  if (!result) throw new Error("queueProfileChange: INSERT ... RETURNING returned no row");
+  return result;
+}
+
+export async function cancelProfileChange(db: D1Database, requestId: number): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE pending_profile_changes SET cancelled_at = ?1
+       WHERE id = ?2 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now(), requestId)
+    .run();
+}
+
+// Every request still in flight - for the dashboard to show "queued,
+// applies at <time>" and offer a cancel action, same as
+// listActiveLoosenRequests above.
+export async function listActiveProfileChanges(db: D1Database): Promise<PendingProfileChangeSummary[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, action, profile_uuid, filename, requested_at, applies_at, applied_at, cancelled_at, apply_error
+       FROM pending_profile_changes
+       WHERE applied_at IS NULL AND cancelled_at IS NULL
+       ORDER BY applies_at ASC`
+    )
+    .all<PendingProfileChangeSummary>();
+  return result.results ?? [];
+}
+
+// Includes file_content - only the scheduled apply step calls this.
+export async function getDueProfileChanges(db: D1Database): Promise<PendingProfileChangeWithContent[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, action, profile_uuid, filename, file_content, requested_at, applies_at, applied_at, cancelled_at, apply_error
+       FROM pending_profile_changes
+       WHERE applies_at <= ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now())
+    .all<PendingProfileChangeWithContent>();
+  return result.results ?? [];
+}
+
+export async function markProfileChangeApplied(db: D1Database, requestId: number): Promise<void> {
+  await db
+    .prepare(`UPDATE pending_profile_changes SET applied_at = ?1, apply_error = NULL WHERE id = ?2`)
+    .bind(Date.now(), requestId)
+    .run();
+}
+
+// Left un-applied (applied_at stays NULL) so the next scheduled tick
+// retries automatically - a transient Fleet outage shouldn't mean a
+// queued change silently never happens. apply_error is surfaced on the
+// dashboard so a persistent failure (e.g. a genuine Fleet rejection,
+// not a blip) doesn't go unnoticed indefinitely either.
+export async function markProfileChangeFailed(db: D1Database, requestId: number, errorMessage: string): Promise<void> {
+  await db
+    .prepare(`UPDATE pending_profile_changes SET apply_error = ?1 WHERE id = ?2`)
+    .bind(errorMessage.slice(0, 500), requestId)
+    .run();
+}

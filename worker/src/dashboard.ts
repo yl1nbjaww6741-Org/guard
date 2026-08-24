@@ -154,11 +154,14 @@ export function renderDashboard(): string {
     <h2>MDM lockdown (Fleet)</h2>
     <div class="subtitle" style="margin-bottom: 0;">What Fleet has actually confirmed applied, not just what profiles/ intends.</div>
     <div id="mdm-lockdown-body">Loading...</div>
-    <form class="inline" id="upload-profile-form" style="margin-top: 1rem;">
+    <div class="subtitle" style="margin-top: 1rem; margin-bottom: 0;">Uploads and updates take effect after a 24h delay, same as loosening a Santa rule - see mac/docs/PHASE_4_DASHBOARD_SETUP.md's "Loosening MDM profile restrictions" section.</div>
+    <form class="inline" id="upload-profile-form" style="margin-top: 0.5rem;">
       <input type="file" name="profile" accept=".mobileconfig" required>
-      <button type="submit">Upload new profile</button>
+      <input type="password" name="password" placeholder="Password to confirm" required style="min-width: 160px;">
+      <button type="submit">Queue upload (24h delay)</button>
     </form>
     <div class="status-msg" id="upload-profile-status"></div>
+    <div id="profile-changes-pending"></div>
   </section>
 
   <section>
@@ -285,12 +288,37 @@ async function loadConfigProfileDetails() {
 }
 
 async function loadHostStatus() {
-  const [data, profileDetails] = await Promise.all([
+  const [data, profileDetails, pendingProfileChanges] = await Promise.all([
     api("/api/host-status"),
     loadConfigProfileDetails().catch(() => []),
+    api("/api/pending-profile-changes").catch(() => []),
   ]);
   renderSyncHealth(data);
-  renderMdmLockdown(data, profileDetails);
+  renderMdmLockdown(data, profileDetails, pendingProfileChanges);
+  renderPendingProfileChanges(pendingProfileChanges);
+}
+
+// Every queued profile create/update, in one place - covers both
+// pending updates (which also get an inline note on their own profile
+// row, see renderMdmLockdown) and pending creates (which have no row of
+// their own to show up in at all, since Fleet hasn't assigned a
+// profile_uuid yet). Cancelling from here works for both kinds - see the
+// #profile-changes-pending click listener below.
+function renderPendingProfileChanges(pending) {
+  const el = document.getElementById("profile-changes-pending");
+  if (!pending || pending.length === 0) {
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = pending.map((p) => {
+    const label = p.action === "create"
+      ? \`Upload "\${escapeHtml(p.filename || "new profile")}"\`
+      : \`Update \${escapeHtml(p.filename || p.profile_uuid)}\`;
+    const errNote = p.apply_error
+      ? \` <span class="pending-note" style="color:#ff6b6b;">(last attempt failed: \${escapeHtml(p.apply_error)} - will retry)</span>\`
+      : "";
+    return \`<div class="status-row">\${label}: <span class="pending-note">queued, applies in \${timeUntil(p.applies_at)}</span>\${errNote} <button data-cancel-profile-change="\${p.id}">Cancel</button></div>\`;
+  }).join("");
 }
 
 // Santa's sync freshness (devices.last_preflight_at) and Fleet's own
@@ -326,7 +354,7 @@ function renderSyncHealth(data) {
   el.innerHTML = rows.join("");
 }
 
-function renderMdmLockdown(data, profileDetails) {
+function renderMdmLockdown(data, profileDetails, pendingProfileChanges) {
   const el = document.getElementById("mdm-lockdown-body");
   if (!data.fleet) {
     el.innerHTML = \`<div class="empty">\${escapeHtml(data.fleetError ?? "Fleet not available")}</div>\`;
@@ -334,6 +362,13 @@ function renderMdmLockdown(data, profileDetails) {
   }
   const f = data.fleet;
   const detailsByName = Object.fromEntries((profileDetails || []).map((d) => [d.name, d]));
+  // Only 'update' changes key by profile_uuid - a pending 'create' has
+  // none yet (Fleet hasn't assigned one), so it can't be tied to any
+  // existing row here; it only shows up in the general
+  // #profile-changes-pending list below.
+  const pendingByProfileUuid = Object.fromEntries(
+    (pendingProfileChanges || []).filter((p) => p.profile_uuid).map((p) => [p.profile_uuid, p])
+  );
   const parts = [];
 
   const deOn = f.disk_encryption_enabled;
@@ -347,21 +382,32 @@ function renderMdmLockdown(data, profileDetails) {
     } else {
       // Each profile is a <details> - click to see what it actually
       // restricts (from configProfiles.ts's hand-kept summary, merged by
-      // name) and to replace its content in Fleet via
-      // updateConfigurationProfile, without leaving this page.
+      // name) and to queue a replacement via updateConfigurationProfile
+      // (through the ratchet - ratchet.ts's requestProfileChange),
+      // without leaving this page.
       parts.push(f.mdm.profiles.map((p) => {
         const detail = detailsByName[p.name];
         const restrictionsHtml = detail
           ? \`<ul>\${detail.restrictions.map((r) => \`<li>\${escapeHtml(r)}</li>\`).join("")}</ul>\`
           : '<div class="empty" style="padding:0.25rem 0;">No local detail available for this profile.</div>';
+        const pendingChange = pendingByProfileUuid[p.profile_uuid];
+        // A pending update already queued for this profile - show its
+        // state instead of a second update form (same "don't let two
+        // competing changes queue at once" reasoning as the Santa rules
+        // table's own loosen-request row). Cancelling happens from the
+        // general pending list below, not duplicated here.
+        const updateSection = pendingChange
+          ? \`<div class="status-row"><span class="pending-note">Update queued, applies in \${timeUntil(pendingChange.applies_at)}</span>\${pendingChange.apply_error ? ' <span class="pending-note" style="color:#ff6b6b;">(last attempt failed, will retry)</span>' : ""}</div>\`
+          : \`<form class="inline update-profile-form" data-profile-uuid="\${escapeHtml(p.profile_uuid)}">
+              <input type="file" name="profile" accept=".mobileconfig" required>
+              <input type="password" name="password" placeholder="Password to confirm" required>
+              <button type="submit">Queue update (24h delay)</button>
+            </form>
+            <div class="status-msg"></div>\`;
         return \`<details class="profile-details">
           <summary><span class="mdm-status-\${escapeHtml(p.status)}">\${escapeHtml(p.status)}</span> \${escapeHtml(p.name)}</summary>
           \${restrictionsHtml}
-          <form class="inline update-profile-form" data-profile-uuid="\${escapeHtml(p.profile_uuid)}">
-            <input type="file" name="profile" accept=".mobileconfig" required>
-            <button type="submit">Update this profile</button>
-          </form>
-          <div class="status-msg"></div>
+          \${updateSection}
         </details>\`;
       }).join(""));
     }
@@ -382,11 +428,13 @@ function renderMdmLockdown(data, profileDetails) {
       const fd = new FormData(form);
       try {
         await api(\`/api/config-profiles/\${encodeURIComponent(profileUuid)}\`, { method: "PATCH", body: fd });
-        statusEl.textContent = "Updated - Fleet will re-push it to the Mac.";
-        statusEl.className = "status-msg";
-        form.reset();
+        // Queued, not applied - loadHostStatus() re-render replaces this
+        // very form with a "queued, applies in ~24h" note (see the
+        // pendingChange branch above), which itself is the success
+        // indicator; no separate message needed here.
+        await loadHostStatus();
       } catch (err) {
-        statusEl.textContent = "Failed: " + err.message;
+        statusEl.textContent = "Failed to queue: " + err.message;
         statusEl.className = "status-msg error";
       }
     });
@@ -527,9 +575,23 @@ document.getElementById("upload-profile-form").addEventListener("submit", async 
     await api("/api/config-profiles", { method: "POST", body: fd });
     e.target.reset();
     await loadHostStatus();
-    setStatus("upload-profile-status", "Uploaded - now tracked by Fleet.", false);
+    setStatus("upload-profile-status", "Queued - applies in ~24h, same as any other loosening on this dashboard.", false);
   } catch (err) {
-    setStatus("upload-profile-status", "Failed to upload: " + err.message, true);
+    setStatus("upload-profile-status", "Failed to queue upload: " + err.message, true);
+  }
+});
+
+// Static, same placement reasoning as upload-profile-form above -
+// #profile-changes-pending lives outside #mdm-lockdown-body, and this
+// handler itself calls loadHostStatus() on success.
+document.getElementById("profile-changes-pending").addEventListener("click", async (e) => {
+  const cancelId = e.target.getAttribute("data-cancel-profile-change");
+  if (!cancelId) return;
+  try {
+    await api(\`/api/pending-profile-changes/\${cancelId}/cancel\`, { method: "POST" });
+    await loadHostStatus();
+  } catch (err) {
+    setStatus("upload-profile-status", "Failed to cancel: " + err.message, true);
   }
 });
 

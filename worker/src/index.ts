@@ -37,6 +37,7 @@ import {
   PasswordChangeAlreadyPendingError,
   applyDueLoosenRequests,
   applyDuePasswordChanges,
+  applyDueProfileChanges,
   requestLoosen,
   requestPasswordChange,
 } from "./ratchet";
@@ -44,7 +45,9 @@ import { clearSessionCookie, createSessionCookie, hasValidSession } from "./sess
 import { STATIC_RULES } from "./staticRules";
 import { handleGetHostStatus } from "./hostStatus";
 import {
+  handleCancelProfileChange,
   handleListConfigProfileDetails,
+  handleListPendingProfileChanges,
   handleUpdateConfigProfile,
   handleUploadConfigProfile,
 } from "./configProfilesApi";
@@ -317,11 +320,17 @@ export default {
       return handleGetHostStatus(request, env);
     }
 
-    // --- Config profile detail/upload/update (session-gated) ---
+    // --- Config profile detail/upload/update (session-gated) - upload
+    // and update both queue through the same ratchet as Santa rule
+    // loosening/the dashboard password (ratchet.ts's requestProfileChange),
+    // never applying to Fleet directly - see configProfilesApi.ts's doc
+    // comment. ---
     const isConfigProfileApiRoute =
       url.pathname === "/api/config-profile-details" ||
       url.pathname === "/api/config-profiles" ||
-      url.pathname.match(/^\/api\/config-profiles\/[^/]+$/);
+      url.pathname === "/api/pending-profile-changes" ||
+      url.pathname.match(/^\/api\/config-profiles\/[^/]+$/) ||
+      url.pathname.match(/^\/api\/pending-profile-changes\/\d+\/cancel$/);
     if (isConfigProfileApiRoute) {
       const authError = await requireSession(request, env);
       if (authError) return authError;
@@ -332,9 +341,16 @@ export default {
       if (url.pathname === "/api/config-profiles" && request.method === "POST") {
         return handleUploadConfigProfile(request, env);
       }
+      if (url.pathname === "/api/pending-profile-changes" && request.method === "GET") {
+        return handleListPendingProfileChanges(env);
+      }
       const updateMatch = url.pathname.match(/^\/api\/config-profiles\/([^/]+)$/);
       if (updateMatch && request.method === "PATCH") {
         return handleUpdateConfigProfile(decodeURIComponent(updateMatch[1]!), request, env);
+      }
+      const cancelProfileChangeMatch = url.pathname.match(/^\/api\/pending-profile-changes\/(\d+)\/cancel$/);
+      if (cancelProfileChangeMatch && request.method === "POST") {
+        return handleCancelProfileChange(Number(cancelProfileChangeMatch[1]), env);
       }
       return new Response("Method Not Allowed", { status: 405 });
     }
@@ -388,6 +404,10 @@ export default {
     const appliedPasswordChanges = await applyDuePasswordChanges(env.DB);
     if (appliedPasswordChanges > 0) {
       console.log(`applied ${appliedPasswordChanges} due password change(s)`);
+    }
+    const appliedProfileChanges = await applyDueProfileChanges(env);
+    if (appliedProfileChanges > 0) {
+      console.log(`applied ${appliedProfileChanges} due profile change(s)`);
     }
   },
 };
