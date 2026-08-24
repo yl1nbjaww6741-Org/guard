@@ -140,10 +140,34 @@ and this sandbox can't cheaply fake that:
 Access Application - needs real Zero Trust configuration, not done yet
 (see setup steps below).
 
-## Not built yet
+## Also real and verified: the dashboard itself
 
-- **The dashboard itself** - no frontend exists yet. Everything above is
-  backend only.
+`worker/src/dashboard.ts` - a single-page HTML+vanilla-JS dashboard
+(no build step, no external CDN dependency), served at `GET /` by the
+Worker itself, gated by the same `requireCloudflareAccess` check as
+every `/api/...` route. Two sections matching the "single control
+panel" scope: Santa rules (list, add, request-loosen with a password
+prompt, cancel a pending loosen, a live countdown to when a queued
+loosen applies) and Fleet software (list, upload, install on a host).
+
+One small backend addition the dashboard needed: `GET /api/loosen-requests`,
+listing every loosen request still in flight - `db.ts`'s
+`listActiveLoosenRequests`.
+
+**Verified against a real headless Chromium browser** - this sandbox
+can't complete an actual Cloudflare Access login, so the page was
+served by a local mock server implementing this project's real API
+response shapes, bypassing only the Access gate itself, not the
+dashboard's own logic. Confirmed: both tables render correctly from
+real-shaped data, and all five interactive actions (add rule,
+request-loosen with its password dialog, cancel, install-on-host with
+its own prompt) fire the exact right HTTP method/path/JSON body. `GET /`
+also confirmed to fail closed (500) with no Access config, same as the
+API routes.
+
+**Phase 4's original scope is now fully built and verified** - Santa
+sync, ratchet, Fleet API, Cloudflare Access, and the dashboard. Real
+Cloudflare deployment (see setup steps below) is the one remaining step.
 
 ## StaticRules vs. sync - decided
 
