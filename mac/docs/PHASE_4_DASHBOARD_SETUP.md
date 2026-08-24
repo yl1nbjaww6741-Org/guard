@@ -51,24 +51,46 @@ traffic:
 - Both error paths work: a `machine_id` mismatch between the URL and the
   request body returns 400, an unknown route returns 404.
 
+## Also real and verified: the ratchet mechanism
+
+`POST /api/rules` tightens immediately (new/edited rule, no delay).
+`POST /api/rules/:id/loosen-request` is the only way to loosen one
+(`BLOCKLIST` -> `REMOVE`) - requires a password re-check
+(`LOOSEN_PASSWORD_HASH`, a SHA-256 digest, never the raw password) and
+queues a `pending_loosen_requests` row with `applies_at` set to exactly
+24 hours out. A Cloudflare Cron Trigger (`worker/wrangler.toml`, every 15
+minutes) applies anything due. `POST /api/loosen-requests/:id/cancel`
+cancels a queued one before it applies - no password needed to cancel,
+only to start a loosen.
+
+All of it gated by an interim `API_TOKEN` bearer check (`worker/src/auth.ts`)
+since the rule-management API can add/remove real enforcement rules and
+Cloudflare Access isn't wired in yet - not the real access-control story
+for this project, a stopgap until it is.
+
+Verified against a real local `wrangler dev` instance: tighten, list,
+reject-direct-REMOVE, wrong-password 403, correct-password 202 with
+`applies_at` confirmed exactly `requested_at + 24h`, duplicate-request
+409, nonexistent-rule 404, the scheduled handler (triggered via
+`wrangler dev`'s real `/__scheduled` endpoint, not simulated) correctly
+flipping a due rule to `REMOVE`, and a separately-cancelled request
+correctly *not* applying even when forced due and the scheduled handler
+re-run.
+
 ## Not built yet
 
 - **Fleet API integration** for `.pkg` deployment from the dashboard -
   no code written yet. Fleet's REST API (the same one its own web UI
   uses) supports uploading software and targeting installs
   programmatically; this Worker doesn't call it yet.
-- **The ratchet mechanism** - `pending_loosen_requests` exists as a
-  table, nothing writes to or reads from it yet. Needs: an endpoint to
-  queue a loosen request (re-checking the password at that moment, per
-  `mac/README.md`'s Phase 4 row), and a scheduled Worker (Cloudflare Cron
-  Triggers) that applies queued requests once their 24-hour `applies_at`
-  has passed.
 - **Cloudflare Access auth** - not wired into the Worker at all yet. The
   plan (reuse the existing Zero Trust instance from Phase 1) is an
   infrastructure/configuration step done in Cloudflare's dashboard, not
   code - see setup steps below - plus a small amount of Worker code to
   verify the `Cf-Access-Jwt-Assertion` header as defense in depth rather
-  than trusting Access alone.
+  than trusting Access alone (and, once that's real, to retire the
+  interim `API_TOKEN` stopgap or keep both as layered defense - not yet
+  decided).
 - **The dashboard itself** - no frontend exists yet. Everything above is
   backend only.
 
@@ -104,12 +126,21 @@ same pattern as every other real-value placeholder in this repo.
 4. `npm run db:migrate:remote` - applies `schema.sql` to the real,
    remote D1 database (mirrors the local verification already done
    above).
-5. `npm run deploy` - first real deploy, to a `workers.dev` subdomain by
+5. Set the two secrets `worker/src/auth.ts` needs (both fail closed if
+   left unset, so this can happen any time before real use, not
+   necessarily before first deploy):
+   ```bash
+   npx wrangler secret put API_TOKEN
+   # LOOSEN_PASSWORD_HASH must be a SHA-256 hex digest, not the raw
+   # password - e.g. on macOS: echo -n 'your real password' | shasum -a 256
+   npx wrangler secret put LOOSEN_PASSWORD_HASH
+   ```
+6. `npm run deploy` - first real deploy, to a `workers.dev` subdomain by
    default.
-6. In Cloudflare's Zero Trust dashboard, create an Access Application
+7. In Cloudflare's Zero Trust dashboard, create an Access Application
    pointing at that Worker's route, using the same Access policy already
    locked down in Phase 1.
-7. Only once the above is live: update
+8. Only once the above is live: update
    `profiles/santa-config.mobileconfig` with the real `SyncBaseURL` and
    resolve the open design question above before actually pushing it -
    this changes real enforcement behavior on the real Mac, same
