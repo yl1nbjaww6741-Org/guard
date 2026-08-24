@@ -637,11 +637,12 @@ export async function markProfileChangeFailed(db: D1Database, requestId: number,
 export interface SafeAppBundleIdRecord {
   bundle_id: string;
   added_at: number;
+  name: string | null;
 }
 
 export async function listSafeAppBundleIds(db: D1Database): Promise<SafeAppBundleIdRecord[]> {
   const result = await db
-    .prepare(`SELECT bundle_id, added_at FROM safe_app_bundle_ids ORDER BY added_at DESC`)
+    .prepare(`SELECT bundle_id, added_at, name FROM safe_app_bundle_ids ORDER BY added_at DESC`)
     .all<SafeAppBundleIdRecord>();
   return result.results ?? [];
 }
@@ -655,10 +656,10 @@ export async function isSafeAppBundleIdApproved(db: D1Database, bundleId: string
 // has elapsed - INSERT OR IGNORE since re-applying an already-approved
 // ID (shouldn't happen, but not worth a hard failure over) is a no-op,
 // not an error.
-export async function addSafeAppBundleId(db: D1Database, bundleId: string): Promise<void> {
+export async function addSafeAppBundleId(db: D1Database, bundleId: string, name: string | null): Promise<void> {
   await db
-    .prepare(`INSERT OR IGNORE INTO safe_app_bundle_ids (bundle_id, added_at) VALUES (?1, ?2)`)
-    .bind(bundleId, Date.now())
+    .prepare(`INSERT OR IGNORE INTO safe_app_bundle_ids (bundle_id, added_at, name) VALUES (?1, ?2, ?3)`)
+    .bind(bundleId, Date.now(), name)
     .run();
 }
 
@@ -680,6 +681,7 @@ export interface PendingSafeAppAddition {
   applies_at: number;
   applied_at: number | null;
   cancelled_at: number | null;
+  name: string | null;
 }
 
 const SAFE_APP_ADDITION_DELAY_MS = 24 * 60 * 60 * 1000; // Same 24h as
@@ -697,16 +699,16 @@ export async function hasActivePendingSafeAppAddition(db: D1Database, bundleId: 
   return row !== null;
 }
 
-export async function queueSafeAppAddition(db: D1Database, bundleId: string): Promise<PendingSafeAppAddition> {
+export async function queueSafeAppAddition(db: D1Database, bundleId: string, name: string | null): Promise<PendingSafeAppAddition> {
   const now = Date.now();
   const appliesAt = now + SAFE_APP_ADDITION_DELAY_MS;
   const result = await db
     .prepare(
-      `INSERT INTO pending_safe_app_additions (bundle_id, requested_at, applies_at)
-       VALUES (?1, ?2, ?3)
-       RETURNING id, bundle_id, requested_at, applies_at, applied_at, cancelled_at`
+      `INSERT INTO pending_safe_app_additions (bundle_id, requested_at, applies_at, name)
+       VALUES (?1, ?2, ?3, ?4)
+       RETURNING id, bundle_id, requested_at, applies_at, applied_at, cancelled_at, name`
     )
-    .bind(bundleId, now, appliesAt)
+    .bind(bundleId, now, appliesAt, name)
     .first<PendingSafeAppAddition>();
   if (!result) throw new Error("queueSafeAppAddition: INSERT ... RETURNING returned no row");
   return result;
@@ -725,7 +727,7 @@ export async function cancelSafeAppAddition(db: D1Database, requestId: number): 
 export async function listActiveSafeAppAdditions(db: D1Database): Promise<PendingSafeAppAddition[]> {
   const result = await db
     .prepare(
-      `SELECT id, bundle_id, requested_at, applies_at, applied_at, cancelled_at
+      `SELECT id, bundle_id, requested_at, applies_at, applied_at, cancelled_at, name
        FROM pending_safe_app_additions
        WHERE applied_at IS NULL AND cancelled_at IS NULL
        ORDER BY applies_at ASC`
@@ -737,7 +739,7 @@ export async function listActiveSafeAppAdditions(db: D1Database): Promise<Pendin
 export async function getDueSafeAppAdditions(db: D1Database): Promise<PendingSafeAppAddition[]> {
   const result = await db
     .prepare(
-      `SELECT id, bundle_id, requested_at, applies_at, applied_at, cancelled_at
+      `SELECT id, bundle_id, requested_at, applies_at, applied_at, cancelled_at, name
        FROM pending_safe_app_additions
        WHERE applies_at <= ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
     )

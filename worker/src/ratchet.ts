@@ -175,20 +175,20 @@ export async function applyDueProfileChanges(env: Env): Promise<number> {
 // above). Rejects both "already approved" and "already queued" up front
 // rather than letting a duplicate silently queue a second, redundant
 // 24h wait.
-export async function requestAddSafeApp(db: D1Database, bundleId: string): Promise<PendingSafeAppAddition> {
+export async function requestAddSafeApp(db: D1Database, bundleId: string, name: string | null): Promise<PendingSafeAppAddition> {
   if (await isSafeAppBundleIdApproved(db, bundleId)) {
     throw new SafeAppAlreadyApprovedError(bundleId);
   }
   if (await hasActivePendingSafeAppAddition(db, bundleId)) {
     throw new SafeAppAdditionAlreadyPendingError(bundleId);
   }
-  return queueSafeAppAddition(db, bundleId);
+  return queueSafeAppAddition(db, bundleId, name);
 }
 
 export async function applyDueSafeAppAdditions(db: D1Database): Promise<number> {
   const due = await getDueSafeAppAdditions(db);
   for (const request of due) {
-    await addSafeAppBundleId(db, request.bundle_id);
+    await addSafeAppBundleId(db, request.bundle_id, request.name);
     await markSafeAppAdditionApplied(db, request.id);
   }
   return due.length;

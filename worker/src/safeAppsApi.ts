@@ -15,6 +15,7 @@
 import { cancelSafeAppAddition, getDashboardPasswordHash, listActiveSafeAppAdditions, listSafeAppBundleIds, removeSafeAppBundleId } from "./db";
 import { verifyPasswordHash } from "./auth";
 import { SafeAppAdditionAlreadyPendingError, SafeAppAlreadyApprovedError, requestAddSafeApp } from "./ratchet";
+import { STATIC_SAFE_APPS } from "./staticSafeApps";
 import type { Env } from "./types";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -25,11 +26,18 @@ export async function handleListSafeApps(env: Env): Promise<Response> {
   return jsonResponse(await listSafeAppBundleIds(env.DB));
 }
 
+// The compiled baseline (Config.swift, mirrored by hand - see
+// staticSafeApps.ts's doc comment) - purely for dashboard visibility, no
+// create/edit/delete here, same as handleListStaticRules in index.ts.
+export function handleListStaticSafeApps(): Response {
+  return jsonResponse(STATIC_SAFE_APPS);
+}
+
 // Same re-check pattern as handleLoosenRequest/handlePasswordChangeRequest
 // in index.ts - being logged in already isn't enough to widen a blind
 // spot in what gets scanned.
 export async function handleRequestAddSafeApp(request: Request, env: Env): Promise<Response> {
-  const body = await request.json<{ bundle_id?: string; password?: string }>();
+  const body = await request.json<{ bundle_id?: string; name?: string; password?: string }>();
   const bundleId = body.bundle_id?.trim();
   if (!bundleId) {
     return jsonResponse({ error: "missing bundle_id" }, 400);
@@ -41,7 +49,7 @@ export async function handleRequestAddSafeApp(request: Request, env: Env): Promi
   }
 
   try {
-    const pending = await requestAddSafeApp(env.DB, bundleId);
+    const pending = await requestAddSafeApp(env.DB, bundleId, body.name?.trim() || null);
     return jsonResponse(pending, 202);
   } catch (error) {
     if (error instanceof SafeAppAlreadyApprovedError || error instanceof SafeAppAdditionAlreadyPendingError) {

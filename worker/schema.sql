@@ -223,7 +223,14 @@ CREATE TABLE pending_profile_changes (
 -- unexpected or empty.
 CREATE TABLE safe_app_bundle_ids (
     bundle_id TEXT PRIMARY KEY,
-    added_at INTEGER NOT NULL
+    added_at INTEGER NOT NULL,
+    -- Human-readable name, from whatever the Installed Apps picker knew
+    -- at request time (see dashboard.ts) - display-only, never used for
+    -- matching (that's always bundle_id). Nullable: an app whose Fleet
+    -- inventory entry has no name at request time, or a row from before
+    -- this column existed (migrations/0005_safe_app_names.sql), still
+    -- works, just falls back to showing the bundle_id alone.
+    name TEXT
 );
 
 -- Ratchet for ADDING a bundle ID to safe_app_bundle_ids - same shape as
@@ -238,5 +245,8 @@ CREATE TABLE pending_safe_app_additions (
     requested_at INTEGER NOT NULL,
     applies_at INTEGER NOT NULL,
     applied_at INTEGER,
-    cancelled_at INTEGER
+    cancelled_at INTEGER,
+    name TEXT -- see safe_app_bundle_ids.name's own comment; carried
+              -- through to that column once this request is applied
+              -- (ratchet.ts's applyDueSafeAppAdditions)
 );

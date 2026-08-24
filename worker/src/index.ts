@@ -58,6 +58,7 @@ import {
   handleCancelSafeAppAddition,
   handleListPendingSafeAppAdditions,
   handleListSafeApps,
+  handleListStaticSafeApps,
   handleRemoveSafeApp,
   handleRequestAddSafeApp,
 } from "./safeAppsApi";
@@ -378,6 +379,7 @@ export default {
     // else (requestAddSafeApp), removing is immediate. ---
     const isSafeAppsApiRoute =
       url.pathname === "/api/safe-apps" ||
+      url.pathname === "/api/static-safe-apps" ||
       url.pathname === "/api/safe-app-additions" ||
       url.pathname.match(/^\/api\/safe-apps\/[^/]+$/) ||
       url.pathname.match(/^\/api\/safe-app-additions\/\d+\/cancel$/);
@@ -387,6 +389,9 @@ export default {
 
       if (url.pathname === "/api/safe-apps" && request.method === "GET") {
         return handleListSafeApps(env);
+      }
+      if (url.pathname === "/api/static-safe-apps" && request.method === "GET") {
+        return handleListStaticSafeApps();
       }
       if (url.pathname === "/api/safe-apps" && request.method === "POST") {
         return handleRequestAddSafeApp(request, env);

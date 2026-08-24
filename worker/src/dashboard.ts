@@ -192,23 +192,18 @@ export function renderDashboard(): string {
 
   <section>
     <h2>Safe apps (not scanned)</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Bundle IDs ContentGuardDaemon excludes from screen-capture monitoring, in addition to the compiled baseline in Config.swift - every entry here is a blind spot, kept short and deliberate. Adding one takes effect after a 24h delay, same as loosening a Santa rule; removing one is immediate.</div>
+    <div class="subtitle" style="margin-bottom: 0;">Bundle IDs ContentGuardDaemon excludes from screen-capture monitoring - every entry here is a blind spot, kept short and deliberate. To add one, use the Whitelist button in Installed Apps below instead of typing a bundle ID - it takes effect after a 24h delay, same as loosening a Santa rule. Removing one here is immediate.</div>
     <table id="safe-apps-table">
-      <thead><tr><th>Bundle ID</th><th>Added</th><th></th></tr></thead>
-      <tbody id="safe-apps-body"><tr><td colspan="3" class="empty">Loading...</td></tr></tbody>
+      <thead><tr><th>App</th><th>Bundle ID</th><th>Added</th><th></th></tr></thead>
+      <tbody id="safe-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
     </table>
-    <form class="inline" id="add-safe-app-form">
-      <input name="bundle_id" placeholder="Bundle ID (e.g. com.example.app)" required style="flex: 1; min-width: 220px;">
-      <input type="password" name="password" placeholder="Password to confirm" required style="min-width: 160px;">
-      <button type="submit">Queue add (24h delay)</button>
-    </form>
     <div class="status-msg" id="safe-apps-status"></div>
     <div id="safe-app-additions-pending"></div>
   </section>
 
   <section>
     <h2>Installed apps</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory - one click to block or allow, instead of manually finding a Team ID in Terminal.</div>
+    <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory - one click to block/allow (Santa) or whitelist (excluded from screen-capture scanning), instead of manually finding a Team ID in Terminal or typing a bundle ID by hand. This is the one place to add new entries to either list, by app name - the Safe Apps and Santa Rules sections above show what's already configured.</div>
     <table id="installed-apps-table">
       <thead><tr><th>Name</th><th>Version</th><th>Detected identifier</th><th></th></tr></thead>
       <tbody id="installed-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
@@ -510,26 +505,50 @@ async function loadRules() {
   body.innerHTML = staticRowsHtml + dynamicRowsHtml;
 }
 
+// Cached at module scope (not just inside loadSafeApps) so
+// loadInstalledApps can check "is this app already whitelisted" without
+// a second round trip - both read the same two endpoints, and the
+// static list in particular never changes without a Mac-side recompile,
+// so there's no reason to refetch it per-section.
+let staticSafeAppsCache = null;
+let approvedSafeAppsCache = [];
+
 async function loadSafeApps() {
-  const [approved, pending] = await Promise.all([
+  const [staticApps, approved, pending] = await Promise.all([
+    staticSafeAppsCache ? Promise.resolve(staticSafeAppsCache) : api("/api/static-safe-apps"),
     api("/api/safe-apps"),
     api("/api/safe-app-additions"),
   ]);
-  renderSafeApps(approved);
+  staticSafeAppsCache = staticApps;
+  approvedSafeAppsCache = approved;
+  renderSafeApps(staticApps, approved);
   renderSafeAppAdditionsPending(pending);
 }
 
-function renderSafeApps(approved) {
+// Static (compiled baseline, dimmed, no remove button - "edit
+// Config.swift" note, same treatment as Santa's StaticRules rows in
+// loadRules) shown first, dashboard-added (removable) after - matches
+// loadRules' own static-then-dynamic ordering and reasoning exactly.
+function renderSafeApps(staticApps, approved) {
   const body = document.getElementById("safe-apps-body");
-  if (approved.length === 0) {
-    body.innerHTML = '<tr><td colspan="3" class="empty">No dashboard-added safe apps yet - the compiled baseline in Config.swift still applies regardless.</td></tr>';
-    return;
-  }
-  body.innerHTML = approved.map((a) => \`<tr>
-    <td>\${escapeHtml(a.bundle_id)}</td>
-    <td>\${timeAgo(a.added_at)}</td>
-    <td><button class="danger" data-remove-safe-app="\${escapeHtml(a.bundle_id)}">Remove</button></td>
+  const staticRowsHtml = (staticApps || []).map((a) => \`<tr class="static-rule">
+    <td>\${escapeHtml(a.name)}</td>
+    <td>\${escapeHtml(a.bundleId)}</td>
+    <td>compiled baseline</td>
+    <td><span class="pending-note" style="color:#6b6f78;">edit Config.swift</span></td>
   </tr>\`).join("");
+  let dynamicRowsHtml;
+  if (!approved || approved.length === 0) {
+    dynamicRowsHtml = '';
+  } else {
+    dynamicRowsHtml = approved.map((a) => \`<tr>
+      <td>\${a.name ? escapeHtml(a.name) : '<span class="empty" style="padding:0;">unknown</span>'}</td>
+      <td>\${escapeHtml(a.bundle_id)}</td>
+      <td>\${timeAgo(a.added_at)}</td>
+      <td><button class="danger" data-remove-safe-app="\${escapeHtml(a.bundle_id)}">Remove</button></td>
+    </tr>\`).join("");
+  }
+  body.innerHTML = staticRowsHtml + dynamicRowsHtml || '<tr><td colspan="4" class="empty">Nothing whitelisted at all - not even the compiled baseline, which should never happen.</td></tr>';
 }
 
 // Static, lives outside #safe-apps-body on purpose - same reasoning as
@@ -544,15 +563,33 @@ function renderSafeAppAdditionsPending(pending) {
     return;
   }
   el.innerHTML = pending.map((p) =>
-    \`<div class="status-row">Add "\${escapeHtml(p.bundle_id)}": <span class="pending-note">queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel-safe-app-addition="\${p.id}">Cancel</button></div>\`
+    \`<div class="status-row">Add "\${escapeHtml(p.name || p.bundle_id)}": <span class="pending-note">queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel-safe-app-addition="\${p.id}">Cancel</button></div>\`
   ).join("");
 }
 
+// Installed Apps is the single place new Block/Allow (Santa) and
+// Whitelist (safe-apps) actions get added from now - see this section's
+// own subtitle in the markup. Fetches its own safe-apps state directly
+// (static baseline + dashboard-approved + pending) rather than reusing
+// loadSafeApps()'s module-scope caches, since that function runs
+// independently on page load with no ordering guarantee relative to this
+// one - a shared cache here could read stale/empty state on a race.
 async function loadInstalledApps(host) {
   // No host -> the Worker falls back to DEFAULT_FLEET_HOST (this
   // project's one real Mac) - see softwareApi.ts's handleListInstalledSoftware.
   const qs = host ? \`?host=\${encodeURIComponent(host)}\` : "";
-  const apps = await api(\`/api/installed-software\${qs}\`);
+  const [apps, staticApps, approved, pendingAdditions] = await Promise.all([
+    api(\`/api/installed-software\${qs}\`),
+    api("/api/static-safe-apps"),
+    api("/api/safe-apps"),
+    api("/api/safe-app-additions"),
+  ]);
+  const whitelistedIds = new Set([
+    ...(staticApps || []).map((s) => s.bundleId),
+    ...(approved || []).map((a) => a.bundle_id),
+  ]);
+  const pendingIds = new Set((pendingAdditions || []).map((p) => p.bundle_id));
+
   const body = document.getElementById("installed-apps-body");
   if (apps.length === 0) {
     body.innerHTML = '<tr><td colspan="4" class="empty">No installed apps returned - Fleet may not have inventoried this host recently.</td></tr>';
@@ -562,14 +599,30 @@ async function loadInstalledApps(host) {
     const idCell = a.identifier
       ? \`\${escapeHtml(a.identifier)} <span class="pending-note" style="color:#8b8f98;">(\${a.rule_type})</span>\`
       : '<span class="empty" style="padding:0;">no identifier available</span>';
-    const actions = a.identifier
+    const ruleActions = a.identifier
       ? \`<button data-block="\${escapeHtml(a.identifier)}" data-rule-type="\${a.rule_type}" data-app-name="\${escapeHtml(a.name)}">Block</button> <button data-allow="\${escapeHtml(a.identifier)}" data-rule-type="\${a.rule_type}" data-app-name="\${escapeHtml(a.name)}">Allow</button>\`
       : "";
+    // Three states, in order of precedence: no usable bundle ID at all
+    // (Fleet hasn't reported one for this app yet - same "disable rather
+    // than send a request that can only fail" reasoning as the identifier
+    // column above), already whitelisted (static or dashboard-approved -
+    // don't offer to queue a no-op), already queued (don't offer a
+    // second, redundant 24h wait), or the real action.
+    let whitelistAction;
+    if (!a.bundle_identifier) {
+      whitelistAction = '<span class="pending-note" style="color:#6b6f78;">no bundle ID</span>';
+    } else if (whitelistedIds.has(a.bundle_identifier)) {
+      whitelistAction = '<span class="pending-note" style="color:#51cf66;">whitelisted</span>';
+    } else if (pendingIds.has(a.bundle_identifier)) {
+      whitelistAction = '<span class="pending-note">whitelist queued</span>';
+    } else {
+      whitelistAction = \`<button data-whitelist="\${escapeHtml(a.bundle_identifier)}" data-app-name="\${escapeHtml(a.name)}">Whitelist</button>\`;
+    }
     return \`<tr>
       <td>\${escapeHtml(a.name)}</td>
       <td>\${escapeHtml(a.version ?? "")}</td>
       <td>\${idCell}</td>
-      <td>\${actions}</td>
+      <td>\${ruleActions} \${whitelistAction}</td>
     </tr>\`;
   }).join("");
 }
@@ -755,6 +808,25 @@ document.getElementById("load-apps-form").addEventListener("submit", async (e) =
 });
 
 document.getElementById("installed-apps-body").addEventListener("click", async (e) => {
+  const whitelistId = e.target.getAttribute("data-whitelist");
+  if (whitelistId) {
+    const appName = e.target.getAttribute("data-app-name");
+    const password = prompt(\`Password to confirm whitelisting "\${appName}" (excluded from scanning, applies after 24h):\`);
+    if (!password) return;
+    try {
+      await api("/api/safe-apps", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bundle_id: whitelistId, name: appName, password }),
+      });
+      setStatus("installed-apps-status", "Whitelist queued for " + appName + " - applies in ~24h.", false);
+      await loadSafeApps();
+    } catch (err) {
+      setStatus("installed-apps-status", "Failed to queue whitelist: " + err.message, true);
+    }
+    return;
+  }
+
   const blockId = e.target.getAttribute("data-block");
   const allowId = e.target.getAttribute("data-allow");
   const identifier = blockId || allowId;
