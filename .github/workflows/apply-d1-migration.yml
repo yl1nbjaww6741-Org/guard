@@ -8,11 +8,26 @@
 # which is exactly what happened with 0003, where the Worker shipped
 # queries against pending_profile_changes before the table existed.
 #
-# Deliberately manual-only (workflow_dispatch, no push trigger). Schema
-# changes to a live database are not something to fire automatically on
-# every push: re-running an already-applied migration fails, and the
-# ordering between "table exists" and "code that uses it is live" is a
-# judgement call per migration, not a rule a path filter can encode.
+# Triggered by pushing a `d1-migrate-NNNN` tag, where NNNN is a
+# migration's number prefix - `git tag d1-migrate-0003 && git push
+# origin d1-migrate-0003` applies worker/migrations/0003_*.sql.
+#
+# The tag, rather than the more obvious workflow_dispatch: GitHub only
+# dispatches workflows that exist on the *default* branch, and all of
+# this project's Worker development happens on a long-lived feature
+# branch that has never been merged to main - dispatching from here
+# fails with a 404 (deploy-worker.yml declares workflow_dispatch too,
+# and has the same problem; every run it has ever had was push-driven).
+# Tag pushes read the workflow from the pushed ref, so this works from
+# any branch. The workflow_dispatch trigger is kept below anyway, for
+# whenever this branch does reach main.
+#
+# Deliberately not fired by pushes to worker/migrations/**. Schema
+# changes to a live database are not something to run automatically on
+# every push: re-running an applied migration fails, and the ordering
+# between "table exists" and "code that uses it is live" is a judgement
+# call per migration, not a rule a path filter can encode. A tag is a
+# deliberate act; a push is not.
 #
 # This grants no new power - the token already carries D1:Edit, and
 # anything holding it could already run this by hand. It only moves
@@ -21,6 +36,9 @@
 name: Apply D1 Migration
 
 on:
+  push:
+    tags:
+      - "d1-migrate-*"
   workflow_dispatch:
     inputs:
       file:
@@ -42,24 +60,46 @@ jobs:
         with:
           node-version: "22"
 
-      # Rejects anything that isn't a plain NNNN_name.sql sitting in
-      # worker/migrations - the input is interpolated into a --file path,
-      # so path traversal and arbitrary-file reads are worth closing off
-      # even on a single-user repo.
-      - name: Validate migration filename
+      # Resolves both trigger styles down to one filename, and rejects
+      # anything that isn't a plain NNNN_name.sql sitting in
+      # worker/migrations - the result is interpolated into a --file
+      # path, so path traversal is worth closing off even on a
+      # single-user repo. A number prefix matching zero or several files
+      # is an error rather than a guess.
+      - name: Resolve migration file
+        id: resolve
         env:
-          MIGRATION_FILE: ${{ inputs.file }}
+          DISPATCH_FILE: ${{ inputs.file }}
+          TAG_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
-          if [[ ! "$MIGRATION_FILE" =~ ^[0-9]{4}_[A-Za-z0-9_-]+\.sql$ ]]; then
-            echo "::error::'$MIGRATION_FILE' is not a bare NNNN_name.sql migration filename."
+          if [[ -n "$DISPATCH_FILE" ]]; then
+            migration="$DISPATCH_FILE"
+          else
+            number="${TAG_NAME#d1-migrate-}"
+            if [[ ! "$number" =~ ^[0-9]{4}$ ]]; then
+              echo "::error::Tag '$TAG_NAME' is not of the form d1-migrate-NNNN."
+              exit 1
+            fi
+            matches=(migrations/"$number"_*.sql)
+            if [[ ${#matches[@]} -ne 1 || ! -f "${matches[0]}" ]]; then
+              echo "::error::Expected exactly one worker/migrations/${number}_*.sql, found ${#matches[@]}."
+              exit 1
+            fi
+            migration="$(basename "${matches[0]}")"
+          fi
+
+          if [[ ! "$migration" =~ ^[0-9]{4}_[A-Za-z0-9_-]+\.sql$ ]]; then
+            echo "::error::'$migration' is not a bare NNNN_name.sql migration filename."
             exit 1
           fi
-          if [[ ! -f "migrations/$MIGRATION_FILE" ]]; then
-            echo "::error::worker/migrations/$MIGRATION_FILE does not exist on this ref."
+          if [[ ! -f "migrations/$migration" ]]; then
+            echo "::error::worker/migrations/$migration does not exist on this ref."
             exit 1
           fi
-          echo "Applying worker/migrations/$MIGRATION_FILE:"
-          cat "migrations/$MIGRATION_FILE"
+
+          echo "file=$migration" >> "$GITHUB_OUTPUT"
+          echo "Applying worker/migrations/$migration:"
+          cat "migrations/$migration"
 
       - name: Install dependencies
         run: npm ci
@@ -69,4 +109,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: worker
-          command: d1 execute contentguard --remote --file=./migrations/${{ inputs.file }}
+          command: d1 execute contentguard --remote --file=./migrations/${{ steps.resolve.outputs.file }}
