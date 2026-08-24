@@ -36,6 +36,27 @@ final class AppScopeManager: NSObject {
     private(set) var excludedApplications: [SCRunningApplication] = []
     private var latestContent: SCShareableContent?
 
+    /// Dashboard-adjustable additions on top of the compiled
+    /// ContentGuardConfig.safeAppBundleIDs baseline - see
+    /// ContentGuardPaths.safeAppsSyncFile's doc comment for where this
+    /// comes from (SafeAppsSyncClient, daemon-side) and effectiveSafeAppBundleIDs
+    /// below for how the two combine. Starts empty, not pre-populated
+    /// from ContentGuardConfig - only ever grows from what
+    /// reloadSyncedSafeApps() actually reads and successfully parses.
+    private var syncedSafeAppBundleIDs: Set<String> = []
+    private var safeAppsSyncPollTimer: DispatchSourceTimer?
+
+    /// The compiled baseline, unioned with whatever's been synced from
+    /// the dashboard. Deliberately a union, never a replacement - see
+    /// ContentGuardPaths.safeAppsSyncFile's doc comment: the synced list
+    /// can only ever ADD to what's excluded from capture, never remove
+    /// from the compiled baseline (that would require a recompile, by
+    /// design - the whole reason the baseline is a Swift constant and
+    /// not itself dashboard-managed).
+    private var effectiveSafeAppBundleIDs: Set<String> {
+        ContentGuardConfig.safeAppBundleIDs.union(syncedSafeAppBundleIDs)
+    }
+
     override init() {
         super.init()
         NotificationCenter.default.addObserver(
@@ -50,10 +71,18 @@ final class AppScopeManager: NSObject {
             name: NSWorkspace.didTerminateApplicationNotification,
             object: nil
         )
+        // Best-effort synchronous read at init - so the very first
+        // refresh() call (CaptureManager.start()) already has whatever
+        // was cached from a previous run, rather than starting from the
+        // compiled baseline alone and only picking up synced entries on
+        // the first poll tick up to 5 minutes later.
+        _ = reloadSyncedSafeApps()
+        startSafeAppsSyncPoll()
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        safeAppsSyncPollTimer?.cancel()
     }
 
     /// Refreshes both the excluded-application set and the underlying
@@ -67,7 +96,7 @@ final class AppScopeManager: NSObject {
         )
         latestContent = content
         excludedApplications = content.applications.filter { app in
-            ContentGuardConfig.safeAppBundleIDs.contains(app.bundleIdentifier)
+            effectiveSafeAppBundleIDs.contains(app.bundleIdentifier)
         }
     }
 
@@ -110,7 +139,7 @@ final class AppScopeManager: NSObject {
     @objc private func handleAppLifecycleChange(_ notification: Notification) {
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
            let bundleID = app.bundleIdentifier,
-           !ContentGuardConfig.safeAppBundleIDs.contains(bundleID) {
+           !effectiveSafeAppBundleIDs.contains(bundleID) {
             // Positively identified as an app whose launch/quit cannot
             // change the exclusion set - nothing to do.
             return
@@ -128,5 +157,67 @@ final class AppScopeManager: NSObject {
                 // back toward "cover more, not less" if it's wrong.
             }
         }
+    }
+
+    // MARK: - Dashboard-synced safe apps
+
+    /// Polled on a timer rather than filesystem-event-watched -
+    /// deliberately the simpler mechanism: ContentGuardPaths.safeAppsSyncFile
+    /// changes at most once per SafeAppsSyncClient's own 15-minute sync
+    /// interval (daemon-side), so there's no real latency cost to a
+    /// 5-minute poll here, and it avoids the edge cases of watching for
+    /// an atomic rename-replace write (a plain DispatchSource file watch
+    /// doesn't reliably survive that without extra re-arming logic).
+    private func startSafeAppsSyncPoll() {
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(30))
+        t.setEventHandler { [weak self] in
+            guard let self, self.reloadSyncedSafeApps() else { return }
+            // Same refresh-and-notify path as an app launch/quit -
+            // CaptureManager needs to rebuild its SCContentFilter(s)
+            // either way, since the exclusion set actually changed.
+            Task {
+                do {
+                    try await self.refresh()
+                    self.delegate?.appScopeManagerDidUpdateScope(self)
+                } catch {
+                    // Same best-effort reasoning as handleAppLifecycleChange's
+                    // catch block above.
+                }
+            }
+        }
+        t.resume()
+        safeAppsSyncPollTimer = t
+    }
+
+    /// Reads and parses ContentGuardPaths.safeAppsSyncFile, updating
+    /// syncedSafeAppBundleIDs if - and only if - the parsed content is
+    /// both well-formed AND actually different from what's already held.
+    /// Returns whether anything changed (callers use this to decide
+    /// whether a rebuild is even worth triggering).
+    ///
+    /// Fails toward the LAST successfully parsed synced set, not toward
+    /// the compiled baseline alone, on a read/parse failure - same
+    /// reasoning handleAppLifecycleChange's catch block above already
+    /// documents for a transient SCShareableContent failure: a stale-
+    /// but-previously-valid synced set never widens what gets excluded
+    /// beyond what was already a deliberate, ratchet-approved admin
+    /// decision on the dashboard - it only risks being briefly out of
+    /// date. Only the very first read (no file yet, or never
+    /// successfully parsed even once this run) leaves
+    /// syncedSafeAppBundleIDs empty, which - unioned with the compiled
+    /// baseline in effectiveSafeAppBundleIDs - is exactly the compiled
+    /// baseline alone, the correct state when nothing has ever synced.
+    @discardableResult
+    private func reloadSyncedSafeApps() -> Bool {
+        guard let data = FileManager.default.contents(atPath: ContentGuardPaths.safeAppsSyncFile),
+              let decoded = try? JSONDecoder().decode(SafeAppsSyncFile.self, from: data)
+        else {
+            return false
+        }
+        let newSet = Set(decoded.bundle_ids)
+        guard newSet != syncedSafeAppBundleIDs else { return false }
+        syncedSafeAppBundleIDs = newSet
+        return true
     }
 }

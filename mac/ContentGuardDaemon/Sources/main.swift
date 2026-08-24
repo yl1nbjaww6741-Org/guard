@@ -90,6 +90,14 @@ do {
     exit(1)
 }
 
+// The one thing this daemon fetches over the network - see
+// SafeAppsSyncClient.swift's own header for why this lives here (root,
+// the tamper anchor) rather than in the agent. Started unconditionally;
+// with no token provisioned yet (ContentGuardPaths.daemonSyncTokenFile
+// missing) it's a safe no-op on every tick, not an error.
+let safeAppsSyncClient = SafeAppsSyncClient(log: logLine)
+safeAppsSyncClient.start()
+
 // Root LaunchDaemon, no GUI, no main-thread UI work - a plain run loop is
 // sufficient to keep the process alive while the dispatch sources above do
 // the real work on their own queues.

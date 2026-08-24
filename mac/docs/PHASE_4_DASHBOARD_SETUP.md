@@ -379,6 +379,10 @@ blocking anything.
    # Fleet's own UI: "My account" -> "Get API token"
    npx wrangler secret put FLEET_BASE_URL
    npx wrangler secret put FLEET_API_TOKEN
+   # Any long random string, separate from SANTA_SYNC_TOKEN - see
+   # "Safe-app whitelist moved to the dashboard" below for what this
+   # gates and the matching Mac-side step.
+   npx wrangler secret put CONTENTGUARD_DAEMON_SYNC_TOKEN
    ```
 8. Bootstrap the real dashboard password - deliberately a manual D1
    write, not a code path, so "no password set yet" can never mean
@@ -720,3 +724,71 @@ headless Chromium session, same bar as everything else in this phase**:
   only that one.
 
 `tsc --noEmit` passes clean throughout.
+
+## Safe-app whitelist moved to the dashboard
+
+`ContentGuardConfig.safeAppBundleIDs` (mac/Shared/Config.swift) - the
+list of bundle IDs excluded from screen-capture scanning - used to be
+adjustable only by editing that Swift constant, recompiling, code-signing,
+and `sudo make install`. That's still true of the *compiled baseline*,
+deliberately: this section adds a second, dashboard-adjustable layer on
+top of it, not a replacement for it.
+
+This was a real architecture decision, confirmed explicitly before
+building it, not assumed: ContentGuardDaemon had never made a network
+call before this (Shared/Config.swift's own header: "no dylib to tamper
+with" - both processes were deliberately kept network-free). Adding a
+live Worker-fetched safe-app list means the daemon now does, for the
+first time. The tradeoff accepted: convenience (no rebuild/reinstall
+cycle to adjust the whitelist) against a larger attack surface (one new
+outbound HTTPS call, one new cached file on disk). Mitigated the same way
+every other loosening on this dashboard is: adding a bundle ID requires
+the dashboard password and a 24h delay before it takes effect
+(`pending_safe_app_additions`, applied by the same Cron Trigger as
+everything else); removing one is immediate, no password, since it only
+ever narrows what's excluded (more gets scanned, not less).
+
+**How it works**: `GET /sync/safe-apps` (worker/src/daemonSync.ts),
+gated by `CONTENTGUARD_DAEMON_SYNC_TOKEN` (`X-ContentGuard-Daemon-Token`
+header, `auth.ts`'s `requireDaemonSyncToken` - a separate token from
+`SANTA_SYNC_TOKEN`, since these are two unrelated sync clients).
+ContentGuardDaemon's `SafeAppsSyncClient` polls this every 15 minutes
+(matching the Worker's own Cron cadence - polling faster can't see a
+newly-applied ratchet change any sooner) and caches the result to
+`/usr/local/var/lib/contentguard/safe-apps.json`, root-owned but
+world-readable (0644) so `AppScopeManager` (agent-side, runs as the
+logged-in user, not root) can read it directly with no IPC round-trip.
+`AppScopeManager` polls that file every 5 minutes and unions it with the
+compiled baseline - a union, never a replacement, so a Worker outage or a
+stale/missing cache can only ever mean *less* gets excluded from capture,
+never more.
+
+**Mac-side manual step** (not baked into `Installer/build-pkg.sh` -
+this is a secret unique to one deployment, same reasoning as every other
+token in this project never being committed or auto-generated):
+```bash
+# On the real Mac, as root - must match the Worker's
+# CONTENTGUARD_DAEMON_SYNC_TOKEN secret exactly.
+sudo sh -c 'echo "the-same-random-string" > /usr/local/var/lib/contentguard/daemon-sync-token'
+sudo chmod 600 /usr/local/var/lib/contentguard/daemon-sync-token
+sudo chown root:wheel /usr/local/var/lib/contentguard/daemon-sync-token
+```
+Missing entirely is a safe, valid state - `SafeAppsSyncClient` just has
+nothing to sync (silently, not an error, since an unconfigured install is
+expected right after `make install` and before this step is done), and
+`AppScopeManager` falls back to the compiled baseline alone, exactly as
+if this whole feature didn't exist.
+
+**Verified against a real local `wrangler dev` + local D1, same bar as
+the profile-changes ratchet above**: login, add-request password gating
+(`403` on wrong/missing password), duplicate-request and already-approved
+rejection (both `409`), the 24h delay genuinely NOT firing early on a
+manual `scheduled` trigger, applying correctly once a request's
+`applies_at` is actually due, `/sync/safe-apps`'s token gating (`401` on
+a wrong token), and immediate no-password removal - all curled directly.
+`tsc --noEmit` passes clean. The Mac-side daemon/agent changes
+(`SafeAppsSyncClient.swift`, `AppScopeManager.swift`'s
+`effectiveSafeAppBundleIDs`) are unverified by this assistant beyond
+that - no Swift toolchain in this environment, same standing caveat as
+every other Swift change in this project's history; needs a real
+`make pkg && sudo make install` to confirm it compiles and behaves.

@@ -11,6 +11,7 @@
 		8003D01E30387A4900C6CE01 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D01A30387A4900C6CE01 /* Constants.swift */; };
 		8003D01F30387A4900C6CE01 /* IPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D01B30387A4900C6CE01 /* IPCProtocol.swift */; };
 		8003D03E303881EB00C6CE01 /* HeartbeatMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D03A303881EB00C6CE01 /* HeartbeatMonitor.swift */; };
+		EC95636C83FD2E99287D4461 /* SafeAppsSyncClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76E626A50C241F8FCF5CB49F /* SafeAppsSyncClient.swift */; };
 		8003D03F303881EB00C6CE01 /* EscalationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D038303881EB00C6CE01 /* EscalationManager.swift */; };
 		8003D040303881EB00C6CE01 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D03B303881EB00C6CE01 /* main.swift */; };
 		8003D041303881EB00C6CE01 /* BlackoutTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8003D037303881EB00C6CE01 /* BlackoutTimer.swift */; };
@@ -57,6 +58,7 @@
 		8003D038303881EB00C6CE01 /* EscalationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EscalationManager.swift; sourceTree = "<group>"; };
 		8003D039303881EB00C6CE01 /* FallbackCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FallbackCover.swift; sourceTree = "<group>"; };
 		8003D03A303881EB00C6CE01 /* HeartbeatMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartbeatMonitor.swift; sourceTree = "<group>"; };
+		76E626A50C241F8FCF5CB49F /* SafeAppsSyncClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeAppsSyncClient.swift; sourceTree = "<group>"; };
 		8003D03B303881EB00C6CE01 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		8003D050303881EB00C6CE02 /* ProcessEnumeration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessEnumeration.swift; sourceTree = "<group>"; };
 		8003D052303881EB00C6CE02 /* AppLockManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLockManager.swift; sourceTree = "<group>"; };
@@ -137,6 +139,7 @@
 				8003D03B303881EB00C6CE01 /* main.swift */,
 				8003D050303881EB00C6CE02 /* ProcessEnumeration.swift */,
 				8003D052303881EB00C6CE02 /* AppLockManager.swift */,
+				76E626A50C241F8FCF5CB49F /* SafeAppsSyncClient.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -300,6 +303,7 @@
 				8003D054303881EB00C6CE02 /* Config.swift in Sources */,
 				8003D055303881EB00C6CE02 /* Constants.swift in Sources */,
 				8003D056303881EB00C6CE02 /* IPCProtocol.swift in Sources */,
+				EC95636C83FD2E99287D4461 /* SafeAppsSyncClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
