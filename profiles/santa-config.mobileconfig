@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>B9EFAEA3-D5BE-4766-A5D3-BAABC33A4278</string>
     <key>PayloadVersion</key>
-    <integer>1</integer>
+    <integer>2</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>AA383881-96D1-49E5-A703-D1B91C0F19DD</string>
             <key>PayloadVersion</key>
-            <integer>1</integer>
+            <integer>2</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Santa Payload</string>
 
@@ -49,15 +49,51 @@
             <integer>1</integer>
 
             <!--
-              No SyncBaseURL - deliberately no sync server for Phase 3.
-              StaticRules alone is enough for "deny a short, specific list
-              of known-bad tools" and avoids standing up + trusting another
-              network service (a sync server) for what's currently a small,
-              hand-maintained list. Revisit if the denylist grows past what's
-              comfortable to hand-maintain in this file, or Phase 4's
-              Cloudflare Worker ends up wanting to push rule updates
-              dynamically (see mac/README.md's Phase 4 row).
+              Phase 3 deliberately shipped with no SyncBaseURL - StaticRules
+              alone was enough for "deny a short, specific list of known-bad
+              tools", and standing up + trusting a sync server wasn't
+              justified for that small, hand-maintained list. Phase 4's
+              Cloudflare Worker (mac/README.md's Phase 4 row,
+              mac/docs/PHASE_4_DASHBOARD_SETUP.md) is now real, deployed, and
+              verified, so this profile points at it for real:
+              - SyncBaseURL is the real deployed workers.dev URL
+                (worker/wrangler.toml has no route/custom domain configured,
+                so this IS the real address, not a placeholder standing in
+                for one) - confirmed via the real deploy output, not guessed.
+                Trailing slash matters: Santa resolves each stage
+                (`preflight/<machine_id>`, etc - SNTSyncPreflight.mm's
+                stageURL) as a relative URL against this string, per
+                RFC 3986, same as the trailing-slash form in Santa's own
+                documented example profile - built directly against
+                northpolesec/santa's real source (docs/src/lib/santaconfig.ts,
+                SNTSyncPreflight.mm), not the docs website, which came back
+                as an empty JS-rendered page on every fetch attempt this
+                session (same failure mode as the earlier buf.build/protos
+                lookup - not trusted for something exact-value-sensitive).
+              - SyncExtraHeaders carries the same static shared token as the
+                Worker's own SANTA_SYNC_TOKEN secret (auth.ts's
+                requireSyncToken) - this is the real fix for the
+                unauthenticated-sync-endpoint gap found live during Phase 4
+                (see this repo's git history), not optional. StaticRules
+                below stay in place regardless - they're the tamper-resistant
+                layer that keeps enforcing even if this Worker ever goes
+                down, gets misconfigured, or the sync token is ever rotated
+                without this profile being repushed in time (see
+                PHASE_4_DASHBOARD_SETUP.md's "StaticRules vs. sync" section).
+              CONFIRM the Worker's real SANTA_SYNC_TOKEN secret has actually
+              been set to the exact value below (`wrangler secret put
+              SANTA_SYNC_TOKEN`) before pushing this profile through Fleet -
+              otherwise every sync attempt 503s (safe, fails closed, but
+              non-functional) until they match.
             -->
+            <key>SyncBaseURL</key>
+            <string>https://contentguard-worker.yl1nbjaww6741-4.workers.dev/</string>
+            <key>SyncExtraHeaders</key>
+            <dict>
+                <key>X-ContentGuard-Sync-Token</key>
+                <string>0ec3a926e81aaa439a62f7f91588707d44ec31b526c81e48c1e3414752b1ba61</string>
+            </dict>
+
             <key>StaticRules</key>
             <array>
                 <!--

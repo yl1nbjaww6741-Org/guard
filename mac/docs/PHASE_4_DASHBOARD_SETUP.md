@@ -267,14 +267,34 @@ denies it, not "whichever one wins."
 
 ## Real infra setup steps
 
-The D1 database and Worker deploy (steps 1-5 below) are already done for
-real, on the real Cloudflare account - see "Real Cloudflare deployment,
-and a real gap it found" above. `wrangler.toml`'s two placeholders
-(`__CLOUDFLARE_ACCOUNT_ID__`, `__D1_DATABASE_ID__`) should already be
-filled in locally as a result; they're left as placeholders in this repo
-deliberately, same pattern as every other real-value placeholder here.
-What's **not** done yet is redeploying with this auth rewrite - steps 6
-onward.
+**Steps 1-6, 8, and 9 are all done for real now** - the D1 database, the
+original Worker deploy, and this auth rewrite's migration/secret/password-
+bootstrap/redeploy have all been run against the real Cloudflare account
+(by the collaborating Codespace session) and verified live, not just
+locally: `GET /` on the real deployed URL shows the login page, logging in
+with the real password sets a working session cookie, `/api/rules` 401s
+without one and 200s with one, and a wrong-password attempt correctly
+401s. Dashboard is live at
+`https://contentguard-worker.yl1nbjaww6741-4.workers.dev`.
+`wrangler.toml`'s two placeholders (`__CLOUDFLARE_ACCOUNT_ID__`,
+`__D1_DATABASE_ID__`) are filled in on the real deployed machine as a
+result of this; they're kept as placeholders in this repo deliberately,
+same pattern as every other real-value placeholder here.
+
+**Real security follow-up, not a code bug**: the Cloudflare API token used
+to run those commands ended up written into that session's own transcript
+in full - roll it at `dash.cloudflare.com/profile/api-tokens` if that
+hasn't already been done. Nothing above depends on the old value once
+rolled.
+
+**Still open**: step 7's `SANTA_SYNC_TOKEN`/`FLEET_BASE_URL`/`FLEET_API_TOKEN`
+remain unset (deploy succeeded without them since they fail closed - the
+password auth verified above is unaffected either way), and step 10's
+Access Application cleanup hasn't been done. `profiles/santa-config.mobileconfig`
+has been updated with the real `SyncBaseURL` and a freshly-generated
+`SyncExtraHeaders` token (see below) but **not yet pushed through Fleet** -
+that, and setting the Worker's `SANTA_SYNC_TOKEN` secret to the matching
+value, are both still required before Santa's sync actually does anything.
 
 1. `cd worker && npx wrangler login` (authenticates the CLI to your real
    Cloudflare account).
@@ -326,9 +346,23 @@ onward.
    page and logs in with the real password before considering this done.
 10. Abandon the in-progress Cloudflare Access Application setup in the
     Zero Trust dashboard - no longer needed.
-11. Only once all of the above is live: update
-    `profiles/santa-config.mobileconfig` with the real `SyncBaseURL` and
-    a `SyncExtraHeaders` entry carrying the real `SANTA_SYNC_TOKEN` value
-    before actually pushing it - this changes real enforcement behavior
-    on the real Mac, same "confirm before implementing" bar as everything
-    else in this project.
+11. `profiles/santa-config.mobileconfig` has been updated with the real
+    `SyncBaseURL` (`https://contentguard-worker.yl1nbjaww6741-4.workers.dev/`,
+    trailing slash matters - confirmed via `northpolesec/santa`'s own real
+    source, not its docs website, which came back empty on every fetch
+    attempt) and a `SyncExtraHeaders` entry carrying a freshly-generated
+    token, `PayloadVersion` bumped 1->2 on both the top-level and payload
+    dicts (same `PayloadUUID`s, so this updates the already-installed
+    profile rather than registering a new one). Two things still needed
+    before actually pushing it through Fleet - this changes real
+    enforcement behavior on the real Mac, same "confirm before
+    implementing" bar as everything else in this project:
+    ```bash
+    npx wrangler secret put SANTA_SYNC_TOKEN
+    # paste the exact value from profiles/santa-config.mobileconfig's
+    # SyncExtraHeaders dict - it must match exactly, or every sync
+    # attempt 503s (safe, fails closed, but non-functional)
+    ```
+    then confirm a real sync round-trip works (`preflight` returns
+    `{"client_mode":"MONITOR",...}`, not a 503) before pushing the profile
+    through Fleet.
