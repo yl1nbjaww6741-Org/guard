@@ -8,13 +8,31 @@
 # Builds and code-signs the Agent + Daemon via xcodebuild, without
 # packaging them. Useful while iterating on Swift changes without going
 # through a full pkgbuild/productbuild cycle each time.
+#
+# CONFIGURATION_BUILD_DIR is REQUIRED, not cosmetic - exactly the same
+# lesson Installer/build-pkg.sh already learned and documents in its own
+# header (lines 44-54). Without it xcodebuild writes its products to
+# ~/Library/Developer/Xcode/DerivedData/<project>-<hash>/Build/Products/
+# Release/, while the codesign lines below sign build/Release/ - so this
+# target compiled the new code to one place and then signed whatever
+# stale artifacts a previous `make pkg` happened to leave in the other,
+# reporting complete success either way.
+#
+# Found live: a `make build` run whose Swift compiled cleanly still
+# emitted a wall of "warning: Stale file '.../mac/build/Release/...' is
+# located outside of the allowed root paths" and then cheerfully
+# re-signed those stale binaries. The compile was real; the signed output
+# was months old. Nothing downstream (`make install`) would have picked
+# up the new code.
+BUILD_DIR = $(CURDIR)/build/Release
+
 build:
-	xcodebuild -project ContentGuard.xcodeproj -scheme ContentGuardAgent -configuration Release
-	xcodebuild -project ContentGuard.xcodeproj -scheme ContentGuardDaemon -configuration Release
-	xcodebuild -project ContentGuard.xcodeproj -scheme ContentGuardRelease -configuration Release
-	codesign --force --sign "ContentGuard Signing" --options runtime build/Release/ContentGuardAgent.app
-	codesign --force --sign "ContentGuard Signing" --options runtime build/Release/ContentGuardDaemon
-	codesign --force --sign "ContentGuard Signing" --options runtime build/Release/ContentGuardRelease
+	xcodebuild -project ContentGuard.xcodeproj -scheme ContentGuardAgent -configuration Release CONFIGURATION_BUILD_DIR="$(BUILD_DIR)"
+	xcodebuild -project ContentGuard.xcodeproj -scheme ContentGuardDaemon -configuration Release CONFIGURATION_BUILD_DIR="$(BUILD_DIR)"
+	xcodebuild -project ContentGuard.xcodeproj -scheme ContentGuardRelease -configuration Release CONFIGURATION_BUILD_DIR="$(BUILD_DIR)"
+	codesign --force --sign "ContentGuard Signing" --options runtime "$(BUILD_DIR)/ContentGuardAgent.app"
+	codesign --force --sign "ContentGuard Signing" --options runtime "$(BUILD_DIR)/ContentGuardDaemon"
+	codesign --force --sign "ContentGuard Signing" --options runtime "$(BUILD_DIR)/ContentGuardRelease"
 
 # Full build -> sign -> package, producing Installer/ContentGuard-1.0.0.pkg.
 # See Installer/build-pkg.sh's header comment for why this pkg is unsigned
