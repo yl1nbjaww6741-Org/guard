@@ -98,6 +98,18 @@ crons = ["*/15 * * * *"]
 #     Deliberately separate from SANTA_SYNC_TOKEN - see that field's own
 #     doc comment in types.ts for why. Provisioned onto the Mac itself via
 #     Installer/build-pkg.sh (see mac/README.md), not committed anywhere.
+#   - CONTENTGUARD_EXTENSION_SYNC_TOKEN (src/auth.ts's
+#     requireExtensionSyncToken) - `wrangler secret put
+#     CONTENTGUARD_EXTENSION_SYNC_TOKEN`, a static shared token the
+#     Chrome extension's background service worker sends (X-ContentGuard-
+#     Extension-Token header) to fetch the blocked-keywords list from GET
+#     /sync/keywords - see schema.sql's blocked_keywords comment. A third
+#     independent credential, same reasoning as
+#     CONTENTGUARD_DAEMON_SYNC_TOKEN being separate from SANTA_SYNC_TOKEN.
+#     Baked into the extension's own source (chrome-extension/), which is
+#     a meaningfully weaker place to hold a secret than a codesigned Mac
+#     binary - accepted, since this token only guards read access to the
+#     keyword list, see types.ts's Env comment for the full reasoning.
 #   - SESSION_SIGNING_KEY (src/session.ts) - `wrangler secret put
 #     SESSION_SIGNING_KEY`, an internal HMAC key for signing dashboard
 #     session cookies. Not user-facing and not the dashboard password

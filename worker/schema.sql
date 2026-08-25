@@ -250,3 +250,35 @@ CREATE TABLE pending_safe_app_additions (
               -- through to that column once this request is applied
               -- (ratchet.ts's applyDueSafeAppAdditions)
 );
+
+-- Keyword blocklist for the Chrome extension (extensionSync.ts's GET
+-- /sync/keywords, gated by CONTENTGUARD_EXTENSION_SYNC_TOKEN - see
+-- types.ts's Env comment). Opposite ratchet polarity from
+-- safe_app_bundle_ids above: ADDING a keyword makes the extension block
+-- MORE, so it's a tightening and applies immediately (keywordsApi.ts's
+-- handleAddKeyword, no password, same as Santa's handleCreateRule for a
+-- new BLOCKLIST rule). REMOVING a keyword makes it block LESS, so it's a
+-- loosening and goes through the same 24h-delay-plus-re-entered-password
+-- ratchet as everything else (pending_keyword_removals below) - the
+-- inverse of safe_app_bundle_ids's own asymmetry, not a copy-paste of it.
+CREATE TABLE blocked_keywords (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    keyword TEXT NOT NULL UNIQUE,
+    added_at INTEGER NOT NULL
+);
+
+-- Ratchet for REMOVING a blocked_keywords row - same shape as
+-- pending_safe_app_additions above, just gating the opposite direction
+-- of change (see blocked_keywords's own comment for why). keyword is
+-- captured at request time (not just keyword_id) purely for dashboard
+-- display of a pending removal without a join, same reasoning as
+-- pending_safe_app_additions.name.
+CREATE TABLE pending_keyword_removals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    keyword_id INTEGER NOT NULL REFERENCES blocked_keywords(id),
+    keyword TEXT NOT NULL,
+    requested_at INTEGER NOT NULL,
+    applies_at INTEGER NOT NULL,
+    applied_at INTEGER,
+    cancelled_at INTEGER
+);

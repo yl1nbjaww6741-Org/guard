@@ -202,6 +202,21 @@ export function renderDashboard(): string {
   </section>
 
   <section>
+    <h2>Keyword blocker (Chrome extension)</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Words/phrases the Chrome extension blocks on sight - matched case-insensitively against both the page URL and its rendered text/title. Adding one takes effect immediately (blocking more is a tightening, same as adding a Santa rule). Removing one takes effect after a 24h delay and a re-entered password, same ratchet as everything else that loosens a restriction on this dashboard.</div>
+    <table id="keywords-table">
+      <thead><tr><th>Keyword</th><th>Added</th><th></th></tr></thead>
+      <tbody id="keywords-body"><tr><td colspan="3" class="empty">Loading...</td></tr></tbody>
+    </table>
+    <form class="inline" id="add-keyword-form">
+      <input name="keyword" placeholder="Keyword or phrase" required style="flex: 1; min-width: 220px;">
+      <button type="submit">Block</button>
+    </form>
+    <div class="status-msg" id="keywords-status"></div>
+    <div id="keyword-removals-pending"></div>
+  </section>
+
+  <section>
     <h2>Installed apps</h2>
     <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory - one click to block/allow (Santa) or whitelist (excluded from screen-capture scanning), instead of manually finding a Team ID in Terminal or typing a bundle ID by hand. This is the one place to add new entries to either list, by app name - the Safe Apps and Santa Rules sections above show what's already configured. Every built-in Apple app on this Mac is always pinned at the top, even if Fleet hasn't inventoried it - Block/Allow stays disabled for one of those until Fleet reports real signing info for it, but Whitelist works immediately either way.</div>
     <table id="installed-apps-table">
@@ -567,6 +582,44 @@ function renderSafeAppAdditionsPending(pending) {
   ).join("");
 }
 
+async function loadKeywords() {
+  const [keywords, pending] = await Promise.all([
+    api("/api/keywords"),
+    api("/api/keyword-removals"),
+  ]);
+  renderKeywords(keywords);
+  renderKeywordRemovalsPending(pending);
+}
+
+function renderKeywords(keywords) {
+  const body = document.getElementById("keywords-body");
+  if (!keywords || keywords.length === 0) {
+    body.innerHTML = '<tr><td colspan="3" class="empty">Nothing blocked yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = keywords.map((k) => \`<tr>
+    <td>\${escapeHtml(k.keyword)}</td>
+    <td>\${timeAgo(k.added_at)}</td>
+    <td><button class="danger" data-remove-keyword="\${k.id}" data-keyword-text="\${escapeHtml(k.keyword)}">Remove</button></td>
+  </tr>\`).join("");
+}
+
+// Static, lives outside #keywords-body on purpose - same reasoning as
+// #safe-app-additions-pending: that table gets fully rebuilt on every
+// loadKeywords() call, including the one a successful add/remove-request/
+// cancel here itself triggers, so a listener attached inside
+// renderKeywords would either vanish or double up across renders.
+function renderKeywordRemovalsPending(pending) {
+  const el = document.getElementById("keyword-removals-pending");
+  if (!pending || pending.length === 0) {
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = pending.map((p) =>
+    \`<div class="status-row">Remove "\${escapeHtml(p.keyword)}": <span class="pending-note">queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel-keyword-removal="\${p.id}">Cancel</button></div>\`
+  ).join("");
+}
+
 // Installed Apps is the single place new Block/Allow (Santa) and
 // Whitelist (safe-apps) actions get added from now - see this section's
 // own subtitle in the markup. Fetches its own safe-apps state directly
@@ -798,6 +851,55 @@ document.getElementById("safe-app-additions-pending").addEventListener("click", 
   }
 });
 
+document.getElementById("add-keyword-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const keyword = new FormData(e.target).get("keyword");
+  try {
+    await api("/api/keywords", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keyword }),
+    });
+    e.target.reset();
+    setStatus("keywords-status", "Blocked - takes effect immediately.", false);
+    await loadKeywords();
+  } catch (err) {
+    setStatus("keywords-status", "Failed to add: " + err.message, true);
+  }
+});
+
+document.getElementById("keywords-body").addEventListener("click", async (e) => {
+  const id = e.target.getAttribute("data-remove-keyword");
+  if (!id) return;
+  const keywordText = e.target.getAttribute("data-keyword-text");
+  const password = prompt(\`Password to confirm removing "\${keywordText}" (stops being blocked after 24h):\`);
+  if (!password) return;
+  try {
+    await api(\`/api/keywords/\${id}/removal-request\`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    setStatus("keywords-status", "Removal queued - applies in ~24h.", false);
+    await loadKeywords();
+  } catch (err) {
+    setStatus("keywords-status", "Failed to queue removal: " + err.message, true);
+  }
+});
+
+// Static, same placement reasoning as safe-app-additions-pending above.
+document.getElementById("keyword-removals-pending").addEventListener("click", async (e) => {
+  const cancelId = e.target.getAttribute("data-cancel-keyword-removal");
+  if (!cancelId) return;
+  try {
+    await api(\`/api/keyword-removals/\${cancelId}/cancel\`, { method: "POST" });
+    setStatus("keywords-status", "Cancelled.", false);
+    await loadKeywords();
+  } catch (err) {
+    setStatus("keywords-status", "Failed to cancel: " + err.message, true);
+  }
+});
+
 document.getElementById("load-apps-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const host = new FormData(e.target).get("host");
@@ -936,6 +1038,7 @@ showTab(location.hash.slice(1));
 
 loadRules().catch((err) => setStatus("rules-status", "Failed to load rules: " + err.message, true));
 loadSafeApps().catch((err) => setStatus("safe-apps-status", "Failed to load: " + err.message, true));
+loadKeywords().catch((err) => setStatus("keywords-status", "Failed to load: " + err.message, true));
 loadSoftware().catch((err) => setStatus("software-status", "Failed to load software: " + err.message, true));
 loadPendingPasswordChange().catch(() => {});
 loadInstalledApps().catch((err) => setStatus("installed-apps-status", "Failed to load: " + err.message, true));
