@@ -203,7 +203,7 @@ export function renderDashboard(): string {
 
   <section>
     <h2>Installed apps</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory - one click to block/allow (Santa) or whitelist (excluded from screen-capture scanning), instead of manually finding a Team ID in Terminal or typing a bundle ID by hand. This is the one place to add new entries to either list, by app name - the Safe Apps and Santa Rules sections above show what's already configured. Common built-in Apple apps (Notes, Mail, Photos, Preview, QuickTime Player, Reminders, TextEdit) are always pinned at the top, even if Fleet hasn't inventoried them - Block/Allow stays disabled for one of those until Fleet reports real signing info for it, but Whitelist works immediately either way.</div>
+    <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory - one click to block/allow (Santa) or whitelist (excluded from screen-capture scanning), instead of manually finding a Team ID in Terminal or typing a bundle ID by hand. This is the one place to add new entries to either list, by app name - the Safe Apps and Santa Rules sections above show what's already configured. Every built-in Apple app on this Mac is always pinned at the top, even if Fleet hasn't inventoried it - Block/Allow stays disabled for one of those until Fleet reports real signing info for it, but Whitelist works immediately either way.</div>
     <table id="installed-apps-table">
       <thead><tr><th>Name</th><th>Version</th><th>Detected identifier</th><th></th></tr></thead>
       <tbody id="installed-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
