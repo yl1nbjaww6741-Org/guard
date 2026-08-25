@@ -1,10 +1,13 @@
 # Phase 1 - Fleet MDM on Fly.io
 
 **Planning to move this off Fly.io?** See
-`mac/docs/PHASE_1B_FLEET_ORACLE_MIGRATION.md` - a migration runbook to
-Oracle Cloud Always Free, grounded in the real app names/config below
-rather than a generic plan. Not started yet; this section (Fly.io) is
-still the live, current setup.
+`mac/docs/PHASE_1B_FLEET_HETZNER_MIGRATION.md` - a migration runbook to
+Hetzner, grounded in the real app names/config below rather than a
+generic plan. (An earlier attempt targeted Oracle Cloud Always Free -
+`mac/docs/PHASE_1B_FLEET_ORACLE_MIGRATION.md` - abandoned once staging
+it live found `fleetdm/fleet` is amd64-only and Oracle's free tier is
+ARM-only; kept as a record, not a runbook to follow.) Not started yet;
+this section (Fly.io) is still the live, current setup.
 
 Four small Fly.io apps, all in the same region so they share a private
 network: `contentguard-fleet-mysql`, `contentguard-fleet-redis`,

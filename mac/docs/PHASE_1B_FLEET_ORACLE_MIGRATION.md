@@ -1,4 +1,29 @@
-# Phase 1b - Migrate Fleet MDM from Fly.io to Oracle Cloud Always Free
+# Phase 1b - Migrate Fleet MDM from Fly.io to Oracle Cloud Always Free (ABANDONED)
+
+**Superseded by `PHASE_1B_FLEET_HETZNER_MIGRATION.md` - this whole
+approach is blocked, not just expensive.** Real, verified finding while
+staging this migration live: `fleetdm/fleet` is published **amd64-only**
+(confirmed three ways - `docker image inspect`, an actual `exec format
+error` running it, and Docker Hub's API showing no arm64 tag exists at
+all) - Oracle's Always Free tier is **Ampere A1, which is ARM**. The
+free-ARM-capacity premise this whole document was built on doesn't hold
+for the one piece that matters most. A paid x86 Oracle shape sized to
+fit (2 OCPU/8GB) quoted **$72/month** in the real Console - worse than
+the ~$17/month Fly.io bill this was trying to beat, not better. See
+`PHASE_1B_FLEET_HETZNER_MIGRATION.md` for the real path forward (a
+genuinely x86 provider, at real prices well below both).
+
+Real work product from this attempt that carried forward, not wasted:
+the corrected `docker-compose.yml` shape, the `FLEET_SERVER_PRIVATE_KEY`/
+`FLEET_LICENSE_KEY`/image-pinning/restore-then-prepare fixes, the real
+exported MySQL dump (verified, 222/222 objects, md5 confirmed) and
+secrets, and the tunnel-token-reuse plan - all reused directly in the
+Hetzner doc rather than redone.
+
+Kept here, unedited below, purely as a record of what was tried and
+why it stopped - not a runbook to follow.
+
+---
 
 **Hands-on-infrastructure runbook, same shape as `PHASE_0_SETUP.md` and
 `PHASE_5_LOCKDOWN.md` - nothing here is executable from a sandboxed
