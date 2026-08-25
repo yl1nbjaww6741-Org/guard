@@ -2,9 +2,16 @@
 
 Phase A (keyword blocking) and Phase B (5-second screenshot capture +
 the same NudeNet ONNX classifier the native Mac app uses) are both
-built. **Neither has been live-tested in a real Chrome browser as of
-this writing** - written without one available. Please actually run
-through Setup and Testing below before trusting either works.
+built AND confirmed working end-to-end on a real Mac/real Chrome install
+(2026-08-25) - a real test image was caught by the classifier and the
+tab closed. Getting there took three real, live-found-and-fixed bugs
+(see git history / this file's own comments in each source file): a
+race between the sandbox iframe's "load" event and the model fetch, a
+doubled `lib/lib/ort/...` path plus a missing vendored `.mjs` file, and
+offscreen documents not actually having `chrome.tabs`/`chrome.windows`
+access at all (moved the real capture calls to the service worker).
+None of that was guessable in advance - real Chrome testing, each time,
+is what actually found and confirmed each fix.
 
 ## What's here
 
@@ -130,41 +137,35 @@ through Setup and Testing below before trusting either works.
      visible content of a page) - confirm detection and tab-close
      happen within about 5-10 seconds.
 
-## Known, not-yet-verified-on-real-Chrome details
+## Confirmed working (2026-08-25, real Mac/real Chrome)
 
-Written without a real browser available to load this into - flagging
-honestly rather than asserting the confidence this project's Mac-side
-code only earns after a real install. Please actually load this and run
-through Setup and Testing above before assuming any of it works - same
-"confirmed on the real Mac, not assumed" standard as every other
-component in this repo. In rough order of "most likely to actually be
-broken":
+- `onnxruntime-web` actually initializes under Manifest V3's CSP inside
+  the sandboxed iframe - the real risk this whole architecture was built
+  around. Console showed `"NudeNet ONNX session ready in sandbox"`.
+- A real test image, opened in a tab, was caught by the classifier and
+  the tab closed within the expected ~5-10 second window.
+- Keyword blocking (both the URL-based `declarativeNetRequest` path and
+  the page-text content-script fallback).
 
-1. **`onnxruntime-web` under Manifest V3's CSP, even inside the sandbox.**
-   This is the single biggest unknown. Real, documented failure reports
-   exist (multiple open `microsoft/onnxruntime` GitHub issues, as
-   recently as December 2024) of ONNX Runtime Web failing to find a
-   usable backend specifically in a Manifest V3 extension context, even
-   with `wasm-unsafe-eval` set. The sandboxed-iframe architecture here
-   is the documented real-world workaround other people have used
-   successfully, and `numThreads: 1` avoids the specific
-   Worker-spawning code path that's been reported as the actual trigger
-   - but this combination hasn't been confirmed working end to end.
-   Check the service worker's console (step 5 above) first if nothing
-   seems to be happening.
-2. **Capture quality vs. detection accuracy.** `offscreen.js` requests
-   JPEG at quality 70 from `captureVisibleTab` (smaller/faster than
-   PNG) - not yet confirmed this doesn't lose enough detail to cause
-   real misses. If detection seems to be missing things a screenshot
-   clearly shows, try bumping the quality value first.
-3. **`declarativeNetRequest`'s `urlFilter` matching** - documented by
+## Still genuinely unverified
+
+Not blocking - the core pipeline works - but real, open questions worth
+knowing about rather than assuming away:
+
+1. **Capture quality vs. detection accuracy.** `offscreen.js`/
+   `service-worker.js` request JPEG at quality 70 from
+   `captureVisibleTab` (smaller/faster than PNG) - not yet confirmed
+   this doesn't lose enough detail to cause real misses on borderline
+   content. If detection seems to miss something a screenshot clearly
+   shows, try bumping the quality value first.
+2. **`declarativeNetRequest`'s `urlFilter` matching** - documented by
    Chrome as case-insensitive overall; keywords are also already
    lowercased server-side regardless, as a belt-and-suspenders measure.
-4. **`chrome.alarms`' effective minimum period** for a *published/
+3. **`chrome.alarms`' effective minimum period** for a *published/
    policy-installed* extension (vs. this unpacked dev-mode copy, which
    has looser limits) - only matters for the 5-minute keyword sync, not
    the NSFW capture loop (that one runs via a plain `setInterval` inside
    the offscreen document, with no `chrome.alarms` floor at all).
-5. **Multi-window/multi-display coverage.** `offscreen.js` iterates
-   every open Chrome window via `chrome.windows.getAll()` each tick -
+4. **Multi-window/multi-display coverage.** `service-worker.js`'s
+   `captureAllWindows()` iterates every open Chrome window each tick -
    not yet tested with more than one window open at once.
