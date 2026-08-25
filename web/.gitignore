@@ -1,3 +1,9 @@
 node_modules/
-dist/
 .DS_Store
+
+# dist/ IS committed, deliberately - the built output is what
+# worker/wrangler.toml's [assets] binding actually deploys, and this
+# repo's CI never builds web/ (deploy-worker.yml only runs inside
+# worker/) - see that comment for the full reasoning. Rebuild
+# (`npm run build`) and re-commit by hand whenever web/'s source
+# changes; a stale dist/ silently serves old code, nothing will error.

@@ -47,6 +47,27 @@ routes = [
 # domain.
 workers_dev = true
 
+# ContentGuard Central (web/) - the redesigned React dashboard, served
+# from THIS SAME Worker at /central/* rather than a separate Cloudflare
+# Pages project, specifically to avoid the connector change a separate
+# origin would need (real CORS + SameSite=None cookie changes for
+# cross-origin session auth - see web/README.md's own "real deployment
+# blocker" section). No `binding` set here on purpose: without one,
+# Cloudflare's runtime serves a matching static-asset request directly,
+# before this Worker's own fetch() handler ever runs - every existing
+# route (/, /api/*, /sync/*, everything in index.ts) is completely
+# unaffected, zero code changes needed to add this. `directory` points
+# at web/'s build output (`cd web && npm run build`, vite.config.ts's
+# own comment explains why it nests under dist/central/ rather than
+# vite's flat default) - built locally and committed, not built by this
+# repo's CI (deploy-worker.yml only ever runs `npm ci`/deploy inside
+# worker/, never touches web/), so re-run that build and re-commit
+# web/dist/ by hand whenever web/'s source actually changes, same
+# "nothing here is computed live at deploy time" reasoning as every
+# other hand-kept mirror in this project.
+[assets]
+directory = "../web/dist"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "contentguard"
