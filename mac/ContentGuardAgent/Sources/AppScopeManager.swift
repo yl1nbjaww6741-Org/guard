@@ -79,13 +79,28 @@ final class AppScopeManager: NSObject {
 
     override init() {
         super.init()
-        NotificationCenter.default.addObserver(
+        // NSWorkspace.did{Launch,Terminate}ApplicationNotification post to
+        // NSWorkspace.shared.notificationCenter, NOT NotificationCenter.default
+        // (Apple's own docs for NSWorkspace say so explicitly). Registering
+        // on .default here was the real bug behind capture-pause gating
+        // never firing on a real Mac: a live, log-stream-attached test
+        // (open + quit Calculator) produced zero output even from an
+        // unconditional diagnostic NSLog at the very top of
+        // handleAppLifecycleChange, despite confirming via ps/strings that
+        // the running process was freshly built and did contain that log
+        // line - the observer was just never being called. Note
+        // CaptureManager.swift's NSWorkspace.didWake/screensDidSleep/
+        // screensDidWakeNotification registrations are left on .default
+        // deliberately - those are a different notification family and are
+        // independently confirmed working (the "unlock twice" bug required
+        // them to actually fire).
+        NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(handleAppLifecycleChange),
             name: NSWorkspace.didLaunchApplicationNotification,
             object: nil
         )
-        NotificationCenter.default.addObserver(
+        NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(handleAppLifecycleChange),
             name: NSWorkspace.didTerminateApplicationNotification,
@@ -101,7 +116,7 @@ final class AppScopeManager: NSObject {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         safeAppsSyncPollTimer?.cancel()
     }
 
