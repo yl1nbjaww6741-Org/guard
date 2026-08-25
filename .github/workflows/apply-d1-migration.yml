@@ -32,6 +32,13 @@
 # This grants no new power - the token already carries D1:Edit, and
 # anything holding it could already run this by hand. It only moves
 # where that gets exercised, the same tradeoff deploy-worker.yml names.
+#
+# Split into resolve (ungated - validates which migration file a tag/
+# dispatch input actually names, cheap and side-effect-free) + migrate
+# (gated, see below) - same reasoning as build.yml's build/publish split
+# and deploy-worker.yml's typecheck/deploy split: the validation itself
+# needs no approval, only actually running SQL against the real remote
+# database does.
 
 name: Apply D1 Migration
 
@@ -47,18 +54,16 @@ on:
         type: string
 
 jobs:
-  migrate:
+  resolve:
     runs-on: ubuntu-latest
-    name: Apply migration to remote D1
+    name: Resolve migration file
+    outputs:
+      file: ${{ steps.resolve.outputs.file }}
     defaults:
       run:
         working-directory: worker
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
 
       # Resolves both trigger styles down to one filename, and rejects
       # anything that isn't a plain NNNN_name.sql sitting in
@@ -101,6 +106,28 @@ jobs:
           echo "Applying worker/migrations/$migration:"
           cat "migrations/$migration"
 
+  # Self-commitment gate, same mechanism/reviewer as build.yml's `publish`
+  # and deploy-worker.yml's `deploy` - targets the same `release`
+  # Environment (Settings > Environments > release > required reviewers),
+  # already set up. Pauses here until the reviewer approves; `resolve`
+  # above still runs and validates immediately either way, but no SQL
+  # reaches the real remote D1 database without that approval. See
+  # SETUP.md section 6.
+  migrate:
+    needs: resolve
+    runs-on: ubuntu-latest
+    name: Apply migration to remote D1
+    environment: release
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Install dependencies
         run: npm ci
 
@@ -109,4 +136,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: worker
-          command: d1 execute contentguard --remote --file=./migrations/${{ steps.resolve.outputs.file }}
+          command: d1 execute contentguard --remote --file=./migrations/${{ needs.resolve.outputs.file }}

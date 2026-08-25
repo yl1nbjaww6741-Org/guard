@@ -16,9 +16,10 @@
 # full-account token) for the same reason every other Cloudflare API
 # token in this project's history has been scoped down, not broad.
 #
-# tsc --noEmit runs before every deploy, not just at commit time - a
-# type error never reaches the real Worker, even if it somehow slipped
-# past local verification before being pushed.
+# Split into typecheck (ungated, fast pass/fail signal) + deploy (gated,
+# see below) - same build/publish split as build.yml, for the same
+# reason: a push to main shouldn't need approval just to find out
+# whether the code even compiles, only to actually reach the real Worker.
 
 name: Deploy Cloudflare Worker
 
@@ -35,9 +36,9 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  deploy:
+  typecheck:
     runs-on: ubuntu-latest
-    name: Typecheck and deploy
+    name: Typecheck
     defaults:
       run:
         working-directory: worker
@@ -53,6 +54,35 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+  # Self-commitment gate, same mechanism and same reviewer as build.yml's
+  # `publish` job: targets the `release` GitHub Environment (Settings >
+  # Environments > release > required reviewers), already set up for the
+  # APK rule - reused here rather than a second environment, since it's
+  # the same "a human approves before this becomes live" property either
+  # way. This job pauses in the Actions run's own UI until the reviewer
+  # approves it; a push to main itself still lands immediately and
+  # `typecheck` still runs right away, giving a fast signal to help them
+  # decide - but no code reaches the real, deployed Worker without that
+  # approval. See SETUP.md section 6 for the full reasoning and the
+  # one-time setup steps (already done, this job just reuses it).
+  deploy:
+    needs: typecheck
+    runs-on: ubuntu-latest
+    name: Deploy
+    environment: release
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Deploy
         uses: cloudflare/wrangler-action@v4

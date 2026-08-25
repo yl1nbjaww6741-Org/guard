@@ -1112,15 +1112,17 @@ escalation pass (`maybeRunTiledEscalation()`) - it's an unwired hook, not
 an implementation; don't flip it until tiled inference is actually built
 there.
 
-## 6. Self-commitment: requiring a second person's approval before a build ships
+## 6. Self-commitment: requiring the account owner's approval before any real change takes effect
 
 This app is deliberately hard to loosen from *inside* itself (no in-app
 off-switch for incognito detection, no way to disable the accessibility
 watchdog from Settings) - but none of that stops someone from just asking
 Claude Code (or editing the Kotlin directly) to loosen a threshold and
 push a new build. The gap is closed at the CI/release level instead:
-nothing reaches the real `latest-debug` release, and nothing becomes
-installable, without a second person's real approval.
+nothing reaches the real `latest-debug` release, the real deployed
+Worker, or the real remote D1 database, without the account owner
+(`yl1nbjaww6741` - the real GitHub account, confirmed via this repo's own
+collaborator list, `role_name: admin`) actually approving it.
 
 **First attempt (superseded)**: `.github/CODEOWNERS` + classic branch
 protection (Settings > Branches, "Require a pull request before merging"
@@ -1129,7 +1131,15 @@ protection (Settings > Branches, "Require a pull request before merging"
 plan** - it showed as configured but not actually enforced on the free
 tier. `.github/CODEOWNERS` is left in place (harmless, currently inert) in
 case this repo ever goes to a paid plan or public, at which point it
-starts enforcing automatically with no further changes needed.
+starts enforcing automatically with no further changes needed. Also fixed
+in place, found while widening this to the whole repo: the file had
+`@yl1nbajww6741` (transposed letters) the entire time, not the real
+`@yl1nbjaww6741` - confirmed against the real collaborator list, not
+assumed. Meant that even if branch protection *had* been enforced, "Require
+review from Code Owners" would have resolved to no one at all, silently.
+Corrected, and widened from four files under `app/src/main/kotlin/.../detect,service`
+to the whole repo (`* @yl1nbjaww6741`) - still inert today for the same
+paid-plan reason, but now at least accurate if that ever changes.
 
 **What's actually live**: `build.yml` is split into two jobs. `build`
 always runs immediately on every push to `main` - compiles the APK, no
@@ -1148,6 +1158,33 @@ cheap. The `publish` job pauses in the Actions run's own UI until the
 named reviewer clicks approve; nothing about pushing to `main` itself
 is blocked, but the push alone doesn't produce a usable build - only an
 approved `publish` job does.
+
+**Extended to every other consequential workflow, same mechanism, same
+reviewer, no new setup needed**: the APK isn't the only thing a push to
+this repo can make real. `deploy-worker.yml`'s `deploy` job pushes
+arbitrary code straight to the real, live Cloudflare Worker
+(`panel.lukep009.download`) - bypassing the password gate/ratchet
+entirely, since deploy access has always implied that. `apply-d1-migration.yml`'s
+`migrate` job runs arbitrary SQL against the real remote D1 database. Both
+were, until now, entirely ungated - a push (or a tag push) was enough on
+its own, no approval anywhere. Both are now split the same way `build.yml`
+already was: an ungated job first (`typecheck` / `resolve`) giving a fast
+pass/fail signal with no side effects, then a gated job
+(`deploy` / `migrate`) that targets the *same* `release` Environment and
+reviewer already set up for the APK below - reused, not duplicated, since
+it's the identical "a human approves before this becomes live" property
+either way. No new environment, no new one-time setup - approving any of
+the three now goes through the exact same Actions-tab prompt to the same
+person.
+
+**Still not covered, and can't be without a paid plan**: a plain commit to
+`main` that isn't code any of these three workflows acts on - a doc
+change, a comment, anything that doesn't trigger a deploy/publish/migrate
+job - lands with no approval at all, same as it always has. That's the
+real, honest limit of an Environment-based gate: it protects specific
+*jobs*, not the git history itself. Getting actual "no commit reaches
+`main` without review" would need the paid-plan branch protection this
+section already found doesn't work here today.
 
 **One-time setup, via github.com** (no API/CLI covers this - repo
 environments aren't exposed by the GitHub MCP tools this project's

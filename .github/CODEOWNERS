@@ -1,26 +1,32 @@
-# Requires review from @yl1nbajww6741 before merging any change to the
-# files/directories below - the actual gating/blocking logic, not the
-# whole repo. This exists as a deliberate self-commitment device: the
-# point is that gate thresholds and policies can't be quietly loosened by
-# a single person alone (self-approval doesn't satisfy GitHub's required-
-# review check), including via a Claude Code session asked to "help" with
-# a weaker build. See SETUP.md for the full reasoning.
+# Requires review from @yl1nbjaww6741 (the real GitHub account - confirmed
+# via list_repository_collaborators, `role_name: admin`) before merging any
+# change anywhere in this repo. Deliberate self-commitment device: the point
+# is that nothing here - gate thresholds, ratchet policy, the Worker's auth
+# logic, the MDM/Santa integration, this file itself - can be quietly
+# loosened by a single person alone (self-approval doesn't satisfy GitHub's
+# required-review check), including via a Claude Code session asked to
+# "help" with a weaker version of any of it.
+#
+# Real, previously-broken state, fixed here: this file used to say
+# @yl1nbajww6741 (transposed letters) and only covered four files under
+# app/src/main/kotlin/.../detect,service - a real typo that meant it never
+# actually named a valid GitHub user, so even with branch protection
+# enabled it would have resolved to nobody. Widened to the whole repo and
+# corrected to the real username, confirmed against this repo's own
+# collaborator list, not guessed.
 #
 # Only takes effect once main's branch protection has "Require a pull
 # request before merging" + "Require review from Code Owners" enabled -
-# see SETUP.md for the walkthrough. Until then this file has no effect.
+# SETUP.md section 6 covers why that doesn't actually enforce on this
+# repo today (private repo, free GitHub plan) and reuses a different,
+# already-working mechanism (a required-reviewer Environment) instead for
+# every consequential action a push can trigger - see that section, and
+# .github/workflows/build.yml's `publish` job, deploy-worker.yml's
+# `deploy` job, and apply-d1-migration.yml's `migrate` job, all gated on
+# the same `release` environment/reviewer. This file is kept and kept
+# accurate anyway, in case the repo ever moves to a paid plan or goes
+# public, at which point it starts enforcing automatically with no
+# further changes needed - same reasoning the original narrower version
+# already gave for keeping it.
 
-# The classifier, gate policy, and incognito detection - everything that
-# decides what gets blocked and what doesn't.
-/app/src/main/kotlin/com/contentguard/app/detect/ @yl1nbajww6741
-
-# Cascade orchestration, the accessibility watchdog, and the N-strikes/
-# kill-on-lockout logic.
-/app/src/main/kotlin/com/contentguard/app/service/ @yl1nbajww6741
-
-# Permissions and service/receiver declarations - so protection can't be
-# quietly removed at the manifest level instead of the Kotlin level.
-/app/src/main/AndroidManifest.xml @yl1nbajww6741
-
-# Threshold/lockout defaults and limits.
-/app/src/main/kotlin/com/contentguard/app/scope/PrefsRepository.kt @yl1nbajww6741
+* @yl1nbjaww6741
