@@ -85,6 +85,7 @@ export const CONFIG_PROFILES: ConfigProfileDetail[] = [
       "Admin password for app installation: NOT required (deliberate - standard users install freely, see mac/README.md's Phase 3 row)",
       "Screenshots and screen recording: blocked",
       "The 'someone is recording your screen' system alert: suppressed (forceBypassScreenCaptureAlert - needed so ContentGuardAgent's own legitimate capture doesn't nag the user)",
+      "Every other browser blocked, only the hardened Chrome (stable channel, carrying the AI-blocker extension) may launch (blacklistedAppBundleIDs, added 2026-08-25, explicit user request) - Safari (incl. Technology Preview) and Chrome's own beta/dev/canary channels are blocked too, since none of those carry chrome-policy.mobileconfig's ExtensionInstallForcelist enforcement. Best-effort enumeration of known browser bundle IDs, not a true wildcard - see the profile's own comment for the limitation and the on-device verification steps",
     ],
   },
   {

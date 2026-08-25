@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>02C634B6-1924-4ADC-9E63-600C318508A9</string>
     <key>PayloadVersion</key>
-    <integer>3</integer>
+    <integer>4</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>9E25880A-CCAF-4034-B1BC-1AF9D59008A5</string>
             <key>PayloadVersion</key>
-            <integer>3</integer>
+            <integer>4</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Restrictions Payload</string>
 
@@ -78,6 +78,92 @@
             <false/>
             <key>forceBypassScreenCaptureAlert</key>
             <true/>
+            <!--
+              blacklistedAppBundleIDs: added 2026-08-25, explicit user
+              request - corrected mid-edit from an initial "block
+              everything but Safari" misreading to what was actually
+              meant: block every other browser and route everything
+              through Chrome specifically, because Chrome is "the
+              hardened one" - the one carrying the mandatory AI-blocker
+              extension via chrome-policy.mobileconfig's
+              ExtensionInstallForcelist (this session's own build,
+              confirmed live 2026-08-25). Safari has no equivalent
+              extension/enforcement built for it in this project, so it
+              gets blocked here along with everything else - this list
+              now makes chrome-policy.mobileconfig's whole force-install
+              build the one thing standing between this Mac and a
+              browser with no content filtering at all, rather than
+              redundant with it.
+
+              Real limitation, stated up front rather than implied:
+              com.apple.applicationaccess only supports blocking
+              specific bundle IDs you enumerate - there is no "block
+              everything in the browser category" primitive. The
+              alternative that WOULD be a true "only X can run" -
+              whitelistedAppBundleIDs - was deliberately not used here:
+              it flips this from "block browsers" into "block every app
+              on the system not explicitly listed" (Mail, Terminal,
+              Xcode, Slack, the lot), a far bigger and more disruptive
+              lockdown than what was asked for. So this list is a
+              best-effort enumeration of known desktop browser bundle
+              IDs (each vendor's standard signed-build identifier, not
+              guessed) - a new browser, a renamed fork, or an unlisted
+              rebrand released after this was written won't be caught
+              until its real bundle ID is added. MUST be verified on
+              the real Mac after this profile is pushed, not assumed:
+              try launching each installed non-Chrome browser (Safari
+              included) and confirm each is actually refused; for
+              anything that still launches, get its real ID with
+              `mdls -name kMDItemCFBundleIdentifier -r /Applications/X.app`
+              and add it here.
+
+              Chrome's own beta/dev/canary channels are included below,
+              not exempted alongside stable - each is a separate app
+              with its own bundle ID and its own, unmanaged preferences
+              domain, so none of them actually carry the
+              ExtensionInstallForcelist enforcement (that policy is
+              scoped to com.google.Chrome, the managed stable channel,
+              in chrome-policy.mobileconfig's PayloadContent dict key).
+              Only plain com.google.Chrome is the hardened one and stays
+              off this list.
+            -->
+            <key>blacklistedAppBundleIDs</key>
+            <array>
+                <!-- Apple's own browser - deliberately blocked, see this
+                     comment's opening paragraph -->
+                <string>com.apple.Safari</string>
+                <string>com.apple.SafariTechnologyPreview</string>
+                <!-- Chromium family (all except the hardened stable
+                     Chrome channel itself) -->
+                <string>com.google.Chrome.beta</string>
+                <string>com.google.Chrome.dev</string>
+                <string>com.google.Chrome.canary</string>
+                <string>org.chromium.Chromium</string>
+                <string>com.microsoft.edgemac</string>
+                <string>com.microsoft.edgemac.Beta</string>
+                <string>com.microsoft.edgemac.Dev</string>
+                <string>com.microsoft.edgemac.Canary</string>
+                <string>com.brave.Browser</string>
+                <string>com.brave.Browser.beta</string>
+                <string>com.brave.Browser.nightly</string>
+                <string>com.operasoftware.Opera</string>
+                <string>com.operasoftware.OperaGX</string>
+                <string>com.operasoftware.OperaNext</string>
+                <string>com.vivaldi.Vivaldi</string>
+                <string>company.thebrowser.Browser</string>
+                <string>company.thebrowser.dia</string>
+                <string>ru.yandex.desktop.yandex-browser</string>
+                <!-- Firefox family -->
+                <string>org.mozilla.firefox</string>
+                <string>org.mozilla.firefoxdeveloperedition</string>
+                <string>org.mozilla.nightly</string>
+                <string>net.waterfox.waterfox</string>
+                <string>io.gitlab.librewolf-community</string>
+                <string>org.torproject.torbrowser</string>
+                <!-- Independent / other engines -->
+                <string>com.duckduckgo.macos.browser</string>
+                <string>com.kagi.kagimacOS</string>
+            </array>
         </dict>
     </array>
 </dict>
