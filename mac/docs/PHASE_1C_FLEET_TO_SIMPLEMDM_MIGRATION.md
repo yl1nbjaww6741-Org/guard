@@ -1,13 +1,21 @@
 # Phase 1c - Migrate off Fleet entirely, to SimpleMDM
 
-**Plan only - not started, not acted on.** Written to think through the
-decision properly before committing to it, per explicit instruction:
-this is a reference document to come back to, not a runbook to run
-today. Unlike `PHASE_1B_FLEET_HETZNER_MIGRATION.md` (which keeps Fleet,
-just relocates where it's hosted), this is a genuinely different move:
-**dropping Fleet as the MDM entirely** in favor of SimpleMDM, a hosted
-SaaS MDM. If this is ever adopted, it replaces the Hetzner plan rather
+**Plan written, both real open questions since resolved - not yet
+started.** Unlike `PHASE_1B_FLEET_HETZNER_MIGRATION.md` (which keeps
+Fleet, just relocates where it's hosted), this is a genuinely different
+move: **dropping Fleet as the MDM entirely** in favor of SimpleMDM, a
+hosted SaaS MDM, saving ~$25 AUD/month (Fleet Premium's $7/mo license
+fee plus Fly hosting, vs. SimpleMDM's flat $2.50-3/device/mo with
+nothing to host). If adopted, this replaces the Hetzner plan rather
 than sitting alongside it - there'd be no Fleet stack left to relocate.
+
+Both items in "Real open questions" below that were genuinely blocking
+- Recovery Lock inclusion, and re-enrollment risk - are now confirmed
+by the user directly: Recovery Lock is available on the plan being
+evaluated, and unenrolling from Fleet/re-enrolling in SimpleMDM is
+straightforward on this Mac's actual setup, not the wipe-and-redo risk
+originally flagged. Nothing left blocking a decision to proceed except
+choosing to.
 
 ## Why this is even on the table
 
@@ -84,13 +92,10 @@ replacement would need to account for.
 Same discipline this whole project runs on - none of these are
 confirmed yet, and each would change the plan:
 
-- [ ] **Does the $2.50-3/device plan actually include Recovery Lock,
-      with no further gate?** The `rotate_recovery_lock_password` API
-      endpoint existing isn't proof by itself - SimpleMDM's own pricing
-      page never explicitly says "Recovery Lock included." Confirm via
-      their support chat, or by actually enrolling a test device on the
-      free trial and checking the action is live, before trusting this
-      as the reason to switch.
+- [x] **Does the $2.50-3/device plan actually include Recovery Lock,
+      with no further gate?** **Confirmed by the user directly** (not
+      just inferred from the API endpoint existing) - Recovery Lock is
+      available on the plan being evaluated. No longer a blocker.
 - [ ] **Is there a way to *retrieve* the current Recovery Lock password,
       not just rotate/clear it?** Only rotate/clear endpoints turned up
       in the docs check above - if reading the current value requires
@@ -98,16 +103,11 @@ confirmed yet, and each would change the plan:
       time, that changes what "check the Recovery Lock password" looks
       like operationally compared to Fleet's own dashboard-viewable
       value.
-- [ ] **What does re-enrolling this specific Mac under a new MDM vendor
-      actually require?** If the Mac is DEP/ADE-enrolled through Apple
-      Business Manager (how "supervised" status usually gets set - see
-      Phase 1's own status in `mac/README.md`), switching vendors
-      likely means reassigning the device's MDM server in ABM, and
-      possibly a full wipe-and-re-enroll depending on the current
-      supervision path - not a hot-swap the way the Hetzner plan's
-      tunnel-token reuse is. Confirm the exact mechanics (and whether a
-      wipe is genuinely required or just a fresh MDM checkout) before
-      treating this as low-risk.
+- [x] **What does re-enrolling this specific Mac under a new MDM vendor
+      actually require?** **Confirmed by the user directly**: unenrolling
+      from Fleet and re-enrolling in SimpleMDM is straightforward on
+      this Mac's actual ABM setup - not the full wipe-and-redo risk this
+      item originally flagged. No longer a blocker.
 - [ ] **Does SimpleMDM's `.pkg` install path (`POST /api/v1/apps` +
       `push_apps`) support the same install-script/self-service options
       Fleet's software library does?** Only matters if any current
