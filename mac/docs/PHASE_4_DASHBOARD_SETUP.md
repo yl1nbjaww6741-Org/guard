@@ -725,6 +725,45 @@ headless Chromium session, same bar as everything else in this phase**:
 
 `tsc --noEmit` passes clean throughout.
 
+## 2026-08-25: DeveloperToolsAvailability loosened to unblock extension testing - and a real limit of the ratchet-closing fix above, surfaced
+
+Building the Chrome extension (`chrome-extension/`, keyword-blocker Phase
+A) needed "Load unpacked" in `chrome://extensions`, which turned out to
+be blocked - `chrome-policy.mobileconfig`'s `DeveloperToolsAvailability:
+2` (Disallowed), set since Phase 3/4, never touched by 2026-08-24's
+loosening. Chrome's own documented behavior for that value: it also
+disables "Developer mode" on the extensions page, not just the DevTools
+panel - a real, previously-undiscovered self-inflicted blocker, not a
+Fleet/MDM bug.
+
+Same three-option framing as 2026-08-24 was offered again (extend the
+ratchet, apply immediately, wait a day) - **the user again chose apply
+immediately**. `DeveloperToolsAvailability` changed `2` -> `1`
+(`PayloadVersion` 3->4).
+
+**A real limit of "The gap above is now closed" (this doc's own earlier
+section) surfaced doing this**: that fix made this dashboard's own
+`POST/PATCH /api/config-profiles` unconditionally ratchet every profile
+change, no exceptions - which means an actual "apply immediately" can no
+longer happen through this dashboard at all anymore, by design. The only
+way to push a profile change immediately is now what it always
+implicitly was underneath - Fleet's own native UI (**Controls -> OS
+settings -> Custom settings**) or API, directly, which this Worker has
+no ability to gate no matter how the ratchet is built, since those paths
+never touch this Worker. Named explicitly here rather than left
+implicit: this dashboard's ratchet governs *itself*, not Fleet - anyone
+with real Fleet access could always bypass it this way, on any profile,
+not just this one. Not a new gap this change created, just the first
+time it's been exercised and worth writing down.
+
+**Deliberately temporary**: the doc comment in
+`chrome-policy.mobileconfig` itself says to re-tighten back to `2` once
+`chrome-extension/` is packaged, signed, and actually force-installed via
+`ExtensionInstallForcelist` (already scaffolded in the same file) -
+policy-forced installs don't go through "Load unpacked"/Developer mode
+at all, so this loosening's whole reason to exist goes away once that's
+done.
+
 ## Safe-app whitelist moved to the dashboard
 
 `ContentGuardConfig.safeAppBundleIDs` (mac/Shared/Config.swift) - the

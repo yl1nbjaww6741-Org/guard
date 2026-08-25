@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>6ECA9AC0-F965-4483-8362-5B12E50392E8</string>
     <key>PayloadVersion</key>
-    <integer>3</integer>
+    <integer>4</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>56450B06-03B6-4F67-8CF6-95716E896A8F</string>
             <key>PayloadVersion</key>
-            <integer>3</integer>
+            <integer>4</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Chrome Policy Payload</string>
             <key>PayloadContent</key>
@@ -84,8 +84,54 @@
                                 <array>
                                     <string>__AI_BLOCKER_EXTENSION_ID__;__AI_BLOCKER_UPDATE_URL__</string>
                                 </array>
+                                <!--
+                                  DeveloperToolsAvailability: 1 (Allowed),
+                                  not 2 (Disallowed) - deliberately
+                                  loosened 2026-08-25, explicit user
+                                  choice ("Apply immediately"), same
+                                  informed-override precedent as
+                                  2026-08-24's ExtensionInstallBlocklist/
+                                  BrowserSignin change (see this project's
+                                  docs, "Loosening MDM profile
+                                  restrictions"). Real, immediate need:
+                                  Chrome's own documented behavior for
+                                  DeveloperToolsAvailability=2 is that it
+                                  ALSO disables "Developer mode" on the
+                                  chrome://extensions page, not just the
+                                  DevTools panel - which blocked "Load
+                                  unpacked", the only way to test
+                                  chrome-extension/ before it's packaged
+                                  and force-installed for real via
+                                  ExtensionInstallForcelist above.
+
+                                  Pushed DIRECTLY through Fleet's own UI
+                                  (Controls -> OS settings -> Custom
+                                  settings), not this dashboard's own
+                                  config-profile upload feature - that
+                                  feature now unconditionally ratchets
+                                  every profile change 24h+password, no
+                                  exceptions (a deliberate fix, see this
+                                  project's docs' "The gap above is now
+                                  closed" section) - so an immediate push
+                                  can only ever happen outside this
+                                  dashboard, via Fleet's own native UI/API
+                                  directly, which this Worker has no
+                                  ability to gate at all. Named
+                                  explicitly, not hidden: this is a real,
+                                  permanent limit of what the ratchet can
+                                  cover, not a bug in it.
+
+                                  TEMPORARY - re-tighten back to 2 once
+                                  chrome-extension/ is packaged/signed and
+                                  force-installed via ExtensionInstallForcelist
+                                  above (which doesn't need Developer mode
+                                  at all, since Chrome installs a policy-
+                                  forced extension itself, not through the
+                                  user-facing "Load unpacked" flow this
+                                  loosening exists only to unblock).
+                                -->
                                 <key>DeveloperToolsAvailability</key>
-                                <integer>2</integer>
+                                <integer>1</integer>
                                 <key>IncognitoModeAvailability</key>
                                 <integer>1</integer>
                                 <key>BrowserGuestModeEnabled</key>
