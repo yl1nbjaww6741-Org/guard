@@ -52,18 +52,27 @@ binding = "DB"
 database_name = "contentguard"
 database_id = "8cb09d1d-1497-449f-86d5-f7c754c5f884"
 
-# Hosts the self-packaged Chrome extension .crx for MDM force-install -
-# see worker/src/extensionUpdate.ts's own doc comment and
-# chrome-extension/build/README.md for the full flow. Bucket itself has
-# to be created once by hand (`wrangler r2 bucket create
-# contentguard-extension`, see that README) before this binding resolves
-# to anything real - a fresh deploy before that step still starts up
-# fine (types.ts's Env.EXTENSION_ASSETS is optional specifically for
-# this), it just means GET /extension/contentguard.crx 404s until the
-# bucket exists and has something uploaded to it.
-[[r2_buckets]]
-binding = "EXTENSION_ASSETS"
-bucket_name = "contentguard-extension"
+# R2 binding for the self-hosted extension .crx (worker/src/extensionUpdate.ts,
+# chrome-extension/build/README.md) is DELIBERATELY NOT HERE YET - real
+# deploy failure confirmed live (GitHub Actions run #19, 2026-08-25):
+# `wrangler deploy` validates an [[r2_buckets]] binding against
+# Cloudflare's real API at deploy time (unlike a D1 binding, which
+# already carries a concrete database_id), and it failed with
+# "Authentication error [code: 10000]" - the GitHub Actions deploy
+# token doesn't have R2 permissions. That's a genuinely different
+# credential from whatever `wrangler` auth you set up locally in a
+# Codespace, and broke every future deploy on this branch until
+# reverted, not just this one change.
+#
+# To re-add once ready (both steps needed, not just one):
+#   1. `npx wrangler r2 bucket create contentguard-extension` (from worker/)
+#   2. Grant the GitHub Actions deploy token (whatever's set as the
+#      CLOUDFLARE_API_TOKEN repo secret) R2 read/write permission - check
+#      its scopes at https://dash.cloudflare.com/profile/api-tokens
+# Then uncomment:
+# [[r2_buckets]]
+# binding = "EXTENSION_ASSETS"
+# bucket_name = "contentguard-extension"
 
 # Not a secret - a Fleet host identifier isn't sensitive the way
 # FLEET_API_TOKEN is, so this is a plain var, not a `wrangler secret
