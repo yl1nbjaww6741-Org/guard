@@ -30,13 +30,20 @@ through Setup and Testing below before trusting either works.
 **Phase B - NSFW detection:**
 - `background/offscreen.html` + `offscreen.js` - a `chrome.offscreen`
   document, which (unlike the service worker) doesn't get suspended when
-  idle - the actual 5-second `setInterval` capture loop lives here.
-  Screenshots every open window's active tab
-  (`chrome.tabs.captureVisibleTab`, ~2 calls/second real Chrome rate
-  limit, comfortably above what a 5-second cadence needs even with
-  several windows open), decodes each to raw pixel data, and hands it to
-  the sandbox below for classification. On a real detection, tells the
-  service worker which tab to close.
+  idle - the actual 5-second `setInterval` capture loop lives here. Does
+  NOT call `chrome.tabs`/`chrome.windows` itself, despite what an earlier
+  version of this file assumed - confirmed live that offscreen documents
+  only have `chrome.runtime` messaging access, nothing else (a deliberate
+  Chrome restriction). Instead it asks `background/service-worker.js`
+  (which has full API access) to do the actual screenshotting via
+  `chrome.runtime.sendMessage`, decodes what comes back to raw pixel
+  data, and hands it to the sandbox below for classification. On a real
+  detection, tells the service worker which tab to close.
+- `background/service-worker.js` - besides Phase A's keyword sync, also
+  owns the real `chrome.tabs.captureVisibleTab` calls (~2 calls/second
+  real Chrome rate limit, comfortably above what a 5-second cadence needs
+  even with several windows open) for the reason above, responding to the
+  offscreen document's capture requests.
 - `sandbox/sandbox.html` + `sandbox.js` - a manifest-declared **sandbox**
   page (relaxed CSP, no `chrome.*` API access, own opaque origin) that
   actually runs the ONNX Runtime Web session and the classifier.

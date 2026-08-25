@@ -1,13 +1,25 @@
-// The privileged half of NSFW detection - see offscreen.html's own
-// comment for the split with sandbox/sandbox.js. This file: captures
-// screenshots (chrome.tabs.captureVisibleTab, needs chrome.* access),
-// decodes them to raw pixel data, and hands that to the sandboxed iframe
-// for actual classification via postMessage. On a real detection, tells
-// the service worker which tab to close - reuses the exact same
-// close-the-tab mechanism content-scripts/keyword-blocker.js's matches
-// already trigger (see service-worker.js's onMessage listener), same
-// "close the tab immediately" reasoning from this project's own
+// The DOM/classification half of NSFW detection - see offscreen.html's
+// own comment for the split with sandbox/sandbox.js. This file: asks the
+// service worker to actually capture screenshots (see below for why it
+// can't do that itself), decodes them to raw pixel data, and hands that
+// to the sandboxed iframe for classification via postMessage. On a real
+// detection, tells the service worker which tab to close - reuses the
+// exact same close-the-tab mechanism content-scripts/keyword-blocker.js's
+// matches already trigger (see service-worker.js's onMessage listener),
+// same "close the tab immediately" reasoning from this project's own
 // 2026-08-25 decision either way.
+//
+// Does NOT call chrome.tabs/chrome.windows directly, despite this
+// project's own manifest.json listing those permissions - CONFIRMED LIVE
+// (real Mac, real Chrome, 2026-08-25: "Uncaught TypeError: Cannot read
+// properties of undefined (reading 'getAll')" at chrome.windows.getAll())
+// and independently confirmed against Chrome's own developer docs:
+// offscreen documents only have access to chrome.runtime messaging -
+// chrome.tabs and chrome.windows are simply not exposed there at all, a
+// deliberate Chrome restriction so offscreen documents can't be used as
+// a background-page replacement. requestCaptures() below asks
+// service-worker.js (which DOES have full API access) to do the actual
+// capturing instead.
 
 const CAPTURE_INTERVAL_MS = 5000; // Matches ContentGuardConfig.captureIntervalSeconds
 // (mac/Shared/Config.swift) exactly - the whole point of this feature
@@ -99,30 +111,18 @@ async function dataUrlToImageData(dataUrl) {
   return ctx.getImageData(0, 0, bitmap.width, bitmap.height);
 }
 
-async function captureAndClassifyWindow(win) {
-  let dataUrl;
-  try {
-    // format/quality: JPEG at 70, not PNG - this is fed straight into a
-    // 640x640 float32 classifier, not shown to a human, so lossless
-    // capture buys nothing here and PNG's larger payload only slows down
-    // the decode step below for no benefit. Not yet confirmed this
-    // quality level doesn't lose detail the classifier actually needs -
-    // worth watching for a real detection gap during testing, same as
-    // every other "reasoned but not yet independently verified" note in
-    // this extension.
-    dataUrl = await chrome.tabs.captureVisibleTab(win.id, { format: "jpeg", quality: 70 });
-  } catch (err) {
-    // Real, expected failure modes, not bugs: a minimized window, a
-    // chrome:// / Chrome Web Store page (captureVisibleTab is
-    // documented as unable to capture those - nothing sensitive lives
-    // there anyway), or a window with no active tab. Skip this window
-    // for this tick rather than treating it as fatal to the whole loop.
-    return;
-  }
+// Round-trips to service-worker.js's own onMessage listener
+// ("contentguard-capture-request" case) - see this file's own header
+// comment for why the actual chrome.tabs/chrome.windows calls have to
+// live there instead of here. Returns [{tabId, dataUrl}, ...], already
+// filtered down to windows that had something capturable (a minimized
+// window, chrome:// page, etc. is silently excluded on the service
+// worker's side).
+function requestCaptures() {
+  return chrome.runtime.sendMessage({ type: "contentguard-capture-request" });
+}
 
-  const [activeTab] = await chrome.tabs.query({ active: true, windowId: win.id });
-  if (!activeTab) return;
-
+async function classifyCapture({ tabId, dataUrl }) {
   let imageData;
   try {
     imageData = await dataUrlToImageData(dataUrl);
@@ -140,8 +140,8 @@ async function captureAndClassifyWindow(win) {
   }
 
   if (result.detected) {
-    console.log(`ContentGuard: DETECTED - class=${result.detectionClass} confidence=${result.confidence} tab=${activeTab.id}`);
-    chrome.runtime.sendMessage({ type: "contentguard-nsfw-detection", tabId: activeTab.id });
+    console.log(`ContentGuard: DETECTED - class=${result.detectionClass} confidence=${result.confidence} tab=${tabId}`);
+    chrome.runtime.sendMessage({ type: "contentguard-nsfw-detection", tabId });
   }
 }
 
@@ -156,14 +156,20 @@ function startCaptureLoop() {
   captureLoopStarted = true;
   setInterval(async () => {
     if (!sandboxReady) return;
-    const windows = await chrome.windows.getAll();
-    // Sequential, not Promise.all - captureVisibleTab's own rate limit
-    // (~2/second) means firing every window's capture simultaneously
-    // could exceed it with more than 2 windows open; sequential capture
-    // within a single 5-second tick has comfortable headroom regardless
-    // of window count.
-    for (const win of windows) {
-      await captureAndClassifyWindow(win);
+    let captures;
+    try {
+      captures = await requestCaptures();
+    } catch (err) {
+      console.warn("ContentGuard: capture request to service worker failed", err);
+      return;
+    }
+    // Sequential, not Promise.all - classifyCapture ultimately round-
+    // trips through the sandbox iframe for real ONNX inference, which
+    // has no benefit (and real cost - competing WASM work) running
+    // several captures at once; the whole point of a 5-second cadence
+    // is that this has comfortable headroom to run one at a time.
+    for (const capture of captures ?? []) {
+      await classifyCapture(capture);
     }
   }, CAPTURE_INTERVAL_MS);
 }

@@ -174,6 +174,49 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
+// The actual chrome.tabs/chrome.windows work for NSFW detection - has to
+// live HERE, not in background/offscreen.js where it originally lived.
+// CONFIRMED LIVE (real Mac, real Chrome, 2026-08-25 - the exact error
+// was "Uncaught TypeError: Cannot read properties of undefined (reading
+// 'getAll')" at chrome.windows.getAll() inside offscreen.html's own
+// context) and independently confirmed against Chrome's own developer
+// docs: offscreen documents only have access to chrome.runtime messaging
+// - chrome.tabs and chrome.windows are simply not exposed there at all,
+// a deliberate restriction so offscreen documents can't be used as a
+// background-page replacement. background/offscreen.js now requests a
+// capture via chrome.runtime.sendMessage and gets the screenshots back
+// in the response, instead of calling these APIs itself.
+async function captureAllWindows() {
+  const windows = await chrome.windows.getAll();
+  const captures = [];
+  // Sequential, not Promise.all - captureVisibleTab's own rate limit
+  // (~2/second, introduced Chrome 92) means firing every window's
+  // capture simultaneously could exceed it with more than 2 windows
+  // open; sequential capture within a single 5-second tick has
+  // comfortable headroom regardless of window count.
+  for (const win of windows) {
+    let dataUrl;
+    try {
+      // format/quality: JPEG at 70, not PNG - this is fed straight into
+      // a 640x640 float32 classifier, not shown to a human, so lossless
+      // capture buys nothing here. Not yet confirmed this quality level
+      // doesn't lose detail the classifier actually needs.
+      dataUrl = await chrome.tabs.captureVisibleTab(win.id, { format: "jpeg", quality: 70 });
+    } catch (err) {
+      // Real, expected failure modes, not bugs: a minimized window, a
+      // chrome:// / Chrome Web Store page (captureVisibleTab is
+      // documented as unable to capture those - nothing sensitive lives
+      // there anyway), or a window with no active tab. Skip this window
+      // for this tick rather than treating it as fatal to the whole loop.
+      continue;
+    }
+    const [activeTab] = await chrome.tabs.query({ active: true, windowId: win.id });
+    if (!activeTab) continue;
+    captures.push({ tabId: activeTab.id, dataUrl });
+  }
+  return captures;
+}
+
 // Shared by both reaction paths below - closing the tab, not covering/
 // blurring it, per this project's own AskUserQuestion decision on
 // 2026-08-25 ("close the tab immediately (Recommended)"), matching the
@@ -189,7 +232,7 @@ function closeTab(tabId) {
   });
 }
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // content-scripts/keyword-blocker.js's page-text/title scan - fires
   // once it finds a match the URL-based declarativeNetRequest rule
   // didn't already catch (i.e. the keyword only appears in rendered
@@ -209,5 +252,23 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   // so sender.tab would be wrong (or absent) here.
   if (message?.type === "contentguard-nsfw-detection" && typeof message.tabId === "number") {
     closeTab(message.tabId);
+    return;
+  }
+  // background/offscreen.js's capture loop asking THIS context (which
+  // has full chrome.tabs/chrome.windows access, unlike the offscreen
+  // document itself - see captureAllWindows()'s own comment) to actually
+  // do the screenshotting. Classic async-sendResponse pattern (return
+  // true synchronously, call sendResponse from inside the .then()) -
+  // deliberately not the newer "async listener returns a Promise
+  // directly" style, to avoid any doubt about cross-Chrome-version
+  // support for a message path this whole feature depends on.
+  if (message?.type === "contentguard-capture-request") {
+    captureAllWindows()
+      .then(sendResponse)
+      .catch((err) => {
+        console.error("ContentGuard: captureAllWindows failed", err);
+        sendResponse([]);
+      });
+    return true;
   }
 });
