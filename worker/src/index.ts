@@ -25,11 +25,13 @@ import {
   clearFailedLoginAttempts,
   getActivePendingPasswordChange,
   getDashboardPasswordHash,
+  getLoginPasswordHash,
   getRuleById,
   isLoginLockedOut,
   listActiveLoosenRequests,
   listRules,
   recordFailedLoginAttempt,
+  setLoginPasswordHash,
   upsertRule,
 } from "./db";
 import {
@@ -188,6 +190,11 @@ async function handleLoosenRequest(ruleId: number, request: Request, env: Env): 
 // attempts get a uniform 429 regardless of whether the guessed password
 // happened to be close. A missing SESSION_SIGNING_KEY or an unbootstrapped
 // password both fail closed (503), never treated as "let anyone in."
+//
+// Checks against login_auth, NOT dashboard_auth - split 2026-08-25, see
+// schema.sql's comment on both tables. The office password (dashboard_auth)
+// is no longer involved in reaching the dashboard at all; it's only
+// re-checked at the moment of an actual loosen-request.
 async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_SIGNING_KEY) {
     return jsonResponse({ error: "session signing key not configured" }, 503);
@@ -197,7 +204,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   }
 
   const body = await request.json<{ password?: string }>();
-  const storedHash = await getDashboardPasswordHash(env.DB);
+  const storedHash = await getLoginPasswordHash(env.DB);
   if (!body.password || !storedHash || !(await verifyPasswordHash(body.password, storedHash))) {
     await recordFailedLoginAttempt(env.DB);
     return jsonResponse({ error: "incorrect password" }, 401);
@@ -208,13 +215,42 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   return jsonResponse({ ok: true }, 200, { "set-cookie": cookie });
 }
 
+// Changes the LOGIN password (login_auth) - deliberately NOT the same
+// flow as handlePasswordChangeRequest below, which changes the OFFICE
+// password (dashboard_auth) and stays ratchet-gated. This one applies
+// immediately once the current login password re-checks: no pending
+// row, no 24h delay, no relation to ratchet.ts at all. Session-gated by
+// the caller (same as every other /api/... route), plus the current-
+// password re-check here - being logged in isn't enough on its own to
+// change the very password that logs you in, same pattern as every
+// other password-change flow in this project, just without the delay
+// since changing this one doesn't loosen or tighten anything.
+async function handleChangeLoginPassword(request: Request, env: Env): Promise<Response> {
+  const body = await request.json<{ current_password?: string; new_password?: string }>();
+  const storedHash = await getLoginPasswordHash(env.DB);
+  if (!body.current_password || !storedHash || !(await verifyPasswordHash(body.current_password, storedHash))) {
+    return jsonResponse({ error: "incorrect or missing current password" }, 403);
+  }
+  if (!body.new_password) {
+    return jsonResponse({ error: "missing new password" }, 400);
+  }
+  const newHash = await hashPassword(body.new_password);
+  await setLoginPasswordHash(env.DB, newHash);
+  return jsonResponse({ ok: true });
+}
+
 function handleLogout(): Response {
   return jsonResponse({ ok: true }, 200, { "set-cookie": clearSessionCookie() });
 }
 
 // Requires an already-valid session (checked by the caller) *and* the
-// current password, same re-check pattern as handleLoosenRequest above -
-// being logged in isn't enough to change the password that logs you in.
+// current password, same re-check pattern as handleLoosenRequest above.
+// This changes THE OFFICE PASSWORD (dashboard_auth) - stays ratchet-
+// gated (24h delay, cancellable) same as every other loosening action,
+// unlike handleChangeLoginPassword above which changes a different,
+// unratcheted credential. Being logged in (which no longer needs this
+// password at all, see handleLogin's comment) isn't enough on its own
+// to queue a change to the one that gates loosening.
 async function handlePasswordChangeRequest(request: Request, env: Env): Promise<Response> {
   const body = await request.json<{ current_password?: string; new_password?: string }>();
   const storedHash = await getDashboardPasswordHash(env.DB);
@@ -473,7 +509,18 @@ export default {
       return new Response("Method Not Allowed", { status: 405 });
     }
 
-    // --- Dashboard password-change API (session-gated) ---
+    // --- Login-password change (session-gated, NOT ratchet-gated - see
+    // handleChangeLoginPassword's own doc comment for why this is a
+    // separate route/table from the office-password group below) ---
+    if (url.pathname === "/api/login-password/change" && request.method === "POST") {
+      const authError = await requireSession(request, env);
+      if (authError) return authError;
+      return handleChangeLoginPassword(request, env);
+    }
+
+    // --- Dashboard password-change API (session-gated) - this is the
+    // OFFICE/loosen password (dashboard_auth), ratchet-gated. See the
+    // login-password route just above for the other, unratcheted one. ---
     const isPasswordApiRoute =
       url.pathname === "/api/password/change-request" ||
       url.pathname === "/api/password/pending-change" ||

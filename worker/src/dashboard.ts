@@ -246,11 +246,23 @@ export function renderDashboard(): string {
   </section>
 
   <section>
-    <h2>Change password</h2>
+    <h2>Change login password</h2>
+    <div class="subtitle" style="margin-bottom: 0;">The everyday credential that gets you into this dashboard at all, and lets you view/tighten once you're in. Separate from the office password below - changing this one takes effect immediately, no delay, since it doesn't loosen or tighten anything on its own.</div>
+    <form class="inline" id="change-login-password-form">
+      <input type="password" name="current_password" placeholder="Current login password" required>
+      <input type="password" name="new_password" placeholder="New login password" required>
+      <button type="submit">Change now</button>
+    </form>
+    <div class="status-msg" id="login-password-status"></div>
+  </section>
+
+  <section>
+    <h2>Change office password</h2>
+    <div class="subtitle" style="margin-bottom: 0;">The one that unlocks loosening - required to un-block a Santa rule, add a safe app, remove a keyword, or edit an MDM profile. Deliberately kept somewhere you can't casually reach day-to-day; this dashboard no longer needs it just to log in. See the Access map tab for the full list of what this password gates.</div>
     <div id="password-pending-note"></div>
     <form class="inline" id="change-password-form">
-      <input type="password" name="current_password" placeholder="Current password" required>
-      <input type="password" name="new_password" placeholder="New password" required>
+      <input type="password" name="current_password" placeholder="Current office password" required>
+      <input type="password" name="new_password" placeholder="New office password" required>
       <button type="submit">Request change</button>
     </form>
     <div class="status-msg" id="password-status">Takes effect 24 hours after requesting, same as loosening a rule.</div>
@@ -269,30 +281,34 @@ export function renderDashboard(): string {
   <div id="tab-access-map" class="tab-panel" hidden>
 
   <section>
-    <h2>The one password</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Hand-kept, not computed live - same reasoning as the MDM profile detail mirror above: this Worker only ever stores a SHA-256 hash of the dashboard password (schema.sql's dashboard_auth table), never the plaintext, so nothing on this page can reveal what it actually is. What follows is a real, code-verified map of what that one password unlocks, not a guess.</div>
-    <p style="font-size: 0.85rem; color: #c3c6cc; margin: 0.6rem 0;">Every one of the actions below independently calls the exact same check - <code>getDashboardPasswordHash()</code> + <code>verifyPasswordHash()</code> - against the exact same stored hash as logging in. There has only ever been one password in this system, reused everywhere on purpose (see <code>mac/README.md</code>'s Phase 4 row: "the same real office password reused for both by explicit choice"). If you have it, every row below is unlocked. If you don't - which is the deliberate point of keeping it at the office - none of them are, even from an already-logged-in session.</p>
+    <h2>Two passwords, not one</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Hand-kept, not computed live - same reasoning as the MDM profile detail mirror above: this Worker only ever stores SHA-256 hashes (schema.sql's login_auth and dashboard_auth tables), never a plaintext password, so nothing on this page can reveal what either one actually is. What follows is a real, code-verified map of what each unlocks, not a guess.</div>
+    <p style="font-size: 0.85rem; color: #c3c6cc; margin: 0.6rem 0;">Changed 2026-08-25 from a single unified password to two separate ones: the <strong>login password</strong> (<code>login_auth</code>) gets you into this dashboard and lets you view/tighten once you're in - an everyday credential, not kept out of reach. The <strong>office password</strong> (<code>dashboard_auth</code>) is the one deliberately kept somewhere you can't casually reach, and it's <em>only</em> re-checked at the moment of an actual loosening action below - being logged in is no longer enough on its own, but it's also no longer required just to look at this dashboard.</p>
   </section>
 
   <section>
-    <h2>What it unlocks</h2>
+    <h2>What the office password unlocks</h2>
     <table>
       <thead><tr><th>Action</th><th>Where in this system</th><th>What it actually does</th></tr></thead>
       <tbody>
-        <tr><td>Logging into this dashboard at all</td><td><code>handleLogin</code>, index.ts</td><td>Every other tab/section on this page is unreachable without this first</td></tr>
         <tr><td>Un-blocking a Santa rule</td><td>Santa rules section, "loosen request"</td><td>Queues a rule for REMOVE - e.g. this is what unblocked Codex/ChatGPT's TEAMID</td></tr>
         <tr><td>Adding a safe app (screen-capture exemption)</td><td>Safe apps section</td><td>Queues a bundle ID to stop being scanned by ContentGuardDaemon - e.g. the com.google.Chrome addition</td></tr>
         <tr><td>Removing a blocked keyword</td><td>Keyword blocker section</td><td>Queues a keyword for deletion from the Chrome extension's blocklist</td></tr>
         <tr><td>Uploading or updating an MDM profile</td><td>MDM lockdown section</td><td>Queues new .mobileconfig content to push to Fleet - this is how restrictions.mobileconfig/chrome-policy.mobileconfig themselves get changed</td></tr>
-        <tr><td>Changing this password itself</td><td>Change password section</td><td>Requires the current one to set a new one - can't be reset without already having it</td></tr>
+        <tr><td>Changing the office password itself</td><td>Change office password section</td><td>Requires the current one to set a new one - can't be reset without already having it, and the change itself still waits the same 24h delay</td></tr>
       </tbody>
     </table>
-    <div class="subtitle" style="margin-top: 0.6rem; margin-bottom: 0;">All six are loosening actions - none apply instantly even with the password: every one still waits the 24h ratchet delay before taking effect, same asymmetry as everywhere else in this project.</div>
+    <div class="subtitle" style="margin-top: 0.6rem; margin-bottom: 0;">All five are loosening actions - none apply instantly even with the password: every one still waits the 24h ratchet delay before taking effect, same asymmetry as everywhere else in this project.</div>
   </section>
 
   <section>
-    <h2>What does NOT need it</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Tightening actions apply immediately, no password, from an ordinary logged-in session - blocking a Santa rule, adding a keyword, removing a safe app (revoking a scan exemption). Only the direction that makes this Mac less restricted is gated behind the office password; making it more restricted never is.</div>
+    <h2>What the login password unlocks</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Just one thing: <code>handleLogin</code>, index.ts - reaching this dashboard at all. From there, every tightening action (blocking a Santa rule, adding a keyword, removing a safe-app exemption) is available immediately, no further password - only loosening actions re-check the office password above. Changing the login password itself (Change login password section) is immediate too, no 24h delay, since it doesn't loosen or tighten anything on its own.</div>
+  </section>
+
+  <section>
+    <h2>What needs no password at all</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Tightening actions, from an ordinary logged-in session - blocking a Santa rule, adding a keyword, removing a safe app (revoking a scan exemption). Only the direction that makes this Mac less restricted is gated behind the office password; making it more restricted never is.</div>
   </section>
 
   <section>
@@ -1056,6 +1072,25 @@ document.getElementById("software-body").addEventListener("click", async (e) => 
     setStatus("software-status", "Install requested on " + host + ".", false);
   } catch (err) {
     setStatus("software-status", "Install failed: " + err.message, true);
+  }
+});
+
+document.getElementById("change-login-password-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = new FormData(e.target);
+  try {
+    await api("/api/login-password/change", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        current_password: form.get("current_password"),
+        new_password: form.get("new_password"),
+      }),
+    });
+    e.target.reset();
+    setStatus("login-password-status", "Login password changed.", false);
+  } catch (err) {
+    setStatus("login-password-status", "Failed to change: " + err.message, true);
   }
 });
 

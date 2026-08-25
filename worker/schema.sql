@@ -105,16 +105,24 @@ CREATE INDEX events_device_id_idx ON events(device_id);
 -- and changing the password itself goes through the exact same 24h
 -- ratchet as everything else, rather than being a special case.
 --
--- Deliberately a SINGLE unified password, not two: the same value gates
--- both general dashboard login and the loosen-request re-check
--- (santaSync's rules still need a *separate credential check* at the
--- moment of a loosen, per mac/README.md's ratchet decision - it's just
--- checked against this same stored hash now, not a second independent
--- secret, to avoid the two ever drifting out of sync after a password
--- change).
+-- This is THE OFFICE/LOOSEN PASSWORD - checked at the moment of every
+-- loosen-request (a Santa un-block, a safe-app addition, a keyword
+-- removal, an MDM profile create/update) and to change itself. Changed
+-- 2026-08-25 from this table's original design, where the same hash
+-- also gated general dashboard login: real problem that surfaced live -
+-- the office password is deliberately kept somewhere the day-to-day
+-- user can't casually reach (the whole point of the ratchet), which
+-- under the old single-password design meant they couldn't even log in
+-- to their own dashboard day-to-day. login_auth below is the fix - a
+-- separate, low-friction credential for login/viewing/tightening, with
+-- this one still reserved for loosening only. See mac/README.md's
+-- Phase 4 row for why they were unified in the first place ("avoid the
+-- two ever drifting out of sync after a password change") - that
+-- reasoning no longer applies once they're deliberately meant to be
+-- different values.
 --
--- Singleton row (id always 1) - there's exactly one password for this
--- whole system, not per-user, matching the rest of this project's
+-- Singleton row (id always 1) - there's exactly one office password for
+-- this whole system, not per-user, matching the rest of this project's
 -- single-operator design.
 CREATE TABLE dashboard_auth (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -126,9 +134,32 @@ CREATE TABLE dashboard_auth (
 -- treats "no row yet" as "let anyone set one." Consistent with this
 -- project's fail-closed default everywhere else.
 
+-- THE LOGIN PASSWORD - separate credential from dashboard_auth above,
+-- added 2026-08-25 (see that table's comment for the real gap this
+-- closes). Gates handleLogin only: reaching the dashboard at all, and
+-- from there every tightening action (session-gated, no password re-
+-- check) and every loosen-request's initial view (the loosen-request
+-- itself still separately re-checks dashboard_auth). Deliberately NOT
+-- ratchet-gated when changed - see pending_password_changes below for
+-- the office password's own change flow; changing THIS one doesn't
+-- loosen or tighten anything, it only decides who can look at/tighten
+-- this dashboard, so index.ts's handleChangeLoginPassword applies it
+-- immediately once the current login password re-checks, same
+-- "no delay for something that isn't a restriction change" reasoning
+-- as every other purely-administrative action in this project.
+CREATE TABLE login_auth (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    password_hash TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+-- No seed row, same reasoning as dashboard_auth above - bootstrap
+-- instructions in mac/docs/PHASE_4_DASHBOARD_SETUP.md.
+
 -- Password changes follow the identical shape as pending_loosen_requests
 -- (queued, 24h delay, cancellable) - see ratchet.ts, which now applies
--- both kinds of pending change from the same scheduled handler.
+-- both kinds of pending change from the same scheduled handler. Applies
+-- to the OFFICE password (dashboard_auth) only - the login password
+-- (login_auth) changes immediately, see that table's own comment.
 CREATE TABLE pending_password_changes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     new_password_hash TEXT NOT NULL,

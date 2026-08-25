@@ -409,6 +409,29 @@ export async function setDashboardPasswordHash(db: D1Database, passwordHash: str
     .run();
 }
 
+// login_auth - the separate, non-ratcheted login credential (schema.sql's
+// own comment on both tables explains the split). Same shape as
+// dashboard_auth's pair of functions above, different table, and
+// setLoginPasswordHash is called directly from index.ts's
+// handleChangeLoginPassword - no pending/ratchet table involved, unlike
+// setDashboardPasswordHash which is only ever called from
+// ratchet.ts's applyDuePasswordChanges once a queued change comes due.
+export async function getLoginPasswordHash(db: D1Database): Promise<string | null> {
+  const row = await db.prepare(`SELECT password_hash FROM login_auth WHERE id = 1`).first<{ password_hash: string }>();
+  return row?.password_hash ?? null;
+}
+
+export async function setLoginPasswordHash(db: D1Database, passwordHash: string): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare(
+      `INSERT INTO login_auth (id, password_hash, updated_at) VALUES (1, ?1, ?2)
+       ON CONFLICT(id) DO UPDATE SET password_hash = excluded.password_hash, updated_at = excluded.updated_at`
+    )
+    .bind(passwordHash, now)
+    .run();
+}
+
 // --- Login lockout (mitigates dropping Cloudflare Access's edge-level
 // brute-force protection - see auth.ts's requireSession doc comment) ---
 

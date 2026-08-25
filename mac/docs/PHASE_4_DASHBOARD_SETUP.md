@@ -854,3 +854,60 @@ a wrong token), and immediate no-password removal - all curled directly.
 that - no Swift toolchain in this environment, same standing caveat as
 every other Swift change in this project's history; needs a real
 `make pkg && sudo make install` to confirm it compiles and behaves.
+
+## Login password split from the office password (2026-08-25)
+
+Real problem the user surfaced live: under this section's original
+design, `dashboard_auth`'s single password gated both general login and
+every loosen-request re-check - deliberately unified, per this file's
+own bootstrap step above and `mac/README.md`'s Phase 4 row ("the same
+real office password reused for both by explicit choice"). But the
+office password is *also* deliberately kept somewhere the day-to-day
+user can't casually reach (the whole point of the ratchet) - which
+under the unified design meant they couldn't log in to their own
+dashboard at all day-to-day, not just couldn't loosen anything. A real
+usability bug, not a hypothetical one.
+
+Fixed by splitting into two independent credentials, explicit user
+choice after being asked which of two options they meant (a genuinely
+separate login credential, vs. dropping authentication on login
+entirely and leaving only loosening gated - the second option was
+flagged as making the whole dashboard publicly readable and publicly
+tighten-able by anyone with the URL, and declined):
+
+- **`login_auth`** (new table, `migrations/0007_login_auth.sql`) - gates
+  `handleLogin` only. Everyday credential, not kept out of reach.
+  Changing it (`POST /api/login-password/change`, the dashboard's new
+  "Change login password" section) is immediate, no ratchet - it
+  doesn't loosen or tighten anything on its own.
+- **`dashboard_auth`** (existing table, unchanged shape) - no longer
+  involved in login at all. Still re-checked at the moment of every
+  loosen-request (Santa un-block, safe-app addition, keyword removal,
+  MDM profile create/update) and to change itself, still ratchet-gated
+  (24h delay) same as before.
+
+**Bootstrap step for the new table**, same "manual D1 write, not a code
+path" reasoning as the original `dashboard_auth` bootstrap above - pick
+a genuinely different value from the office password, since the whole
+point is this one being reachable day-to-day:
+
+```bash
+# On macOS: echo -n 'your everyday login password' | shasum -a 256
+npx wrangler d1 execute contentguard --remote --file=./migrations/0007_login_auth.sql
+npx wrangler d1 execute contentguard --remote --command \
+  "INSERT INTO login_auth (id, password_hash, updated_at) VALUES (1, '<hash>', <unix_ms_now>)"
+```
+
+The dashboard's new **Access map** tab documents the resulting split in
+full (what each password unlocks) - kept in sync by hand with this
+section, same discipline as `configProfiles.ts`/`staticRules.ts`'s
+mirrors elsewhere in this project.
+
+**Not yet done**: the `login_auth` bootstrap above - this Worker will
+correctly show the login page and correctly reject any password
+against it (`getLoginPasswordHash` returning `null` fails closed, same
+as the original table) until that row exists. `npm run typecheck`
+passes clean; unverified against a real deployed instance beyond the
+deploy itself succeeding (confirmed via GitHub Actions), since actually
+logging in needs the bootstrap step above run against the real remote
+D1, which needs Cloudflare credentials this session doesn't have.
