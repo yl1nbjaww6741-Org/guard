@@ -314,7 +314,24 @@ export function renderDashboard(): string {
   <section>
     <h2>Outside this system</h2>
     <div class="subtitle" style="margin-bottom: 0;">
-      Honest gap, not filled in: whether this same office password also protects any of your other stored credentials (Fleet's own admin login, the Cloudflare account, GitHub, etc.) isn't something this Worker has any way to know - that lives in your password manager, not this codebase. Tell me which of those actually share it (or depend on it to retrieve) and this section gets a real, accurate table instead of this placeholder - guessing at that would risk telling you something wrong about your own access boundaries, worse than leaving it blank.
+      As told to this dashboard by the user, not something this Worker can verify on its own - these live in a password manager, not this codebase, so treat this list as a reference maintained by hand, same as everything else on this tab. The office password above is the shared password protecting all of these too:
+    </div>
+    <ul style="margin: 0.6rem 0 0 1.2rem; font-size: 0.85rem; color: #c3c6cc;">
+      <li>Recovery lock (rotates on Fleet)</li>
+      <li>Mac OS admin account</li>
+      <li>Control Panel (this dashboard's own office password entry)</li>
+      <li>Fleet</li>
+      <li>Hide apps Oppo</li>
+      <li>Unifi</li>
+      <li>Content Guard Android</li>
+      <li>Github</li>
+      <li>Andoff</li>
+      <li>Cloudflare</li>
+      <li>Tesla</li>
+      <li>Gmail</li>
+    </ul>
+    <div class="subtitle" style="margin-top: 0.6rem; margin-bottom: 0;">
+      Worth noting plainly, not just implied: this means the blast radius of the office password is real infrastructure and personal accounts (Cloudflare - the account this whole Worker/Fleet setup runs on, GitHub - this repo, Gmail, Tesla), not just this dashboard's own loosening actions. Reusing one password across that many places is a real, separate tradeoff from anything the ratchet mechanism itself is designed to address - worth keeping in mind independent of this project.
     </div>
   </section>
 
