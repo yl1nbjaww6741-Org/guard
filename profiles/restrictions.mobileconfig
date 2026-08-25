@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>02C634B6-1924-4ADC-9E63-600C318508A9</string>
     <key>PayloadVersion</key>
-    <integer>4</integer>
+    <integer>5</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>9E25880A-CCAF-4034-B1BC-1AF9D59008A5</string>
             <key>PayloadVersion</key>
-            <integer>4</integer>
+            <integer>5</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Restrictions Payload</string>
 
@@ -126,6 +126,24 @@
               in chrome-policy.mobileconfig's PayloadContent dict key).
               Only plain com.google.Chrome is the hardened one and stays
               off this list.
+
+              Deepened 2026-08-25 (same request, "go deeper... block all
+              the others") with more browsers plus torrent/P2P clients
+              (see that section's own comment below). Confidence isn't
+              uniform across this list and that's stated here rather
+              than smoothed over: everything above this note plus the
+              handful of well-established names newly added (iCab,
+              SeaMonkey, Naver Whale, Sidekick, Wavebox, Blisk) use each
+              vendor's standard, long-documented signed-build identifier.
+              A separate tier of real, currently-used Mac browsers exists
+              whose exact bundle ID isn't confident enough to assert as
+              fact here rather than guessed and silently wrong - Zen
+              Browser, Floorp, Maxthon, Epic Privacy Browser, Min
+              Browser, and Polarity are all real and worth checking for
+              on this Mac specifically (`mdls -name
+              kMDItemCFBundleIdentifier -r /Applications/X.app` on
+              whatever's actually installed) and adding once confirmed,
+              rather than included here on a guess.
             -->
             <key>blacklistedAppBundleIDs</key>
             <array>
@@ -163,6 +181,34 @@
                 <!-- Independent / other engines -->
                 <string>com.duckduckgo.macos.browser</string>
                 <string>com.kagi.kagimacOS</string>
+                <string>de.iCab.iCab</string>
+                <string>org.mozilla.seamonkey</string>
+                <string>com.naver.whale</string>
+                <string>com.pushplaybutton.sidekick</string>
+                <string>com.wavebox.desktop</string>
+                <string>com.blisk.Blisk</string>
+                <!-- Torrent / P2P file-sharing clients - not browsers,
+                     added 2026-08-25 same request ("go as deep as you
+                     can... block all the others"), same mechanism
+                     (blacklistedAppBundleIDs doesn't care what kind of
+                     app it blocks). Real, separate gap this does NOT
+                     close, stated plainly rather than implied: this
+                     blocks the desktop CLIENT apps, not the BitTorrent
+                     protocol itself or magnet: links opened some other
+                     way (a CLI client, a script, a torrent site's
+                     browser-based WebTorrent streaming). Network-level
+                     blocking (tracker/DHT ports, magnet: URI handling)
+                     would need a Gateway/firewall rule, not this
+                     payload - not attempted here since it wasn't asked
+                     for and risks false-positives on unrelated UDP/TCP
+                     traffic. -->
+                <string>org.transmissionbt.Transmission</string>
+                <string>org.qbittorrent.qbittorrent</string>
+                <string>org.deluge-torrent.deluge</string>
+                <string>com.bittorrent.uTorrent</string>
+                <string>com.bittorrent.BitTorrent</string>
+                <string>com.vuze.Vuze</string>
+                <string>com.eltima.Folx</string>
             </array>
         </dict>
     </array>
