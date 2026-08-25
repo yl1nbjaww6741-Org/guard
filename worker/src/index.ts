@@ -188,13 +188,30 @@ async function handleLoosenRequest(ruleId: number, request: Request, env: Env): 
 // Checks the lockout window first (db.ts's isLoginLockedOut) - a locked-
 // out account never even reaches the password comparison, so brute-force
 // attempts get a uniform 429 regardless of whether the guessed password
-// happened to be close. A missing SESSION_SIGNING_KEY or an unbootstrapped
-// password both fail closed (503), never treated as "let anyone in."
+// happened to be close. A missing SESSION_SIGNING_KEY fails closed (503),
+// never treated as "let anyone in."
 //
 // Checks against login_auth, NOT dashboard_auth - split 2026-08-25, see
 // schema.sql's comment on both tables. The office password (dashboard_auth)
 // is no longer involved in reaching the dashboard at all; it's only
 // re-checked at the moment of an actual loosen-request.
+//
+// Self-bootstrapping, unlike dashboard_auth/office password: if
+// login_auth has no row yet, whatever password is submitted here becomes
+// the login password, and this same request logs in with it - added
+// 2026-08-25, explicit user request, specifically to cover "the
+// Codespace with real Cloudflare credentials isn't working" - the
+// dashboard_auth pattern (manual `wrangler d1 execute` INSERT) has no
+// fallback if that access is temporarily gone. Real, deliberately-
+// accepted tradeoff, not unnoticed: this Worker is fully public (no
+// Cloudflare Access, see failed_login_attempts' own comment), so between
+// deploy and whoever gets here first, this is a genuine claim-it-first
+// race, not just a bootstrap step - unlike dashboard_auth, which stays
+// manual-only precisely because that gap was judged not worth reopening
+// for the password that gates every loosening action. Self-closing,
+// though: the moment any request succeeds here, login_auth has a row and
+// this whole branch stops being reachable - the exposure window is one
+// successful request, not indefinite.
 async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_SIGNING_KEY) {
     return jsonResponse({ error: "session signing key not configured" }, 503);
@@ -204,8 +221,15 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   }
 
   const body = await request.json<{ password?: string }>();
+  if (!body.password) {
+    await recordFailedLoginAttempt(env.DB);
+    return jsonResponse({ error: "incorrect password" }, 401);
+  }
+
   const storedHash = await getLoginPasswordHash(env.DB);
-  if (!body.password || !storedHash || !(await verifyPasswordHash(body.password, storedHash))) {
+  if (storedHash === null) {
+    await setLoginPasswordHash(env.DB, await hashPassword(body.password));
+  } else if (!(await verifyPasswordHash(body.password, storedHash))) {
     await recordFailedLoginAttempt(env.DB);
     return jsonResponse({ error: "incorrect password" }, 401);
   }

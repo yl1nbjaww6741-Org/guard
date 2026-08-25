@@ -152,8 +152,21 @@ CREATE TABLE login_auth (
     password_hash TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
--- No seed row, same reasoning as dashboard_auth above - bootstrap
--- instructions in mac/docs/PHASE_4_DASHBOARD_SETUP.md.
+-- No seed row, but UNLIKE dashboard_auth above: self-bootstraps on
+-- first use rather than requiring a manual D1 write. index.ts's
+-- handleLogin treats "no row yet" as "whatever password just got
+-- submitted becomes the login password" - added 2026-08-25 to cover
+-- "the Codespace with real Cloudflare credentials isn't working," which
+-- left no way to run the manual-insert bootstrap dashboard_auth still
+-- requires. Real, deliberately-accepted tradeoff, not unnoticed: this
+-- Worker is fully public, so this is a genuine claim-it-first race
+-- between deploy and whoever logs in first, not just a bootstrap step -
+-- accepted here specifically because it's self-closing (one successful
+-- request ends the exposure) and this password's worst case is view/
+-- tighten access, never a loosening action. dashboard_auth deliberately
+-- does NOT get this same treatment - see that table's comment for why
+-- the same tradeoff isn't worth it for the password that gates every
+-- loosening action.
 
 -- Password changes follow the identical shape as pending_loosen_requests
 -- (queued, 24h delay, cancellable) - see ratchet.ts, which now applies
