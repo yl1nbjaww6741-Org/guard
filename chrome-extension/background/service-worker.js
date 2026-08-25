@@ -49,6 +49,33 @@ function ruleIdForKeyword(keyword) {
   return (hash >>> 1) || 1;
 }
 
+// The offscreen document (background/offscreen.html) is where the
+// 5-second capture-and-classify loop actually lives - see that file's
+// own comment for why (a persistent DOM context, unlike this service
+// worker, which MV3 suspends when idle). Chrome allows exactly one
+// offscreen document per extension; hasDocument() + this guard is the
+// documented way to avoid a "document already exists" error from a
+// second createDocument() call racing a first (e.g. onInstalled and
+// onStartup both firing close together after a browser update).
+async function ensureOffscreenDocument() {
+  if (await chrome.offscreen.hasDocument()) return;
+  await chrome.offscreen.createDocument({
+    url: "background/offscreen.html",
+    // WORKERS: onnxruntime-web's own thread-pool setup is real reason
+    // this offscreen document exists (see offscreen.html's comment) -
+    // this is a genuinely accurate justification, not just a best-fit
+    // pick from chrome.offscreen.Reason's fairly narrow enum (confirmed
+    // via Chrome's own extensions-reference docs: TESTING,
+    // AUDIO_PLAYBACK, IFRAME_SCRIPTING, DOM_SCRAPING, BLOBS, DOM_PARSER,
+    // USER_MEDIA, DISPLAY_MEDIA, WEB_RTC, CLIPBOARD, LOCAL_STORAGE,
+    // WORKERS, BATTERY_STATUS, MATCH_MEDIA, GEOLOCATION - none of which
+    // describe "long-running ML inference" directly, WORKERS is the
+    // closest genuine match).
+    reasons: ["WORKERS"],
+    justification: "Runs the NudeNet ONNX classifier (via a sandboxed iframe) on a periodic tab-screenshot capture loop that must keep running across service-worker suspensions.",
+  });
+}
+
 async function getConfig() {
   const stored = await chrome.storage.local.get(["workerUrl", "syncToken"]);
   return { workerUrl: stored.workerUrl ?? null, syncToken: stored.syncToken ?? null };
@@ -116,16 +143,27 @@ async function syncKeywords() {
   await chrome.storage.local.set({ keywords });
 }
 
+// One listener for the sync alarm doing both its jobs - keyword sync,
+// plus (piggybacking on the same 5-minute tick rather than a dedicated
+// alarm) a cheap offscreen-document health-check: re-creates it if it
+// was ever unexpectedly closed (Chrome can reclaim one under real memory
+// pressure even though it's not supposed to time out on its own the way
+// this service worker does). ensureOffscreenDocument() is a no-op via
+// hasDocument() the vast majority of ticks.
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === SYNC_ALARM_NAME) syncKeywords();
+  if (alarm.name !== SYNC_ALARM_NAME) return;
+  syncKeywords();
+  ensureOffscreenDocument().catch((err) => console.error("ContentGuard: failed to re-create offscreen document", err));
 });
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(SYNC_ALARM_NAME, { periodInMinutes: SYNC_ALARM_PERIOD_MINUTES });
   syncKeywords();
+  ensureOffscreenDocument().catch((err) => console.error("ContentGuard: failed to create offscreen document", err));
 });
 chrome.runtime.onStartup.addListener(() => {
   syncKeywords();
+  ensureOffscreenDocument().catch((err) => console.error("ContentGuard: failed to create offscreen document", err));
 });
 
 // Saving the options page (workerUrl/syncToken) should take effect right
@@ -136,21 +174,40 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-// Content script's page-text/title scan (keyword-blocker.js) sends this
-// once it finds a match the URL-based declarativeNetRequest rule didn't
-// already catch (i.e. the keyword only appears in rendered content, not
-// the URL itself). Closing the tab, not covering/blurring it - see this
-// project's own AskUserQuestion decision on 2026-08-25 ("close the tab
-// immediately (Recommended)"), matching the native Mac agent's own
-// disguise-over-blackout reasoning (main.swift's quitFrontmostApp doc
-// comment) as closely as a browser extension can.
+// Shared by both reaction paths below - closing the tab, not covering/
+// blurring it, per this project's own AskUserQuestion decision on
+// 2026-08-25 ("close the tab immediately (Recommended)"), matching the
+// native Mac agent's own disguise-over-blackout reasoning
+// (main.swift's quitFrontmostApp doc comment) as closely as a browser
+// extension can.
+function closeTab(tabId) {
+  chrome.tabs.remove(tabId).catch((err) => {
+    // Tab may have already been closed/navigated away in the gap
+    // between the match/detection and this message arriving - not an
+    // error worth surfacing.
+    console.warn("ContentGuard: failed to close tab", err);
+  });
+}
+
 chrome.runtime.onMessage.addListener((message, sender) => {
+  // content-scripts/keyword-blocker.js's page-text/title scan - fires
+  // once it finds a match the URL-based declarativeNetRequest rule
+  // didn't already catch (i.e. the keyword only appears in rendered
+  // content, not the URL itself). tabId comes from sender.tab since
+  // this message genuinely originates from that tab's own content
+  // script context.
   if (message?.type === "contentguard-keyword-match" && sender.tab?.id != null) {
-    chrome.tabs.remove(sender.tab.id).catch((err) => {
-      // Tab may have already been closed/navigated away by the user in
-      // the gap between the content script finding a match and this
-      // message arriving - not an error worth surfacing.
-      console.warn("ContentGuard: failed to close tab", err);
-    });
+    closeTab(sender.tab.id);
+    return;
+  }
+  // background/offscreen.js's NSFW classification loop - fires on a
+  // real NudeNet detection above ContentGuardConfig.detectionConfidenceThreshold
+  // for a blocked class. tabId is passed explicitly in the message
+  // payload here, not read from sender.tab - this message originates
+  // from the offscreen document (which captured a screenshot of some
+  // OTHER tab), not from the detected tab's own content-script context,
+  // so sender.tab would be wrong (or absent) here.
+  if (message?.type === "contentguard-nsfw-detection" && typeof message.tabId === "number") {
+    closeTab(message.tabId);
   }
 });

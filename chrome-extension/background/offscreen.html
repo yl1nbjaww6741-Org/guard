@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ContentGuard offscreen</title>
+</head>
+<body>
+<!--
+  chrome.offscreen document - see ../background/service-worker.js's
+  ensureOffscreenDocument() for why this exists at all (a persistent DOM
+  context that, unlike the service worker, doesn't get torn down when
+  idle - the 5-second capture loop lives here as a plain setInterval,
+  which just works normally in a real page context with no
+  chrome.alarms-style minimum-period floor).
+
+  This document itself never runs ONNX Runtime Web - it only has
+  chrome.* API access (captureVisibleTab, tabs, windows), which the
+  sandboxed iframe below deliberately does NOT have. See
+  ../sandbox/sandbox.html's own comment for why inference is isolated
+  there instead.
+-->
+<iframe id="sandbox-frame" src="../sandbox/sandbox.html" style="display:none"></iframe>
+<script src="offscreen.js"></script>
+</body>
+</html>

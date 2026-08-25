@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ContentGuard sandbox</title>
+</head>
+<body>
+<!--
+  Declared as a manifest "sandbox" page (see ../manifest.json), not a
+  normal extension page - runs with a relaxed CSP (real eval/Function()
+  allowed) at the cost of chrome.* API access and its own opaque origin.
+  This is the documented real-world fix for onnxruntime-web under
+  Manifest V3: even inside an offscreen document, ONNX Runtime Web's own
+  thread-pool setup can violate MV3's strict extension-page CSP (multiple
+  open microsoft/onnxruntime GitHub issues, not guessed) - a sandboxed
+  page is where the actual ORT session lives and runs inference.
+  ../background/offscreen.js embeds this as an <iframe> and talks to it
+  purely via postMessage (see sandbox.js's own header comment for the
+  message protocol) - no chrome.* calls happen in this document at all.
+-->
+<script type="module" src="sandbox.js"></script>
+</body>
+</html>
