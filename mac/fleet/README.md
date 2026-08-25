@@ -1,5 +1,11 @@
 # Phase 1 - Fleet MDM on Fly.io
 
+**Planning to move this off Fly.io?** See
+`mac/docs/PHASE_1B_FLEET_ORACLE_MIGRATION.md` - a migration runbook to
+Oracle Cloud Always Free, grounded in the real app names/config below
+rather than a generic plan. Not started yet; this section (Fly.io) is
+still the live, current setup.
+
 Four small Fly.io apps, all in the same region so they share a private
 network: `contentguard-fleet-mysql`, `contentguard-fleet-redis`,
 `contentguard-fleet` (the server itself), and `contentguard-fleet-tunnel`
