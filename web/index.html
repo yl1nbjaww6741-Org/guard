@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>ContentGuard Central</title>
+    <style>
+      /* One necessary exception to "inline styles only" - @keyframes
+         can't be expressed as a React style object. Everything else
+         stays inline per DASHBOARD-PROMPT.md's own styling note. */
+      @keyframes cg-spin {
+        to { transform: rotate(360deg); }
+      }
+      .cg-spin { animation: cg-spin 0.8s linear infinite; }
+      body { margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>
