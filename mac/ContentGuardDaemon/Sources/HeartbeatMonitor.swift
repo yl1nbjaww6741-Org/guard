@@ -176,7 +176,31 @@ final class HeartbeatMonitor {
                 // trivially differs from whatever the previous process last
                 // reported) - correct, since a freshly (re)started process
                 // hasn't stalled, it just hasn't produced a frame yet.
-                if isNewProcess || data.framesProcessed != self.lastFramesProcessed {
+                //
+                // A captureActive transition false -> true gets the exact
+                // same treatment, for the exact same reason - found live
+                // (a real "have to unlock twice" report): CaptureManager's
+                // display-sleep pause (see its handleScreensSleep() doc
+                // comment) correctly keeps this false, and therefore
+                // framesStalled below correctly gated off, for the whole
+                // time the display is asleep - but lastFramesChangedAt
+                // itself sits frozen that entire time, since nothing
+                // updates it just because captureActive changed. The
+                // instant capture resumes and reports captureActive=true
+                // again, rebuildAllStreams() is still in flight
+                // (framesProcessed hasn't incremented yet) - if this
+                // heartbeat's grace-window check happens to land in that
+                // window, it measured "time since frames last changed"
+                // against a timestamp from before the display ever slept,
+                // which can trivially exceed frameStallGraceSeconds after
+                // being locked for any real length of time. That read a
+                // legitimate, still-rebuilding resume as a genuine stall
+                // and fired fallbackCover.show() -> pmset displaysleepnow
+                // right after a real unlock, forcing a second one. A race
+                // (only when the check lands in that exact narrow window),
+                // matching the reported "sometimes," not every time.
+                let captureJustResumed = captureStateChanged && data.captureActive
+                if isNewProcess || captureJustResumed || data.framesProcessed != self.lastFramesProcessed {
                     self.lastFramesChangedAt = Date()
                 }
                 self.lastFramesProcessed = data.framesProcessed
