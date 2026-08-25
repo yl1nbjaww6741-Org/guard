@@ -43,6 +43,7 @@ import {
   requestPasswordChange,
 } from "./ratchet";
 import { clearSessionCookie, createSessionCookie, hasValidSession } from "./session";
+import { KNOWN_APPLE_APPS } from "./knownApps";
 import { STATIC_RULES } from "./staticRules";
 import { handleGetHostStatus } from "./hostStatus";
 import {
@@ -132,6 +133,12 @@ async function handleListRules(env: Env): Promise<Response> {
 // all.
 function handleListStaticRules(): Response {
   return jsonResponse(STATIC_RULES);
+}
+
+// See knownApps.ts's doc comment - a hand-kept fallback list, not stored
+// in D1, no create/edit/delete here either.
+function handleListKnownApps(): Response {
+  return jsonResponse(KNOWN_APPLE_APPS);
 }
 
 async function handleListActiveLoosenRequests(env: Env): Promise<Response> {
@@ -311,6 +318,7 @@ export default {
     const isSoftwareApiRoute =
       url.pathname === "/api/software" ||
       url.pathname === "/api/installed-software" ||
+      url.pathname === "/api/known-apps" ||
       url.pathname.match(/^\/api\/software\/\d+\/install$/);
     if (isSoftwareApiRoute) {
       const authError = await requireSession(request, env);
@@ -324,6 +332,9 @@ export default {
       }
       if (url.pathname === "/api/installed-software" && request.method === "GET") {
         return handleListInstalledSoftware(request, env);
+      }
+      if (url.pathname === "/api/known-apps" && request.method === "GET") {
+        return handleListKnownApps();
       }
       const installMatch = url.pathname.match(/^\/api\/software\/(\d+)\/install$/);
       if (installMatch && request.method === "POST") {

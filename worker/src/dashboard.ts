@@ -203,7 +203,7 @@ export function renderDashboard(): string {
 
   <section>
     <h2>Installed apps</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory - one click to block/allow (Santa) or whitelist (excluded from screen-capture scanning), instead of manually finding a Team ID in Terminal or typing a bundle ID by hand. This is the one place to add new entries to either list, by app name - the Safe Apps and Santa Rules sections above show what's already configured.</div>
+    <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory - one click to block/allow (Santa) or whitelist (excluded from screen-capture scanning), instead of manually finding a Team ID in Terminal or typing a bundle ID by hand. This is the one place to add new entries to either list, by app name - the Safe Apps and Santa Rules sections above show what's already configured. Common built-in Apple apps (Notes, Mail, Photos, Preview, QuickTime Player, Reminders, TextEdit) are always pinned at the top, even if Fleet hasn't inventoried them - Block/Allow stays disabled for one of those until Fleet reports real signing info for it, but Whitelist works immediately either way.</div>
     <table id="installed-apps-table">
       <thead><tr><th>Name</th><th>Version</th><th>Detected identifier</th><th></th></tr></thead>
       <tbody id="installed-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
@@ -578,11 +578,12 @@ async function loadInstalledApps(host) {
   // No host -> the Worker falls back to DEFAULT_FLEET_HOST (this
   // project's one real Mac) - see softwareApi.ts's handleListInstalledSoftware.
   const qs = host ? \`?host=\${encodeURIComponent(host)}\` : "";
-  const [apps, staticApps, approved, pendingAdditions] = await Promise.all([
+  const [apps, staticApps, approved, pendingAdditions, knownApps] = await Promise.all([
     api(\`/api/installed-software\${qs}\`),
     api("/api/static-safe-apps"),
     api("/api/safe-apps"),
     api("/api/safe-app-additions"),
+    api("/api/known-apps"),
   ]);
   const whitelistedIds = new Set([
     ...(staticApps || []).map((s) => s.bundleId),
@@ -590,12 +591,32 @@ async function loadInstalledApps(host) {
   ]);
   const pendingIds = new Set((pendingAdditions || []).map((p) => p.bundle_id));
 
+  // Pin knownApps.ts's curated Apple apps at the top, in their declared
+  // order, ahead of whatever else Fleet reported - see this section's own
+  // subtitle for why. Prefer Fleet's real row when it actually has one
+  // for a given bundle ID (better version/identifier data than this
+  // stand-in can offer); only synthesize a bare row - no version, no
+  // identifier, Block/Allow disabled - when Fleet has nothing for it at
+  // all, same "disable rather than send a request that can only fail"
+  // reasoning the identifier/whitelist columns below already use.
+  const appsByBundleId = new Map((apps || []).filter((a) => a.bundle_identifier).map((a) => [a.bundle_identifier, a]));
+  const knownBundleIds = new Set((knownApps || []).map((k) => k.bundleId));
+  const knownRows = (knownApps || []).map((k) => appsByBundleId.get(k.bundleId) || {
+    name: k.name,
+    version: null,
+    bundle_identifier: k.bundleId,
+    identifier: null,
+    rule_type: null,
+  });
+  const restRows = (apps || []).filter((a) => !a.bundle_identifier || !knownBundleIds.has(a.bundle_identifier));
+  const allRows = [...knownRows, ...restRows];
+
   const body = document.getElementById("installed-apps-body");
-  if (apps.length === 0) {
+  if (allRows.length === 0) {
     body.innerHTML = '<tr><td colspan="4" class="empty">No installed apps returned - Fleet may not have inventoried this host recently.</td></tr>';
     return;
   }
-  body.innerHTML = apps.map((a) => {
+  body.innerHTML = allRows.map((a) => {
     const idCell = a.identifier
       ? \`\${escapeHtml(a.identifier)} <span class="pending-note" style="color:#8b8f98;">(\${a.rule_type})</span>\`
       : '<span class="empty" style="padding:0;">no identifier available</span>';
