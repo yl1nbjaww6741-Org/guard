@@ -140,6 +140,8 @@ export function renderDashboard(): string {
     <button class="tab-btn" data-tab="mac">Mac</button>
     <button class="tab-btn" data-tab="android">Android</button>
     <button class="tab-btn" data-tab="networking">Networking</button>
+    <button class="tab-btn" data-tab="access-map">Access map</button>
+    <button class="tab-btn" data-tab="architecture">Architecture</button>
   </nav>
 
   <div id="tab-mac" class="tab-panel">
@@ -262,6 +264,81 @@ export function renderDashboard(): string {
 
   <div id="tab-networking" class="tab-panel" hidden>
     <div class="empty">Coming soon.</div>
+  </div>
+
+  <div id="tab-access-map" class="tab-panel" hidden>
+
+  <section>
+    <h2>The one password</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Hand-kept, not computed live - same reasoning as the MDM profile detail mirror above: this Worker only ever stores a SHA-256 hash of the dashboard password (schema.sql's dashboard_auth table), never the plaintext, so nothing on this page can reveal what it actually is. What follows is a real, code-verified map of what that one password unlocks, not a guess.</div>
+    <p style="font-size: 0.85rem; color: #c3c6cc; margin: 0.6rem 0;">Every one of the actions below independently calls the exact same check - <code>getDashboardPasswordHash()</code> + <code>verifyPasswordHash()</code> - against the exact same stored hash as logging in. There has only ever been one password in this system, reused everywhere on purpose (see <code>mac/README.md</code>'s Phase 4 row: "the same real office password reused for both by explicit choice"). If you have it, every row below is unlocked. If you don't - which is the deliberate point of keeping it at the office - none of them are, even from an already-logged-in session.</p>
+  </section>
+
+  <section>
+    <h2>What it unlocks</h2>
+    <table>
+      <thead><tr><th>Action</th><th>Where in this system</th><th>What it actually does</th></tr></thead>
+      <tbody>
+        <tr><td>Logging into this dashboard at all</td><td><code>handleLogin</code>, index.ts</td><td>Every other tab/section on this page is unreachable without this first</td></tr>
+        <tr><td>Un-blocking a Santa rule</td><td>Santa rules section, "loosen request"</td><td>Queues a rule for REMOVE - e.g. this is what unblocked Codex/ChatGPT's TEAMID</td></tr>
+        <tr><td>Adding a safe app (screen-capture exemption)</td><td>Safe apps section</td><td>Queues a bundle ID to stop being scanned by ContentGuardDaemon - e.g. the com.google.Chrome addition</td></tr>
+        <tr><td>Removing a blocked keyword</td><td>Keyword blocker section</td><td>Queues a keyword for deletion from the Chrome extension's blocklist</td></tr>
+        <tr><td>Uploading or updating an MDM profile</td><td>MDM lockdown section</td><td>Queues new .mobileconfig content to push to Fleet - this is how restrictions.mobileconfig/chrome-policy.mobileconfig themselves get changed</td></tr>
+        <tr><td>Changing this password itself</td><td>Change password section</td><td>Requires the current one to set a new one - can't be reset without already having it</td></tr>
+      </tbody>
+    </table>
+    <div class="subtitle" style="margin-top: 0.6rem; margin-bottom: 0;">All six are loosening actions - none apply instantly even with the password: every one still waits the 24h ratchet delay before taking effect, same asymmetry as everywhere else in this project.</div>
+  </section>
+
+  <section>
+    <h2>What does NOT need it</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Tightening actions apply immediately, no password, from an ordinary logged-in session - blocking a Santa rule, adding a keyword, removing a safe app (revoking a scan exemption). Only the direction that makes this Mac less restricted is gated behind the office password; making it more restricted never is.</div>
+  </section>
+
+  <section>
+    <h2>Outside this system</h2>
+    <div class="subtitle" style="margin-bottom: 0;">
+      Honest gap, not filled in: whether this same office password also protects any of your other stored credentials (Fleet's own admin login, the Cloudflare account, GitHub, etc.) isn't something this Worker has any way to know - that lives in your password manager, not this codebase. Tell me which of those actually share it (or depend on it to retrieve) and this section gets a real, accurate table instead of this placeholder - guessing at that would risk telling you something wrong about your own access boundaries, worse than leaving it blank.
+    </div>
+  </section>
+
+  </div>
+
+  <div id="tab-architecture" class="tab-panel" hidden>
+
+  <section>
+    <h2>What this is</h2>
+    <div class="subtitle" style="margin-bottom: 0;">ContentGuard for macOS: self-imposed, hard-to-disable content blocking on this specific Mac, extended from the same model the sibling Android app already uses. Hand-kept summary, not generated - see mac/README.md's own phase-by-phase build order for the full detail behind every line here.</div>
+  </section>
+
+  <section>
+    <h2>The pieces, and how they connect</h2>
+    <table>
+      <thead><tr><th>Layer</th><th>What it is</th><th>What it actually does</th></tr></thead>
+      <tbody>
+        <tr><td>Fleet (MDM)</td><td>Self-hosted on Fly.io, reached via a Cloudflare Tunnel (cloudflared)</td><td>Enrolls and supervises this Mac, pushes every .mobileconfig profile, holds Recovery Lock</td></tr>
+        <tr><td>Cloudflare Gateway / WARP</td><td>Zero Trust DNS + network layer, DNS forced through this org's own Gateway DoH resolver</td><td>NSFW category block, DoH-provider blocklist (blocks bypass via other resolvers), the AI-tool allow/block policy</td></tr>
+        <tr><td>.mobileconfig profiles (profiles/)</td><td>7 files, pushed through Fleet</td><td>Restrictions (browser/torrent blocklist, AirDrop, screenshots), Chrome policy (extension force-install), DNS, PPPC (permissions), Santa config + Full Disk Access, System Extensions</td></tr>
+        <tr><td>Santa</td><td>App execution control, EndpointSecurity-based, MONITOR mode (not LOCKDOWN)</td><td>Denylists specific known-bad tools by TeamID/certificate (Tor Browser, etc.) - deliberately not a full allowlist gate</td></tr>
+        <tr><td>ContentGuardAgent + ContentGuardDaemon</td><td>Native Swift, launchd-managed</td><td>Agent: ScreenCaptureKit capture -> ONNX Runtime/CoreML NudeNet inference -> force-quits the frontmost app on detection. Daemon: tamper-resistant anchor - heartbeat monitoring, fails closed (locks the screen) if the agent goes quiet or gets killed repeatedly</td></tr>
+        <tr><td>Chrome extension</td><td>Force-installed via ExtensionInstallForcelist, self-hosted .crx (this Worker + R2)</td><td>Keyword blocker (URL + page text) and the same NudeNet-style detection ported to the browser, with the same battery-optimization techniques (perceptual hash, skin-tone prefilter) as the native agent</td></tr>
+        <tr><td>This Worker + dashboard</td><td>Cloudflare Worker, D1 database, Cron Trigger every 15 min</td><td>Santa's sync server (preflight/ruledownload/etc.), the ratchet mechanism (tighten-instantly / loosen-after-24h-and-password), Fleet API proxy, and this control panel</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>The ratchet, in one line</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Anything that makes this Mac MORE restricted applies immediately, no password. Anything that makes it LESS restricted needs the office password re-entered and still waits 24 hours - see the Access map tab for exactly which actions that covers.</div>
+  </section>
+
+  <section>
+    <h2>Status</h2>
+    <div class="subtitle" style="margin-bottom: 0;">
+      Phases 0-4 of the original six-phase build are done and confirmed working on the real Mac (see mac/README.md for the full verification history of each). This session added a layer on top of that closed scope: the Chrome extension build, its MDM force-install lock-down, and the browser/torrent-client blocklist. <strong>Phase 5 - demoting the daily account to standard and sealing admin credentials in a vault - is the one remaining unstarted step</strong>, runbook at mac/docs/PHASE_5_LOCKDOWN.md.
+    </div>
+  </section>
+
   </div>
 
 <script>
@@ -1018,7 +1095,7 @@ document.getElementById("password-pending-note").addEventListener("click", async
 // current tab lives in the URL hash so it survives a reload/bookmark,
 // same "no build step, no extra moving parts" reasoning as everything
 // else in this file.
-const TABS = ["mac", "android", "networking"];
+const TABS = ["mac", "android", "networking", "access-map", "architecture"];
 function showTab(name) {
   if (!TABS.includes(name)) name = "mac";
   TABS.forEach((t) => {
