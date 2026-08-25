@@ -1,0 +1,76 @@
+// Serves the Chrome extension's self-hosted update manifest + packaged
+// .crx for profiles/chrome-policy.mobileconfig's ExtensionInstallForcelist
+// (see that file's own comment, and chrome-extension/build/README.md for
+// how the .crx actually gets built and uploaded here). Unauthenticated
+// by necessity, not oversight - Chrome's own extension update-check
+// mechanism does a plain GET with no custom headers, so there's no
+// realistic way to gate this the way every other route in this Worker
+// is gated (same "some things this project's ratchet/session model just
+// can't reach" reasoning already documented for direct Fleet pushes -
+// see mac/docs/PHASE_4_DASHBOARD_SETUP.md). Accepted, not hidden: the
+// packaged .crx itself carries no secret - the extension's own sync
+// token is deliberately never baked into committed source (see
+// chrome-extension/options/options.js's doc comment), so there's
+// nothing sensitive in what a public fetch of this endpoint returns.
+
+import type { Env } from "./types";
+
+// MUST match chrome-extension/manifest.json's own "version" field
+// exactly, and stay in sync with whatever .crx is currently uploaded to
+// R2 (build/package-crx.sh's output) - Chrome compares this version
+// against what's already installed and only fetches the .crx if this
+// one is newer. Hand-kept, not read from the manifest at request time -
+// same "no live channel between this Worker and the extension's own
+// repo state" reasoning as staticSafeApps.ts/staticRules.ts's mirrors.
+// BUMP THIS, and re-run build/package-crx.sh + re-upload to R2, every
+// time chrome-extension/ actually changes - an unbumped version here
+// means Chrome silently never re-checks for the new .crx at all.
+const EXTENSION_VERSION = "0.2.0";
+
+// Placeholder until build/package-crx.sh has actually been run once (in
+// the extension maintainer's own environment - see that script's own
+// header comment for why it's never run here) and its real, permanent
+// extension ID reported back. An update.xml with the wrong ID here is
+// silently ignored by chrome://extensions - not treated as an error - so
+// this being wrong fails quiet, not loud; worth actually checking once
+// deployed for real, same as every other placeholder in this repo.
+const EXTENSION_ID = "__AI_BLOCKER_EXTENSION_ID__";
+
+function updateManifestXml(origin: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
+  <app appid="${EXTENSION_ID}">
+    <updatecheck codebase="${origin}/extension/contentguard.crx" version="${EXTENSION_VERSION}" />
+  </app>
+</gupdate>`;
+}
+
+export function handleExtensionUpdateManifest(request: Request): Response {
+  const url = new URL(request.url);
+  return new Response(updateManifestXml(url.origin), {
+    headers: { "content-type": "application/xml" },
+  });
+}
+
+// Streams the actual .crx straight from R2 - see wrangler.toml's
+// [[r2_buckets]] binding and chrome-extension/build/README.md for how it
+// gets uploaded there (`wrangler r2 object put`, never something this
+// Worker writes itself - this route is read-only).
+export async function handleExtensionCrx(env: Env): Promise<Response> {
+  const object = await env.EXTENSION_ASSETS?.get("contentguard.crx");
+  if (!object) {
+    return new Response(
+      "Extension package not uploaded yet - see chrome-extension/build/README.md",
+      { status: 404 }
+    );
+  }
+  return new Response(object.body, {
+    headers: {
+      // application/x-chrome-extension, not application/octet-stream -
+      // crx3's own README specifically calls this out as needed for
+      // Chrome to reliably recognize and apply a self-hosted update.
+      "content-type": "application/x-chrome-extension",
+      "content-length": String(object.size),
+    },
+  });
+}

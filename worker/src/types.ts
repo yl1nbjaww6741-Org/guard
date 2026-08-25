@@ -109,6 +109,16 @@ export type PostflightResponse = Record<string, never>;
 
 export interface Env {
   DB: D1Database;
+  // Hosts the self-packaged Chrome extension (.crx) for MDM force-install
+  // - see extensionUpdate.ts's own doc comment and
+  // chrome-extension/build/README.md for the full flow. The .crx is
+  // ~90MB, well past anything sensible to bundle into the Worker script
+  // itself, hence R2 rather than a KV/vars value. Optional (`?`) since a
+  // fresh deploy before the bucket's been created/populated should still
+  // start up - handleExtensionCrx's own 404 path covers "not uploaded
+  // yet" explicitly rather than this Worker crashing on an unbound
+  // reference.
+  EXTENSION_ASSETS?: R2Bucket;
   // Static shared token Santa sends via SyncExtraHeaders (see
   // auth.ts's requireSyncToken doc comment) - protects the sync
   // endpoints, which are otherwise reachable by anyone on the internet.

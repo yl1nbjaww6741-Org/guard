@@ -56,6 +56,7 @@ import {
 } from "./configProfilesApi";
 import { handleSafeAppsSync } from "./daemonSync";
 import { handleKeywordsSync } from "./extensionSync";
+import { handleExtensionCrx, handleExtensionUpdateManifest } from "./extensionUpdate";
 import {
   handleAddKeyword,
   handleCancelKeywordRemoval,
@@ -495,6 +496,15 @@ export default {
         return jsonResponse({ cancelled: true });
       }
       return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    // --- Chrome extension self-hosted update endpoints (unauthenticated
+    // by necessity - see extensionUpdate.ts's own doc comment for why) ---
+    if (url.pathname === "/extension/update.xml" && request.method === "GET") {
+      return handleExtensionUpdateManifest(request);
+    }
+    if (url.pathname === "/extension/contentguard.crx" && request.method === "GET") {
+      return handleExtensionCrx(env);
     }
 
     // --- Dashboard page - renders login or the real dashboard depending

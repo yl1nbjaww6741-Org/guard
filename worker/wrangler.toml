@@ -52,6 +52,19 @@ binding = "DB"
 database_name = "contentguard"
 database_id = "8cb09d1d-1497-449f-86d5-f7c754c5f884"
 
+# Hosts the self-packaged Chrome extension .crx for MDM force-install -
+# see worker/src/extensionUpdate.ts's own doc comment and
+# chrome-extension/build/README.md for the full flow. Bucket itself has
+# to be created once by hand (`wrangler r2 bucket create
+# contentguard-extension`, see that README) before this binding resolves
+# to anything real - a fresh deploy before that step still starts up
+# fine (types.ts's Env.EXTENSION_ASSETS is optional specifically for
+# this), it just means GET /extension/contentguard.crx 404s until the
+# bucket exists and has something uploaded to it.
+[[r2_buckets]]
+binding = "EXTENSION_ASSETS"
+bucket_name = "contentguard-extension"
+
 # Not a secret - a Fleet host identifier isn't sensitive the way
 # FLEET_API_TOKEN is, so this is a plain var, not a `wrangler secret
 # put`. Real value: the real Mac's serial number (confirmed via Fleet's

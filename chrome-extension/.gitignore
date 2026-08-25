@@ -1,0 +1,7 @@
+# build/package-crx.sh's output - the private signing key (key.pem) is a
+# permanent credential (see that script's own header comment for why it
+# must never be committed), and the built .crx/update.xml are
+# reproducible build artifacts, not source. Never commit any of this.
+build/dist/
+*.pem
+*.crx
