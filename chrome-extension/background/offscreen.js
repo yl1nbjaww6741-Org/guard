@@ -21,10 +21,36 @@ let sandboxReady = false;
 let pendingRequests = new Map(); // requestId -> {resolve, reject}
 let nextRequestId = 0;
 
+// Two independent async things have to both finish before the sandbox
+// can actually be initialized: the sandbox iframe announcing itself
+// ready to receive messages, and the (slow - 99MB) model fetch below.
+// They can finish in either order - trySendInit() only actually sends
+// once both have. See init()'s own comment for the real bug this
+// replaced (waiting on the iframe's "load" DOM event instead, which had
+// a confirmed-live race where that event usually already fired by the
+// time the model fetch finished, silently hanging forever with no
+// error).
+let sandboxLoaded = false;
+let modelBytes = null;
+function trySendInit() {
+  if (!sandboxLoaded || !modelBytes) return;
+  const bytes = modelBytes;
+  modelBytes = null; // Consumed - postMessage's transfer list detaches
+  // this ArrayBuffer from this context anyway, but clearing the
+  // reference here too guards against a stray second trySendInit() call
+  // trying to resend an already-transferred (and thus unusable) buffer.
+  sandboxFrame.contentWindow.postMessage({ type: "contentguard-init", modelBytes: bytes }, "*", [bytes]);
+}
+
 window.addEventListener("message", (event) => {
   const message = event.data;
   if (!message || typeof message !== "object") return;
 
+  if (message.type === "contentguard-sandbox-loaded") {
+    sandboxLoaded = true;
+    trySendInit();
+    return;
+  }
   if (message.type === "contentguard-session-ready") {
     sandboxReady = true;
     console.log("ContentGuard: NudeNet ONNX session ready in sandbox");
@@ -142,23 +168,23 @@ function startCaptureLoop() {
   }, CAPTURE_INTERVAL_MS);
 }
 
+// CONFIRMED LIVE (real Mac, real Chrome, 2026-08-25) that the original
+// version of this function had a real bug: it fetched the model, THEN
+// registered a listener for the sandbox <iframe>'s own "load" DOM event
+// before sending it. In practice the sandbox (a tiny page) finishes
+// loading well before this function's 99MB fetch does - so by the time
+// the listener was registered, "load" had already fired once and would
+// never fire again, and init() just hung forever with nothing to catch
+// or log (nothing ever threw). Symptom that gave it away: sandboxReady
+// stayed false with zero console output, even re-invoking init()
+// directly from DevTools. Fixed by having the sandbox announce itself
+// via postMessage instead of relying on a DOM event at all - see
+// trySendInit() above and sandbox.js's matching comment.
 async function init() {
   try {
     const modelUrl = chrome.runtime.getURL("model/nudenet_640m.onnx");
-    const modelBytes = await (await fetch(modelUrl)).arrayBuffer();
-    // Wait for the sandbox iframe's own "load" event, not its
-    // contentDocument.readyState - the sandbox has its own opaque/unique
-    // origin (see sandbox.html's own comment), so reading
-    // contentDocument cross-origin from here isn't reliable. The <iframe>
-    // element's own "load" DOM event fires regardless of the framed
-    // document's origin, and by the time it fires sandbox.js's module
-    // script (a synchronous <script type=module>, blocking parse until
-    // executed) has already run and attached its message listener - a
-    // message posted before that listener exists would simply be lost,
-    // not queued, so this ordering matters.
-    sandboxFrame.addEventListener("load", () => {
-      sandboxFrame.contentWindow.postMessage({ type: "contentguard-init", modelBytes }, "*", [modelBytes]);
-    });
+    modelBytes = await (await fetch(modelUrl)).arrayBuffer();
+    trySendInit();
   } catch (err) {
     console.error("ContentGuard: failed to load NudeNet model -", err, "- NSFW detection will NOT run this session (keyword blocking is unaffected)");
   }

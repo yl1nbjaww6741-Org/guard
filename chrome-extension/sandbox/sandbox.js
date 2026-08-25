@@ -6,6 +6,9 @@
 // Message protocol (offscreen.js -> this sandbox, via
 // iframe.contentWindow.postMessage; this sandbox -> offscreen.js via
 // window.parent.postMessage):
+//   out: { type: "contentguard-sandbox-loaded" } (sent once, immediately -
+//         see below for why this replaced waiting on the iframe's own
+//         "load" DOM event)
 //   in:  { type: "contentguard-init", modelBytes: ArrayBuffer }
 //   out: { type: "contentguard-session-ready" } | { type: "contentguard-session-error", error: string }
 //   in:  { type: "contentguard-classify", requestId, imageData: ImageData }
@@ -205,3 +208,19 @@ window.addEventListener("message", async (event) => {
     }
   }
 });
+
+// Announces readiness explicitly, rather than offscreen.js waiting on
+// the <iframe>'s own "load" DOM event - confirmed live (real Mac, real
+// Chrome, 2026-08-25) that the "load" approach has a real race: by the
+// time offscreen.js's model fetch finishes (a 99MB file, genuinely
+// slow) and gets around to registering its "load" listener, this
+// iframe's "load" event has USUALLY ALREADY FIRED (a small file, loads
+// fast) - registering a listener for an event that already happened
+// does nothing, so init() just hung forever with no error, since
+// nothing ever threw. This message is sent unconditionally, the instant
+// this script starts running (which is strictly after the "message"
+// listener above is registered, same file, sequential execution) - so
+// offscreen.js reacting to THIS instead of a DOM event has no
+// equivalent race: this script cannot post the message before it's
+// capable of receiving the reply.
+window.parent.postMessage({ type: "contentguard-sandbox-loaded" }, "*");
