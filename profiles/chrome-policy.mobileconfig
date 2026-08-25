@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>6ECA9AC0-F965-4483-8362-5B12E50392E8</string>
     <key>PayloadVersion</key>
-    <integer>2</integer>
+    <integer>3</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>56450B06-03B6-4F67-8CF6-95716E896A8F</string>
             <key>PayloadVersion</key>
-            <integer>2</integer>
+            <integer>3</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Chrome Policy Payload</string>
             <key>PayloadContent</key>
@@ -38,6 +38,52 @@
                         <dict>
                             <key>mcx_preference_settings</key>
                             <dict>
+                                <!--
+                                  ExtensionInstallForcelist: force-installs
+                                  each listed extension and locks it -
+                                  greyed-out remove/disable controls in
+                                  chrome://extensions, auto-reinstalled if
+                                  somehow removed (confirmed against Chrome
+                                  Enterprise's own policy docs, not
+                                  guessed). This is genuinely different
+                                  from ExtensionInstallBlocklist above
+                                  (which controls what CAN be installed,
+                                  removed entirely per 2026-08-24's
+                                  loosening) - this one is about what, once
+                                  installed, CANNOT be taken back off.
+
+                                  NOT YET FUNCTIONAL - placeholder only.
+                                  Each entry needs "extension_id;update_url"
+                                  from a real, built extension, which
+                                  doesn't exist yet (per the user's own
+                                  2026-08-25 framing: "assuming we will
+                                  build a Chrome ai blocker browser
+                                  extension"). Chrome silently ignores a
+                                  malformed/non-existent forcelist entry
+                                  rather than erroring on the rest of the
+                                  policy, so leaving this placeholder in
+                                  has no live effect and is safe to push
+                                  as-is if needed for another change first.
+
+                                  To fill in once the extension is built:
+                                  - Published to the Chrome Web Store: use
+                                    that listing's extension_id, and
+                                    update_url
+                                    "https://clients2.google.com/service/update2/crx"
+                                    (Google's standard update endpoint for
+                                    any Web-Store-hosted extension).
+                                  - Kept private/unlisted or self-hosted
+                                    instead: needs a self-hosted update
+                                    manifest XML the extension_id's
+                                    update_url points to, serving the
+                                    signed .crx - more setup, only pick
+                                    this path if the Web Store route is
+                                    ruled out for some reason.
+                                -->
+                                <key>ExtensionInstallForcelist</key>
+                                <array>
+                                    <string>__AI_BLOCKER_EXTENSION_ID__;__AI_BLOCKER_UPDATE_URL__</string>
+                                </array>
                                 <key>DeveloperToolsAvailability</key>
                                 <integer>2</integer>
                                 <key>IncognitoModeAvailability</key>
