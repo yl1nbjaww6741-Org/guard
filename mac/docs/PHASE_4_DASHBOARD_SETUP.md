@@ -764,6 +764,29 @@ policy-forced installs don't go through "Load unpacked"/Developer mode
 at all, so this loosening's whole reason to exist goes away once that's
 done.
 
+**Closed the loop, same day**: the extension got packaged (CRX3, via the
+`crx3` npm package - `chrome-extension/build/package-crx.sh`), self-
+hosted on this project's own Cloudflare infra (`worker/src/extensionUpdate.ts`
++ an R2 bucket, per explicit user choice over Chrome Web Store
+publishing), and `ExtensionInstallForcelist` filled in with the real
+extension ID (`pdhcmfmgdicpkanpigjpgenhhbbollpk`) - confirmed live before
+trusting any of it: a real HTTPS GET against the deployed `.crx` endpoint
+returned a byte-exact `content-length` match against the locally-built
+file, and on the Mac itself, removing the manually-loaded unpacked copy
+from `chrome://extensions` and reloading showed it reappear on its own,
+"installed by your administrator." Only then - confirmed working, not
+assumed - was `DeveloperToolsAvailability` pushed back to `2`
+(`PayloadVersion` 6), closing this loosening out for real. One genuine
+infrastructure bug found and fixed along the way: adding the R2 binding
+to `wrangler.toml` broke every Worker deploy on this branch (the GitHub
+Actions deploy token lacked R2 permission, confirmed via the real
+`wrangler deploy` error in that run's log) - reverted immediately, then
+re-added once a new token with the right scope was in place. Full
+build/hosting story is in `chrome-extension/build/README.md`, including a
+second real gotcha found live there: `wrangler r2 object put` without
+`--remote` silently writes to the local Miniflare simulator while still
+printing "Upload complete."
+
 ## Safe-app whitelist moved to the dashboard
 
 `ContentGuardConfig.safeAppBundleIDs` (mac/Shared/Config.swift) - the

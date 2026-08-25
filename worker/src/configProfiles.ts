@@ -46,9 +46,9 @@ export const CONFIG_PROFILES: ConfigProfileDetail[] = [
     restrictions: [
       "Incognito mode: disabled",
       "Guest mode: disabled",
-      "Developer tools: allowed (temporarily loosened 2026-08-25, explicit user request, to unblock testing chrome-extension/ via chrome://extensions' 'Load unpacked' - Chrome's DeveloperToolsAvailability=2 also disables that page's Developer mode, not just the DevTools panel. Re-tighten once the extension is force-installed via ExtensionInstallForcelist and no longer needs it)",
+      "Developer tools: disabled (re-tightened 2026-08-25 - was temporarily loosened to unblock testing chrome-extension/ via 'Load unpacked', now genuinely policy-installed via ExtensionInstallForcelist below, confirmed live: the manually-loaded copy was removed and the policy-installed one reappeared on its own, so Developer mode is no longer needed)",
       "Extension installs: allowed (loosened by explicit user request 2026-08-24 - was blocklisted entirely; ExtensionInstallBlocklist removed, Chrome's real semantics for 'no restriction')",
-      "Once installed, the future Chrome AI-blocker extension will be locked from removal (ExtensionInstallForcelist - placeholder only as of 2026-08-25, no real extension ID yet, no live effect until filled in - see chrome-policy.mobileconfig's own comment)",
+      "The Chrome AI-blocker extension is force-installed and locked from removal (ExtensionInstallForcelist, real extension ID as of 2026-08-25 - self-hosted via this project's own Worker/R2, confirmed live end-to-end)",
       "Chrome's own DNS-over-HTTPS: off (Gateway's DoH-provider block already covers this at the network level - this closes the same gap inside Chrome specifically)",
       "Browser sign-in: allowed, not forced (loosened by explicit user request 2026-08-24 - BrowserSignin 0->1)",
     ],
