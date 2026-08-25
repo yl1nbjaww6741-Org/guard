@@ -47,13 +47,36 @@ const SHARED_STYLES = `
   .status-msg { font-size: 0.8rem; margin-top: 0.5rem; min-height: 1.2em; }
 `;
 
+// PWA install support, added 2026-08-25 (explicit user request: "I want
+// panel on my phone... make it a PWA app for android") - manifest +
+// icons served as plain static files via wrangler.toml's [assets]
+// binding (web/dist/manifest.webmanifest, web/dist/icons/*, generated
+// by web/reference/gen_icons.py - a simple shield mark matching
+// ContentGuard Central's own Wise-light tokens), not new backend logic.
+// Registers web/dist/sw.js, which is deliberately a no-op (no caching -
+// see that file's own comment: this is a live security dashboard, a
+// stale cached response would be actively wrong). On both pages, not
+// just the dashboard - Chrome's install prompt considers whichever page
+// is open when triggered, and this Worker can render either one first
+// depending on session state.
+const PWA_HEAD_TAGS = `
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#14161a">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" href="/icons/icon-192.png">`;
+
+const PWA_SW_REGISTER_SCRIPT = `
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}`;
+
 export function renderLoginPage(errorMessage?: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ContentGuard Control Panel</title>
+<title>ContentGuard Control Panel</title>${PWA_HEAD_TAGS}
 <style>
   ${SHARED_STYLES}
   body { max-width: 360px; padding-top: 20vh; }
@@ -70,7 +93,7 @@ export function renderLoginPage(errorMessage?: string): string {
     <button type="submit">Log in</button>
   </form>
   <div class="error" id="login-error">${errorMessage ? escapeHtmlServer(errorMessage) : ""}</div>
-<script>
+<script>${PWA_SW_REGISTER_SCRIPT}
 document.getElementById("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const password = new FormData(e.target).get("password");
@@ -102,7 +125,7 @@ export function renderDashboard(): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ContentGuard Control Panel</title>
+<title>ContentGuard Control Panel</title>${PWA_HEAD_TAGS}
 <style>
   ${SHARED_STYLES}
   .top-bar { display: flex; justify-content: space-between; align-items: baseline; }
@@ -374,7 +397,7 @@ export function renderDashboard(): string {
 
   </div>
 
-<script>
+<script>${PWA_SW_REGISTER_SCRIPT}
 async function api(path, opts) {
   const res = await fetch(path, { ...opts, credentials: "include" });
   if (res.status === 401) {

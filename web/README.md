@@ -92,12 +92,34 @@ npm run typecheck
 npm run build       # tsc --noEmit && vite build -> dist/
 ```
 
-## Deployment
+## Deployment - actually resolved, not the plan above anymore
+
+Live at **https://panel.lukep009.download/central/**, confirmed via a
+real `curl` (200, correct HTML/JS) - not the separate-Pages-project plan
+this file originally laid out. Instead: `npm run build` outputs to
+`dist/central/` (see `vite.config.ts`'s own comment), and
+`worker/wrangler.toml`'s `[assets]` binding serves that same directory's
+parent (`../web/dist`) as static files alongside the existing Worker -
+no separate origin, so the CORS/cookie gap above never comes up at all.
+`web/dist/` is committed (see `web/.gitignore`'s own comment) since this
+repo's CI only ever deploys `worker/`, never builds `web/` - **rebuild
+and re-commit `dist/` by hand whenever `web/`'s source changes**, or the
+live site silently keeps serving old code.
 
 ```bash
-npm run build
-wrangler pages deploy dist --project-name contentguard-central
+npm run build          # -> dist/central/
+cd ../worker && npx wrangler deploy --dry-run   # sanity-check first
+git add -f web/dist && git commit && git push   # -f: dist/ is gitignore'd by default, deliberately overridden
 ```
 
-Only actually usable once the CORS/cookie gap above is resolved one way
-or the other - not attempted as part of this pass.
+## PWA icons (for the OTHER dashboard, not this one)
+
+`reference/gen_icons.py` generates the icon set actually used by
+`panel.lukep009.download`'s existing (non-React) dashboard's own PWA
+manifest (`worker/src/dashboard.ts`'s `PWA_HEAD_TAGS`,
+`web/dist/manifest.webmanifest`) - a shield mark in this app's own
+Wise-light tokens (`bright`/`forest`), written straight to
+`dist/icons/` since that's the real serving location. Re-run
+(`python3 reference/gen_icons.py`, needs Pillow: `pip install Pillow`)
+and re-commit if the mark itself ever needs to change - not generated
+at build/deploy time, same hand-kept pattern as `dist/` itself.
