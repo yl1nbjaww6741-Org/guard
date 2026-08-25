@@ -25,6 +25,26 @@ protocol AppScopeManagerDelegate: AnyObject {
     /// SCContentFilter(s) in response, since SCContentFilter is immutable
     /// once created.
     func appScopeManagerDidUpdateScope(_ manager: AppScopeManager)
+
+    /// Every currently-running regular application (see
+    /// allRunningRegularAppsAreSafe()'s own doc comment for exactly what
+    /// "regular" means and why) is on the safe list right now.
+    /// CaptureManager should pause capture entirely - the same battery
+    /// reasoning as pausing on display sleep, just triggered by what's
+    /// running instead of display power state. No content is at risk
+    /// either way: capture is turned off, but a safe-listed app's
+    /// windows were never scanned in the first place even while capture
+    /// was on, so this changes nothing about what gets seen, only
+    /// whether the pipeline bothers running while there's nothing
+    /// unwhitelisted to catch.
+    func appScopeManagerAllRunningAppsAreSafe(_ manager: AppScopeManager)
+
+    /// The reverse - at least one currently-running regular application
+    /// is NOT on the safe list (a new one just launched, or the
+    /// dashboard-synced whitelist just narrowed under an app that was
+    /// already running). CaptureManager should resume capture
+    /// immediately if it was paused for this reason.
+    func appScopeManagerNonSafeAppIsRunning(_ manager: AppScopeManager)
 }
 
 // NSObject subclass, not a plain Swift class - #selector()/@objc-based
@@ -137,26 +157,36 @@ final class AppScopeManager: NSObject {
     /// is the cheap mistake, going stale on a real safe-app change is the
     /// expensive one.
     @objc private func handleAppLifecycleChange(_ notification: Notification) {
-        if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-           let bundleID = app.bundleIdentifier,
-           !effectiveSafeAppBundleIDs.contains(bundleID) {
-            // Positively identified as an app whose launch/quit cannot
-            // change the exclusion set - nothing to do.
-            return
-        }
-        Task {
-            do {
-                try await refresh()
-                delegate?.appScopeManagerDidUpdateScope(self)
-            } catch {
-                // Best-effort: on a transient SCShareableContent failure,
-                // keep whatever excludedApplications/latestContent state we
-                // already had rather than clearing it. A stale-but-nonempty
-                // safe list is the safer failure mode here - it never
-                // widens what gets excluded from capture, only narrows it
-                // back toward "cover more, not less" if it's wrong.
+        let bundleID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+
+        // Window-exclusion rebuild stays gated to safe-listed apps only -
+        // see this method's own doc comment above for the real battery
+        // cost unconditionally refreshing here used to have. A non-safe
+        // app's launch/quit can't add or remove anything from
+        // excludedApplications either way.
+        if bundleID == nil || effectiveSafeAppBundleIDs.contains(bundleID!) {
+            Task {
+                do {
+                    try await refresh()
+                    delegate?.appScopeManagerDidUpdateScope(self)
+                } catch {
+                    // Best-effort: on a transient SCShareableContent failure,
+                    // keep whatever excludedApplications/latestContent state we
+                    // already had rather than clearing it. A stale-but-nonempty
+                    // safe list is the safer failure mode here - it never
+                    // widens what gets excluded from capture, only narrows it
+                    // back toward "cover more, not less" if it's wrong.
+                }
             }
         }
+
+        // Capture-pause eligibility, unlike the rebuild above, is NOT
+        // gated to safe-listed apps - deliberately the opposite filter.
+        // A non-safe app launching is exactly the signal that has to
+        // resume capture, and a non-safe app being the last one running
+        // when it quits is exactly the signal that allows pausing.
+        // Evaluated on every launch/quit, unconditionally.
+        evaluateCapturePauseEligibility()
     }
 
     // MARK: - Dashboard-synced safe apps
@@ -185,6 +215,12 @@ final class AppScopeManager: NSObject {
                     // catch block above.
                 }
             }
+            // The whitelist itself just changed, independent of any app
+            // launching/quitting - a dashboard addition could newly make
+            // "everything running is safe" true, or a removal could make
+            // it newly false, without a single process transition to
+            // hang either off of.
+            self.evaluateCapturePauseEligibility()
         }
         t.resume()
         safeAppsSyncPollTimer = t
@@ -219,5 +255,73 @@ final class AppScopeManager: NSObject {
         guard newSet != syncedSafeAppBundleIDs else { return false }
         syncedSafeAppBundleIDs = newSet
         return true
+    }
+
+    // MARK: - Capture-pause eligibility (nothing risky running)
+
+    /// Computes whether every currently-running regular application is on
+    /// the safe list right now and informs the delegate accordingly - see
+    /// appScopeManagerAllRunningAppsAreSafe/appScopeManagerNonSafeAppIsRunning's
+    /// own doc comments for what CaptureManager does with each. Called
+    /// unconditionally on every relevant change (an app launching/quitting,
+    /// the synced safe-app list changing) rather than only on an actual
+    /// transition - CaptureManager's own pause-flag guards already no-op a
+    /// redundant call in either direction, so there's no reason to
+    /// duplicate that bookkeeping here too.
+    ///
+    /// Public, not private like most of this class's internals - the very
+    /// first evaluation has to happen after CaptureManager has actually
+    /// set itself as this object's delegate. That wiring doesn't exist
+    /// yet inside AppScopeManager's own init() (CaptureManager is
+    /// constructed afterward, in main.swift, and sets `appScopeManager.delegate
+    /// = self` inside its own init) - CaptureManager.start() calls this
+    /// explicitly right after its own initial refresh() instead, once the
+    /// delegate is guaranteed to be wired.
+    func evaluateCapturePauseEligibility() {
+        if allRunningRegularAppsAreSafe() {
+            delegate?.appScopeManagerAllRunningAppsAreSafe(self)
+        } else {
+            delegate?.appScopeManagerNonSafeAppIsRunning(self)
+        }
+    }
+
+    /// True if every currently-running REGULAR application - NSRunningApplication.activationPolicy
+    /// == .regular, the same scope Activity Monitor's own "Windowed
+    /// Processes" view uses, a real app a user could actually be looking
+    /// at - is on effectiveSafeAppBundleIDs.
+    ///
+    /// Deliberately scoped to .regular apps, not
+    /// NSWorkspace.runningApplications in full: that full list includes
+    /// every background helper/menu-bar-only/XPC-service process the
+    /// system runs continuously (iCloud helpers, Spotlight, countless
+    /// others), which would make "nothing risky running" essentially
+    /// unreachable in practice - not a deliberate safety margin, an
+    /// accident of using the wrong API for what this check actually needs
+    /// to mean.
+    ///
+    /// Checks process EXISTENCE, not window visibility, and that
+    /// distinction is the entire reason this is safe to gate capture on
+    /// at all - see the design discussion this came from. A window
+    /// merely becoming visible has no reliable system notification behind
+    /// it (an already-running app un-minimizing, or a background window on
+    /// a second display becoming un-occluded, fires nothing), so gating on
+    /// that would create a real detection gap. A process launching or
+    /// quitting always does fire a notification
+    /// (handleAppLifecycleChange above already depends on this), so
+    /// gating on process existence instead has no equivalent gap: as long
+    /// as a non-safe app's process exists at all - regardless of whether
+    /// it currently has any window open - capture stays on.
+    ///
+    /// A nil bundleIdentifier fails closed (treated as non-safe) - the
+    /// same "when in doubt, don't shed" policy as every other prefilter in
+    /// this project.
+    private func allRunningRegularAppsAreSafe() -> Bool {
+        let safe = effectiveSafeAppBundleIDs
+        return NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .allSatisfy { app in
+                guard let bundleID = app.bundleIdentifier else { return false }
+                return safe.contains(bundleID)
+            }
     }
 }

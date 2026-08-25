@@ -22,18 +22,21 @@ protocol CaptureManagerDelegate: AnyObject {
     /// main.swift for the real failure mode this exists to prevent.
     func captureManagerDidSkipUnchangedFrame(_ manager: CaptureManager)
 
-    /// Called when every display has gone to sleep and CaptureManager has
-    /// stopped its streams in response - see handleScreensSleep()'s doc
-    /// comment. The delegate must stop reporting captureActive=true for the
-    /// duration (main.swift sets heartbeatClient.captureActive = false),
+    /// Called when CaptureManager has stopped its streams for ANY reason -
+    /// every display asleep (handleScreensSleep()) or nothing unwhitelisted
+    /// currently running (appScopeManagerAllRunningAppsAreSafe()). Two
+    /// independent pause sources, one delegate signal - see isPaused's own
+    /// doc comment for why this fires on the aggregate transition, not
+    /// per-source. The delegate must stop reporting captureActive=true for
+    /// the duration (main.swift sets heartbeatClient.captureActive = false),
     /// the same way the capture-failed-to-start path already does - a
     /// legitimate pause looks identical to a dead stream from the daemon's
     /// side (framesProcessed frozen) unless captureActive says otherwise.
-    func captureManagerDidPauseForDisplaySleep(_ manager: CaptureManager)
+    func captureManagerDidPause(_ manager: CaptureManager)
 
-    /// Called once capture has resumed after handleScreensWake() rebuilt
-    /// streams following a captureManagerDidPauseForDisplaySleep(_:) call.
-    func captureManagerDidResumeFromDisplaySleep(_ manager: CaptureManager)
+    /// Called once capture has resumed after every active pause source has
+    /// cleared and streams were rebuilt.
+    func captureManagerDidResume(_ manager: CaptureManager)
 }
 
 final class CaptureManager: NSObject {
@@ -75,6 +78,34 @@ final class CaptureManager: NSObject {
     /// every 25 seconds, for as long as the display stays off.
     private var isPausedForDisplaySleep = false
 
+    /// True while capture is intentionally paused because every currently-
+    /// running regular application is on the safe list - see
+    /// appScopeManagerAllRunningAppsAreSafe(_:)'s doc comment. Independent
+    /// of isPausedForDisplaySleep above: either alone is sufficient reason
+    /// to have streams stopped (see isPaused below), and both can be true
+    /// at once (e.g. the laptop is locked with only Terminal running) -
+    /// each source clears only its own flag on its own wake trigger, and
+    /// resuming for real only happens once neither is set.
+    private var isPausedForNoRiskyApps = false
+
+    /// The aggregate: true if EITHER pause source is active. This is what
+    /// rebuildAllStreams()/checkStreamHealth() actually guard against, and
+    /// it's also why captureManagerDidPause/captureManagerDidResume fire on
+    /// the aggregate transition rather than once per source - if the
+    /// display sleeps first and then the running-app set separately
+    /// becomes all-safe while still asleep, that second transition must
+    /// NOT re-fire captureManagerDidPause (already paused, nothing new to
+    /// report), and clearing the display-sleep flag on wake must NOT fire
+    /// captureManagerDidResume while isPausedForNoRiskyApps is still true -
+    /// capture is still legitimately not running, and reporting
+    /// captureActive=true at that moment would be exactly the kind of
+    /// dishonest heartbeat this project has already found and fixed once
+    /// (see HeartbeatMonitor.swift's captureJustResumed comment, daemon
+    /// side - that fix protects this correctly, but only if this side
+    /// never reports captureActive=true while genuinely still paused for
+    /// any reason).
+    private var isPaused: Bool { isPausedForDisplaySleep || isPausedForNoRiskyApps }
+
     init(appScopeManager: AppScopeManager, overlayManager: OverlayManager) {
         self.appScopeManager = appScopeManager
         self.overlayManager = overlayManager
@@ -113,6 +144,13 @@ final class CaptureManager: NSObject {
 
     func start() async throws {
         try await appScopeManager.refresh()
+        // Evaluated before the initial rebuildAllStreams() call below,
+        // deliberately - if nothing unwhitelisted happens to be running at
+        // startup, this sets isPausedForNoRiskyApps synchronously (see
+        // appScopeManagerAllRunningAppsAreSafe(_:)) before that call ever
+        // runs, so the very first rebuild correctly no-ops via isPaused
+        // instead of building streams just to immediately tear them down.
+        appScopeManager.evaluateCapturePauseEligibility()
         try await rebuildAllStreams()
         outputQueue.async { [weak self] in
             self?.hasStartedOnce = true
@@ -141,14 +179,18 @@ final class CaptureManager: NSObject {
         // Guards every rebuild trigger, not just the self-heal timer above -
         // appScopeManagerDidUpdateScope (a safe app launching/quitting),
         // handleDisplayChange, and didStopWithError can all fire while
-        // every display is asleep just as easily as while one is on (none
-        // of them require the screen to be lit), and none of them know
-        // about the pause on their own. Centralizing the check here, rather
-        // than guarding each call site individually, means every rebuild
-        // path - present and future - respects the pause automatically.
-        // handleScreensWake() clears the flag before calling this, so the
-        // one rebuild that's supposed to happen during a pause still does.
-        guard !isPausedForDisplaySleep else { return }
+        // either pause reason is active just as easily as while neither is
+        // (none of them require the screen to be lit or a non-safe app
+        // running), and none of them know about either pause on their own.
+        // Centralizing the check here, rather than guarding each call site
+        // individually, means every rebuild path - present and future -
+        // respects both pauses automatically. Checked against the
+        // aggregate (isPaused), not just isPausedForDisplaySleep, so this
+        // correctly stays a no-op if the OTHER pause reason is still
+        // active too. Each pause source's own wake handler clears its own
+        // flag before calling this, so the one rebuild that's actually
+        // supposed to happen (both sources cleared) still does.
+        guard !isPaused else { return }
 
         isRebuilding = true
         defer { isRebuilding = false }
@@ -304,11 +346,10 @@ final class CaptureManager: NSObject {
         // case for the real incident that surfaced this.
         guard hasStartedOnce else { return }
 
-        // A deliberate pause (every display asleep) is not a stall - see
-        // isPausedForDisplaySleep's doc comment. Without this, this check
-        // would spend the whole pause rebuilding streams it was just told
-        // to stop.
-        guard !isPausedForDisplaySleep else { return }
+        // A deliberate pause (either reason - see isPaused's doc comment)
+        // is not a stall. Without this, this check would spend the whole
+        // pause rebuilding streams it was just told to stop.
+        guard !isPaused else { return }
 
         let reference = lastFrameDeliveredAt ?? .distantPast
         guard Date().timeIntervalSince(reference) > ContentGuardConfig.captureStreamStallGraceSeconds else { return }
@@ -373,25 +414,38 @@ final class CaptureManager: NSObject {
     /// "reasoned but not yet independently verified" note in this file.
     @objc private func handleScreensSleep() {
         guard !isPausedForDisplaySleep else { return }
+        let wasAlreadyPaused = isPaused
         isPausedForDisplaySleep = true
         NSLog("ContentGuardAgent: display(s) asleep - pausing capture")
         Task {
             await stop()
-            delegate?.captureManagerDidPauseForDisplaySleep(self)
+            // Only fire the delegate signal on the aggregate transition -
+            // see isPaused's own doc comment. If isPausedForNoRiskyApps was
+            // already true, capture was already stopped and
+            // captureActive was already reported false; nothing changed
+            // from the daemon's perspective.
+            if !wasAlreadyPaused {
+                delegate?.captureManagerDidPause(self)
+            }
         }
     }
 
     /// Resumes from handleScreensSleep() above. A full rebuild, not a
     /// resume of the old streams - stop() already tore them down, same
     /// "clean rebuild rather than repair a half-dead stream" reasoning
-    /// handleWake() already uses.
+    /// handleWake() already uses. Only actually resumes if
+    /// isPausedForNoRiskyApps isn't ALSO still holding the pause - see
+    /// isPaused's own doc comment for why reporting captureActive=true
+    /// while still genuinely paused for the other reason would be exactly
+    /// the dishonest-heartbeat bug already found and fixed once.
     @objc private func handleScreensWake() {
         guard isPausedForDisplaySleep else { return }
         isPausedForDisplaySleep = false
         NSLog("ContentGuardAgent: display(s) awake - resuming capture")
+        guard !isPaused else { return }
         Task {
             try? await rebuildAllStreams()
-            delegate?.captureManagerDidResumeFromDisplaySleep(self)
+            delegate?.captureManagerDidResume(self)
         }
     }
 }
@@ -403,6 +457,39 @@ extension CaptureManager: AppScopeManagerDelegate {
             // SCContentFilter is immutable once built, so this means a
             // rebuild, not an in-place update.
             try? await rebuildAllStreams()
+        }
+    }
+
+    /// Nothing unwhitelisted is currently running - see this method's own
+    /// doc comment in the protocol declaration. Same aggregate-transition
+    /// reasoning as handleScreensSleep() above: only fire the delegate
+    /// signal if this is genuinely a fresh pause, not a redundant call
+    /// while already paused for the display-sleep reason.
+    func appScopeManagerAllRunningAppsAreSafe(_ manager: AppScopeManager) {
+        guard !isPausedForNoRiskyApps else { return }
+        let wasAlreadyPaused = isPaused
+        isPausedForNoRiskyApps = true
+        NSLog("ContentGuardAgent: nothing unwhitelisted running - pausing capture")
+        Task {
+            await stop()
+            if !wasAlreadyPaused {
+                delegate?.captureManagerDidPause(self)
+            }
+        }
+    }
+
+    /// A non-whitelisted app just launched (or is otherwise now running) -
+    /// resume capture immediately if this was the active pause reason.
+    /// Same "only actually resume if the other pause source has also
+    /// cleared" reasoning as handleScreensWake() above.
+    func appScopeManagerNonSafeAppIsRunning(_ manager: AppScopeManager) {
+        guard isPausedForNoRiskyApps else { return }
+        isPausedForNoRiskyApps = false
+        NSLog("ContentGuardAgent: non-whitelisted app now running - resuming capture")
+        guard !isPaused else { return }
+        Task {
+            try? await rebuildAllStreams()
+            delegate?.captureManagerDidResume(self)
         }
     }
 }
