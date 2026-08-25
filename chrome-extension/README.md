@@ -137,6 +137,53 @@ is what actually found and confirmed each fix.
      visible content of a page) - confirm detection and tab-close
      happen within about 5-10 seconds.
 
+## Battery optimizations (2026-08-25)
+
+Ported directly from the native Mac agent's own hard-won, real-data-tuned
+approach, not re-invented - same four levers, same reasoning:
+
+1. **Pause capture entirely when there's nothing to look at**
+   (`service-worker.js`'s `chromeIsFocused` + `chrome.windows.onFocusChanged`).
+   Mirrors `AppScopeManager.swift`'s process-existence capture-pause
+   gating - the native agent's single biggest lever. The closest
+   equivalent a browser extension actually has: if Chrome isn't even the
+   frontmost application (`onFocusChanged` fires with `WINDOW_ID_NONE`),
+   nobody is looking at any of its content, so the whole 5-second
+   capture request short-circuits to an empty result before a single
+   `captureVisibleTab` call happens.
+2. **Skip frames that haven't materially changed**
+   (`offscreen.js`'s `perceptualHash`/`hammingDistance`, per tab). A
+   verbatim port of `FrameProcessor.swift`'s own 8x8 average-luminance
+   hash and hamming-distance-under-4 threshold - ported to `BigInt`
+   specifically because JS's native bitwise operators coerce to 32-bit
+   and would silently corrupt a 64-bit hash past bit 31.
+3. **A cheap skin-tone prefilter before ever running the expensive ONNX
+   classifier** (`offscreen.js`'s `skinAnalysis`). Verbatim port of
+   `FrameProcessor.swift`'s YCbCr heuristic, including its two real-Mac-
+   tuned thresholds (0.15 whole-thumbnail average, 0.35 densest 4x4-grid
+   block) and the exact reasoning for having both: a real explicit image
+   occupying only part of the screen can dilute the whole-frame average
+   below threshold while still saturating one grid block - confirmed
+   against synthetic test data reproducing that exact scenario before
+   this was trusted. Still a load shedder, not an acquitter - failing
+   this prefilter only skips a frame judged unlikely to contain the
+   target classes, it never clears one; only the real classifier ever
+   confirms a detection.
+4. **Never move more pixels than the model can use**
+   (`offscreen.js`'s single decode, reused for both the 64px prefilter
+   thumbnail and the <=640px model input). Same reasoning as
+   `ContentGuardConfig.maxCaptureDimension` - a Retina screenshot can be
+   several times larger than the model's 640x640 input on its long side;
+   downscaling once, from one decode, before the postMessage to the
+   sandbox (rather than sending the full native resolution and letting
+   the sandbox's own `preprocess()` do all the work) cuts both the
+   message-passing payload and the sandbox's own canvas work.
+
+Windows in a minimized state are also skipped before attempting
+`captureVisibleTab` on them at all (definitionally not visible, and the
+call is documented to fail on them anyway) - a smaller, more mechanical
+version of the same "don't pay for work that can't matter" principle.
+
 ## Confirmed working (2026-08-25, real Mac/real Chrome)
 
 - `onnxruntime-web` actually initializes under Manifest V3's CSP inside

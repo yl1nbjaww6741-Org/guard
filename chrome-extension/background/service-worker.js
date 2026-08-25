@@ -174,6 +174,29 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
+// Battery optimization #1, mirroring the native agent's biggest lever
+// (AppScopeManager.swift's process-existence capture-pause gating -
+// "pause entirely when nothing relevant is currently active", not just
+// throttle). The closest achievable equivalent for a browser extension
+// without a site/tab-level safe-list (which doesn't exist yet): if
+// Chrome itself isn't even the frontmost application, nobody is looking
+// at any of its content right now, so there's nothing at risk to
+// capture. onFocusChanged fires with chrome.windows.WINDOW_ID_NONE
+// specifically when focus moves to a different application entirely
+// (not just a different Chrome window) - this is the one reliable
+// signal a browser extension actually has for "the user isn't looking
+// at Chrome right now" (no direct NSWorkspace-style "am I frontmost"
+// query exists in the extension API surface). Starts true (optimistic),
+// not false - the very first few capture ticks after a fresh service-
+// worker wake should run normally rather than silently no-op before
+// this listener has ever fired once; same "start permissive, tighten
+// once a real signal arrives" reasoning as never guessing in the
+// direction that could hide real content.
+let chromeIsFocused = true;
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  chromeIsFocused = windowId !== chrome.windows.WINDOW_ID_NONE;
+});
+
 // The actual chrome.tabs/chrome.windows work for NSFW detection - has to
 // live HERE, not in background/offscreen.js where it originally lived.
 // CONFIRMED LIVE (real Mac, real Chrome, 2026-08-25 - the exact error
@@ -187,6 +210,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // capture via chrome.runtime.sendMessage and gets the screenshots back
 // in the response, instead of calling these APIs itself.
 async function captureAllWindows() {
+  if (!chromeIsFocused) return [];
+
   const windows = await chrome.windows.getAll();
   const captures = [];
   // Sequential, not Promise.all - captureVisibleTab's own rate limit
@@ -195,6 +220,13 @@ async function captureAllWindows() {
   // open; sequential capture within a single 5-second tick has
   // comfortable headroom regardless of window count.
   for (const win of windows) {
+    // Battery optimization #2: a minimized window's content is
+    // definitionally not visible to the user - captureVisibleTab would
+    // just fail on it anyway (this is one of Chrome's own documented
+    // capture restrictions), so skip the attempt entirely rather than
+    // pay for an API call already known to fail.
+    if (win.state === "minimized") continue;
+
     let dataUrl;
     try {
       // format/quality: JPEG at 70, not PNG - this is fed straight into
@@ -203,11 +235,11 @@ async function captureAllWindows() {
       // doesn't lose detail the classifier actually needs.
       dataUrl = await chrome.tabs.captureVisibleTab(win.id, { format: "jpeg", quality: 70 });
     } catch (err) {
-      // Real, expected failure modes, not bugs: a minimized window, a
-      // chrome:// / Chrome Web Store page (captureVisibleTab is
-      // documented as unable to capture those - nothing sensitive lives
-      // there anyway), or a window with no active tab. Skip this window
-      // for this tick rather than treating it as fatal to the whole loop.
+      // Real, expected failure modes, not bugs: a chrome:// / Chrome Web
+      // Store page (captureVisibleTab is documented as unable to
+      // capture those - nothing sensitive lives there anyway), or a
+      // window with no active tab. Skip this window for this tick
+      // rather than treating it as fatal to the whole loop.
       continue;
     }
     const [activeTab] = await chrome.tabs.query({ active: true, windowId: win.id });

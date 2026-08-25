@@ -102,13 +102,108 @@ function classifyInSandbox(imageData) {
   });
 }
 
-async function dataUrlToImageData(dataUrl) {
-  const blob = await (await fetch(dataUrl)).blob();
-  const bitmap = await createImageBitmap(blob);
-  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+// --- Change-hash + skin-tone prefilter ---
+// Direct port of mac/ContentGuardAgent/Sources/FrameProcessor.swift's
+// perceptualHash()/skinAnalysis() - same 8x8 average-luminance hash
+// (hamming distance < 4 = "materially unchanged"), same YCbCr skin-tone
+// heuristic over a 4x4 grid, same two real-data-tuned thresholds (0.15
+// whole-thumbnail average, 0.35 densest single block - see that file's
+// own doc comments for the actual Mac testing that produced these exact
+// numbers; ported verbatim, not re-guessed). Runs on a cheap 64px
+// thumbnail before ever touching the expensive sandbox/ONNX path -
+// same "load shedder, not an acquitter" role as the Swift original: a
+// frame that fails this prefilter is judged UNLIKELY to contain the
+// target classes, never judged CLEAR of them - the full classifier is
+// still the only thing that ever confirms a detection.
+//
+// BigInt for the hash, not a plain JS Number - Swift's UInt64 has 64
+// real bits; JS's bitwise operators (<<, |) coerce to 32-bit signed
+// integers and would silently corrupt a hash built past bit 31. BigInt
+// has no such limit and supports the same << / | / ^ operators natively.
+const CHANGE_HASH_THUMBNAIL_SIZE = 64;
+const SKIN_RATIO_PREFILTER_THRESHOLD = 0.15;
+const SKIN_RATIO_PREFILTER_BLOCK_THRESHOLD = 0.35;
+const lastFrameHash = new Map(); // tabId -> BigInt
+
+function perceptualHash(imageData) {
+  const { data, width, height } = imageData;
+  const luminances = [];
+  for (let gy = 0; gy < 8; gy++) {
+    for (let gx = 0; gx < 8; gx++) {
+      const x = Math.min(width - 1, Math.floor((gx * width) / 8));
+      const y = Math.min(height - 1, Math.floor((gy * height) / 8));
+      const offset = (y * width + x) * 4; // RGBA - canvas ImageData order,
+      // NOT Swift's BGRA CVPixelBuffer order, so the channel indices
+      // below are deliberately R=0, G=1, B=2, not the Swift file's B/G/R.
+      const r = data[offset], g = data[offset + 1], b = data[offset + 2];
+      luminances.push(Math.round((r * 299 + g * 587 + b * 114) / 1000));
+    }
+  }
+  const average = Math.floor(luminances.reduce((sum, l) => sum + l, 0) / luminances.length);
+  let hash = 0n;
+  luminances.forEach((luminance, index) => {
+    if (luminance >= average) hash |= 1n << BigInt(index);
+  });
+  return hash;
+}
+
+function hammingDistance(a, b) {
+  let diff = a ^ b;
+  let count = 0;
+  while (diff > 0n) {
+    count += Number(diff & 1n);
+    diff >>= 1n;
+  }
+  return count;
+}
+
+function skinAnalysis(imageData) {
+  const { data, width, height } = imageData;
+  const gridSize = 4;
+  const blockSkinCounts = new Array(gridSize * gridSize).fill(0);
+  const blockTotalCounts = new Array(gridSize * gridSize).fill(0);
+  let totalSkinCount = 0;
+  let totalCount = 0;
+
+  for (let y = 0; y < height; y++) {
+    const blockY = Math.min(gridSize - 1, Math.floor((y * gridSize) / height));
+    for (let x = 0; x < width; x++) {
+      const offset = (y * width + x) * 4; // RGBA, see perceptualHash's own note
+      const r = data[offset], g = data[offset + 1], b = data[offset + 2];
+      const cb = -0.169 * r - 0.331 * g + 0.5 * b + 128;
+      const cr = 0.5 * r - 0.419 * g - 0.081 * b + 128;
+      const isSkin = cb >= 77 && cb <= 127 && cr >= 133 && cr <= 173;
+
+      const blockX = Math.min(gridSize - 1, Math.floor((x * gridSize) / width));
+      const blockIndex = blockY * gridSize + blockX;
+      blockTotalCounts[blockIndex]++;
+      totalCount++;
+      if (isSkin) {
+        blockSkinCounts[blockIndex]++;
+        totalSkinCount++;
+      }
+    }
+  }
+
+  if (totalCount === 0) return { globalRatio: 1, maxBlockRatio: 1 }; // Can't
+  // evaluate -> don't shed, same fail-open-to-classify direction as the
+  // Swift original for this specific non-safety-critical prefilter stage.
+
+  const globalRatio = totalSkinCount / totalCount;
+  let maxBlockRatio = 0;
+  for (let i = 0; i < gridSize * gridSize; i++) {
+    if (blockTotalCounts[i] > 0) {
+      maxBlockRatio = Math.max(maxBlockRatio, blockSkinCounts[i] / blockTotalCounts[i]);
+    }
+  }
+  return { globalRatio, maxBlockRatio };
+}
+
+function drawToImageData(bitmap, targetWidth, targetHeight) {
+  const canvas = new OffscreenCanvas(targetWidth, targetHeight);
   const ctx = canvas.getContext("2d");
-  ctx.drawImage(bitmap, 0, 0);
-  return ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+  ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+  return ctx.getImageData(0, 0, targetWidth, targetHeight);
 }
 
 // Round-trips to service-worker.js's own onMessage listener
@@ -123,13 +218,59 @@ function requestCaptures() {
 }
 
 async function classifyCapture({ tabId, dataUrl }) {
-  let imageData;
+  // One decode of the captured JPEG, reused for both the cheap
+  // prefilter thumbnail AND (only if the prefilter doesn't skip) the
+  // downscaled-for-the-model image below - never two separate decodes
+  // of the same screenshot.
+  let bitmap;
   try {
-    imageData = await dataUrlToImageData(dataUrl);
+    const blob = await (await fetch(dataUrl)).blob();
+    bitmap = await createImageBitmap(blob);
   } catch (err) {
     console.warn("ContentGuard: failed to decode captured screenshot", err);
     return;
   }
+
+  const thumbScale = CHANGE_HASH_THUMBNAIL_SIZE / Math.max(bitmap.width, bitmap.height);
+  const thumbWidth = Math.max(1, Math.round(bitmap.width * thumbScale));
+  const thumbHeight = Math.max(1, Math.round(bitmap.height * thumbScale));
+  const thumbnail = drawToImageData(bitmap, thumbWidth, thumbHeight);
+
+  const hash = perceptualHash(thumbnail);
+  const lastHash = lastFrameHash.get(tabId);
+  if (lastHash !== undefined && hammingDistance(hash, lastHash) < 4) {
+    // Materially unchanged since the last capture of this same tab -
+    // skip the rest of the pipeline entirely, same as
+    // FrameProcessor.swift's own change-hash check. Pure performance
+    // optimization, not a safety-relevant decision: if the frame didn't
+    // change, whatever conclusion applied last time still applies.
+    return;
+  }
+  lastFrameHash.set(tabId, hash);
+
+  const { globalRatio, maxBlockRatio } = skinAnalysis(thumbnail);
+  if (globalRatio < SKIN_RATIO_PREFILTER_THRESHOLD && maxBlockRatio < SKIN_RATIO_PREFILTER_BLOCK_THRESHOLD) {
+    // Below both thresholds - skip the expensive sandbox/ONNX path
+    // entirely, same as FrameProcessor.swift's own skin-tone prefilter.
+    // Still a load shedder, not an acquitter - see this section's own
+    // header comment.
+    return;
+  }
+
+  // Passed both prefilters - downscale (reusing the SAME already-
+  // decoded bitmap, no second JPEG decode) to the model's own <=640
+  // budget before sending to the sandbox, rather than the full native
+  // capture resolution. Same "don't move more pixels than the model can
+  // use" reasoning as ContentGuardConfig.maxCaptureDimension - a Retina
+  // screenshot can be several times 640px on its long side, and
+  // sandbox.js's own preprocess() would otherwise have to downscale
+  // (and this postMessage would have to transfer) that full size for
+  // nothing, since the classifier is mathematically incapable of seeing
+  // detail beyond its own 640x640 input.
+  const modelScale = Math.min(1, 640 / Math.max(bitmap.width, bitmap.height));
+  const modelWidth = Math.max(1, Math.round(bitmap.width * modelScale));
+  const modelHeight = Math.max(1, Math.round(bitmap.height * modelScale));
+  const imageData = drawToImageData(bitmap, modelWidth, modelHeight);
 
   let result;
   try {
