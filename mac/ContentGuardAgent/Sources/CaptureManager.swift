@@ -9,7 +9,19 @@
 
 import AppKit
 import CoreVideo
+import os
 import ScreenCaptureKit
+
+/// Confirmed live on a real Mac that NSLog's output for this process comes
+/// back as "(Foundation) <private>" with the message fully redacted, even
+/// under `sudo log stream`, regardless of whether the specific message had
+/// any dynamic interpolation - a real capture-pause test looked like a
+/// no-op in the log for this reason alone, even though the feature itself
+/// (confirmed separately, functionally) was working the whole time.
+/// os.Logger with explicit `privacy: .public` is what the pause/resume
+/// lines below use instead, since confirming those actually fire in the
+/// log is the whole point of them existing.
+private let logger = Logger(subsystem: "com.contentguard.agent", category: "CaptureManager")
 
 protocol CaptureManagerDelegate: AnyObject {
     func captureManager(_ manager: CaptureManager, didCapture pixelBuffer: CVPixelBuffer, on displayID: CGDirectDisplayID)
@@ -416,7 +428,7 @@ final class CaptureManager: NSObject {
         guard !isPausedForDisplaySleep else { return }
         let wasAlreadyPaused = isPaused
         isPausedForDisplaySleep = true
-        NSLog("ContentGuardAgent: display(s) asleep - pausing capture")
+        logger.log("display(s) asleep - pausing capture")
         Task {
             await stop()
             // Only fire the delegate signal on the aggregate transition -
@@ -441,7 +453,7 @@ final class CaptureManager: NSObject {
     @objc private func handleScreensWake() {
         guard isPausedForDisplaySleep else { return }
         isPausedForDisplaySleep = false
-        NSLog("ContentGuardAgent: display(s) awake - resuming capture")
+        logger.log("display(s) awake - resuming capture")
         guard !isPaused else { return }
         Task {
             try? await rebuildAllStreams()
@@ -469,7 +481,7 @@ extension CaptureManager: AppScopeManagerDelegate {
         guard !isPausedForNoRiskyApps else { return }
         let wasAlreadyPaused = isPaused
         isPausedForNoRiskyApps = true
-        NSLog("ContentGuardAgent: nothing unwhitelisted running - pausing capture")
+        logger.log("nothing unwhitelisted running - pausing capture")
         Task {
             await stop()
             if !wasAlreadyPaused {
@@ -485,7 +497,7 @@ extension CaptureManager: AppScopeManagerDelegate {
     func appScopeManagerNonSafeAppIsRunning(_ manager: AppScopeManager) {
         guard isPausedForNoRiskyApps else { return }
         isPausedForNoRiskyApps = false
-        NSLog("ContentGuardAgent: non-whitelisted app now running - resuming capture")
+        logger.log("non-whitelisted app now running - resuming capture")
         guard !isPaused else { return }
         Task {
             try? await rebuildAllStreams()

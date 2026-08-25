@@ -173,13 +173,6 @@ final class AppScopeManager: NSObject {
     /// expensive one.
     @objc private func handleAppLifecycleChange(_ notification: Notification) {
         let bundleID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
-        // TEMPORARY diagnostic - real capture-pause transitions weren't
-        // firing on the real Mac and this isolates why: confirms whether
-        // NSWorkspace launch/quit notifications are reaching this handler
-        // at all, independent of everything downstream (the pause logic,
-        // the existing window-exclusion logic). Remove once that's
-        // confirmed either way.
-        NSLog("ContentGuardAgent: handleAppLifecycleChange fired, name=\(notification.name.rawValue) bundleID=\(bundleID ?? "nil")")
 
         // Window-exclusion rebuild stays gated to safe-listed apps only -
         // see this method's own doc comment above for the real battery
