@@ -24,13 +24,20 @@
 
 import * as ort from "../lib/ort/ort.wasm.min.mjs";
 
-// wasmPaths relative to THIS file's own location (sandbox/sandbox.html),
-// not the extension root - "../lib/ort/" resolves to
-// chrome-extension://<id>/lib/ort/, where ort-wasm-simd-threaded.wasm
-// actually lives. Explicit, not left to ORT's own auto-detection, same
-// "resolve dynamically/explicitly rather than assume" reasoning
-// NudeNetClassifier.swift itself uses for inputName/outputName.
-ort.env.wasm.wasmPaths = "../lib/ort/";
+// No explicit wasmPaths override - CONFIRMED LIVE (real Mac, real
+// Chrome, 2026-08-25) that the original "../lib/ort/" value here was
+// wrong: ORT resolves a relative wasmPaths against its OWN module's URL
+// (import.meta.url of ort.wasm.min.mjs itself, which already lives at
+// .../lib/ort/ort.wasm.min.mjs), not against sandbox.js/sandbox.html's
+// location the way this comment originally (wrongly) assumed. That
+// produced a doubled chrome-extension://<id>/lib/lib/ort/... path and a
+// real "Failed to fetch dynamically imported module" error. ORT's own
+// default behavior - resolve sibling files relative to its own script
+// location - already finds ort-wasm-simd-threaded.wasm/.mjs correctly
+// with zero configuration, since they live right next to
+// ort.wasm.min.mjs in this same lib/ort/ directory. Leaving this comment
+// (not deleting it silently) so a future "let's make this explicit
+// again" doesn't reintroduce the exact same doubled-path bug.
 // numThreads: 1 is load-bearing, not a performance tweak - see
 // ../manifest.json's sandbox comment: ONNX Runtime Web's own thread-pool
 // setup (spawning real Web Workers) is the specific thing that violates
