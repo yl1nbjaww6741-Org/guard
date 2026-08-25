@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>6ECA9AC0-F965-4483-8362-5B12E50392E8</string>
     <key>PayloadVersion</key>
-    <integer>4</integer>
+    <integer>5</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>56450B06-03B6-4F67-8CF6-95716E896A8F</string>
             <key>PayloadVersion</key>
-            <integer>4</integer>
+            <integer>5</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Chrome Policy Payload</string>
             <key>PayloadContent</key>
@@ -52,37 +52,42 @@
                                   loosening) - this one is about what, once
                                   installed, CANNOT be taken back off.
 
-                                  NOT YET FUNCTIONAL - placeholder only.
-                                  Each entry needs "extension_id;update_url"
-                                  from a real, built extension, which
-                                  doesn't exist yet (per the user's own
-                                  2026-08-25 framing: "assuming we will
-                                  build a Chrome ai blocker browser
-                                  extension"). Chrome silently ignores a
-                                  malformed/non-existent forcelist entry
-                                  rather than erroring on the rest of the
-                                  policy, so leaving this placeholder in
-                                  has no live effect and is safe to push
-                                  as-is if needed for another change first.
+                                  REAL, FUNCTIONAL as of 2026-08-25 -
+                                  self-hosted per the user's explicit
+                                  choice (see worker/src/extensionUpdate.ts's
+                                  own doc comment: this project's own
+                                  Cloudflare infra, not the Chrome Web
+                                  Store). Extension ID and update.xml
+                                  location both confirmed end-to-end
+                                  before landing here - not just built,
+                                  a real HTTPS GET against the live
+                                  .crx endpoint returned 200 with a
+                                  byte-exact content-length match
+                                  against the locally-built file
+                                  (93339510 bytes). This is the
+                                  self-hosted path from this comment's
+                                  own earlier note: a self-hosted update
+                                  manifest XML the extension_id's
+                                  update_url points to, serving the
+                                  signed .crx - worker/src/extensionUpdate.ts
+                                  serves both, backed by R2
+                                  (wrangler.toml's EXTENSION_ASSETS
+                                  binding).
 
-                                  To fill in once the extension is built:
-                                  - Published to the Chrome Web Store: use
-                                    that listing's extension_id, and
-                                    update_url
-                                    "https://clients2.google.com/service/update2/crx"
-                                    (Google's standard update endpoint for
-                                    any Web-Store-hosted extension).
-                                  - Kept private/unlisted or self-hosted
-                                    instead: needs a self-hosted update
-                                    manifest XML the extension_id's
-                                    update_url points to, serving the
-                                    signed .crx - more setup, only pick
-                                    this path if the Web Store route is
-                                    ruled out for some reason.
+                                  Re-package + re-upload whenever
+                                  chrome-extension/ actually changes -
+                                  see chrome-extension/build/README.md.
+                                  The extension_id below is permanent
+                                  (tied to build/dist/key.pem, which the
+                                  extension maintainer holds outside
+                                  this repo) and does NOT change on a
+                                  re-package; only the .crx content and
+                                  extensionUpdate.ts's EXTENSION_VERSION
+                                  constant do.
                                 -->
                                 <key>ExtensionInstallForcelist</key>
                                 <array>
-                                    <string>__AI_BLOCKER_EXTENSION_ID__;__AI_BLOCKER_UPDATE_URL__</string>
+                                    <string>pdhcmfmgdicpkanpigjpgenhhbbollpk;https://panel.lukep009.download/extension/update.xml</string>
                                 </array>
                                 <!--
                                   DeveloperToolsAvailability: 1 (Allowed),

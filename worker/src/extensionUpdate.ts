@@ -27,14 +27,16 @@ import type { Env } from "./types";
 // means Chrome silently never re-checks for the new .crx at all.
 const EXTENSION_VERSION = "0.2.0";
 
-// Placeholder until build/package-crx.sh has actually been run once (in
-// the extension maintainer's own environment - see that script's own
-// header comment for why it's never run here) and its real, permanent
-// extension ID reported back. An update.xml with the wrong ID here is
-// silently ignored by chrome://extensions - not treated as an error - so
-// this being wrong fails quiet, not loud; worth actually checking once
-// deployed for real, same as every other placeholder in this repo.
-const EXTENSION_ID = "__AI_BLOCKER_EXTENSION_ID__";
+// Real, permanent extension ID - reported back after build/package-crx.sh
+// was actually run (in the extension maintainer's own Codespace, not
+// here - see that script's own header comment for why), the .crx
+// uploaded to R2 with --remote (a first upload attempt without it
+// silently wrote to the local Miniflare simulator instead, still
+// printing "Upload complete" - real gotcha, now also fixed in
+// build/README.md), and verified end-to-end with a real HTTPS GET
+// against the live endpoint (200, content-type: application/x-chrome-
+// extension, content-length byte-exact against the local file: 93339510).
+const EXTENSION_ID = "pdhcmfmgdicpkanpigjpgenhhbbollpk";
 
 function updateManifestXml(origin: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>

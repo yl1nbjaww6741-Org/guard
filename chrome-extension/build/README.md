@@ -12,6 +12,17 @@ signing key on first run (`build/dist/key.pem`) - that key needs to stay
 under your own control from the moment it's created. See the script's
 own header comment for exactly what's at stake if it's lost or leaked.
 
+**Already done once, live, as of 2026-08-25**: extension ID
+`pdhcmfmgdicpkanpigjpgenhhbbollpk`, version 0.2.0, `.crx` uploaded to R2
+and verified end-to-end via a real HTTPS GET against the live endpoint
+(200, correct content-type, byte-exact `content-length`). Both
+`worker/src/extensionUpdate.ts` and `profiles/chrome-policy.mobileconfig`
+already carry this real ID, not a placeholder. What's left is pushing
+the MDM profile through Fleet and running through "Verifying it
+actually worked" below. This whole page stays here as the runbook for
+the *next* time the extension needs re-packaging (a real update, or a
+lost key needing a fresh ID).
+
 ## One-time setup
 
 1. **Create the R2 bucket** the built `.crx` gets uploaded to (from
@@ -46,21 +57,38 @@ own header comment for exactly what's at stake if it's lost or leaked.
    just reuse the same key), but it's the one moment this credential
    exists and could be lost for good.
 
-4. **Upload the `.crx` to R2** (from `worker/`):
+4. **Upload the `.crx` to R2** (from `worker/`) - **`--remote` is
+   required**, confirmed live (2026-08-25): without it, `wrangler r2
+   object put` silently writes to the local Miniflare simulator under
+   `.wrangler/state/` instead of the real bucket, while still printing
+   "Upload complete" - a real, silent-failure gotcha, same shape as the
+   `wrangler secret put` one already known for this Codespace. Content
+   type doesn't get inferred from a local-file `put`, so pass it
+   explicitly too:
    ```bash
-   npx wrangler r2 object put contentguard-extension/contentguard.crx --file=../chrome-extension/build/dist/contentguard.crx
+   npx wrangler r2 object put contentguard-extension/contentguard.crx --file=../chrome-extension/build/dist/contentguard.crx --content-type=application/x-chrome-extension --remote
    ```
+   Verify it actually landed - don't just trust the "Upload complete"
+   message - with a real request against the live endpoint:
+   ```bash
+   curl -sI https://panel.lukep009.download/extension/contentguard.crx
+   ```
+   Confirm `content-length` matches `build/dist/contentguard.crx`'s
+   real size exactly (`ls -l` it) and `content-type` reads
+   `application/x-chrome-extension`.
 
 5. **Report the extension ID** (printed by `package-crx.sh`, also in
    `build/dist/update.xml`'s `appid` attribute) so it can be filled into:
    - `worker/src/extensionUpdate.ts`'s `EXTENSION_ID` constant
    - `profiles/chrome-policy.mobileconfig`'s `ExtensionInstallForcelist`
-     entry (replacing the `__AI_BLOCKER_EXTENSION_ID__` placeholder -
-     `update_url` there is already correct: `https://panel.lukep009.download/extension/update.xml`)
+     entry - format is `extension_id;update_url`, where `update_url`
+     points at the update MANIFEST (`https://panel.lukep009.download/extension/update.xml`),
+     not the `.crx` directly - that manifest's own `codebase` attribute
+     is what points at the `.crx`.
 
-   Both currently hold the same placeholder and need to move together -
-   an ID that doesn't match between them means either Chrome's update
-   check 404s or `ExtensionInstallForcelist` silently never resolves.
+   Both files need the same ID and need to move together - a mismatch
+   between them means either Chrome's update check 404s or
+   `ExtensionInstallForcelist` silently never resolves.
 
 6. **Deploy the Worker** (`worker/src/extensionUpdate.ts`'s change goes
    out through the normal `git push` -> GitHub Actions deploy, same as
