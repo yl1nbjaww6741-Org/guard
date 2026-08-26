@@ -110,12 +110,11 @@ bucket_name = "contentguard-extension"
 [vars]
 DEFAULT_FLEET_HOST = "GGV7PVVR96"
 
-# SimpleMDM's own numeric device ID for the real Mac, once known (set
-# after Phase 3 of PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md enrolls it -
-# not yet a real value as of this commit, since the device hasn't been
-# re-enrolled yet). Not a secret, same reasoning as DEFAULT_FLEET_HOST
-# above.
-# DEFAULT_SIMPLEMDM_DEVICE_ID = ""
+# SimpleMDM's own numeric device ID for the real Mac (confirmed via its
+# own device detail page URL, a.simplemdm.com/devices/2381595, after
+# Phase 3 of PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md re-enrolled it).
+# Not a secret, same reasoning as DEFAULT_FLEET_HOST above.
+DEFAULT_SIMPLEMDM_DEVICE_ID = "2381595"
 
 # Dashboard auth was originally going to reuse the existing Cloudflare
 # Zero Trust instance (mac/README.md's Phase 4 row, first draft), but
