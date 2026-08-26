@@ -14,6 +14,14 @@ final class HeartbeatMonitor {
     private var lastHeartbeatData: HeartbeatData?
     private var graceCheckTimer: DispatchSourceTimer?
 
+    /// When checkGraceWindow() last actually ran - not the same as
+    /// lastHeartbeatAt, which tracks the agent's own heartbeats. This
+    /// tracks the daemon's own grace-check timer ticks, so it can notice
+    /// when consecutive ticks are further apart in wall-clock time than
+    /// the timer's own schedule ever allows for - see
+    /// ContentGuardConfig.sleepGapDetectionThresholdSeconds's doc comment.
+    private var lastGraceCheckAt: Date?
+
     /// Set once, in start() - see ContentGuardConfig.agentStartupGraceSeconds's
     /// doc comment for why "never heard from the agent yet" is measured
     /// against this instead of being treated as overdue on the very first
@@ -295,6 +303,25 @@ final class HeartbeatMonitor {
     }
 
     private func checkGraceWindow() {
+        // Detect a real System Sleep by looking at the gap between this
+        // grace-check tick and the last one, rather than trusting the
+        // timer's own nominal schedule - see
+        // ContentGuardConfig.sleepGapDetectionThresholdSeconds's doc
+        // comment for why DispatchSourceTimer ticks pause (not "fire late")
+        // during real sleep, and why this can't be spoofed by killing the
+        // agent process alone. A detected gap resets lastHeartbeatAt to now,
+        // exactly as if a heartbeat had just arrived - the agent genuinely
+        // could not have sent one while the whole machine was suspended,
+        // so a missing heartbeat during that gap is not evidence of
+        // anything wrong.
+        let now = Date()
+        if let lastGraceCheckAt,
+           now.timeIntervalSince(lastGraceCheckAt) > ContentGuardConfig.sleepGapDetectionThresholdSeconds {
+            log("grace-check gap of \(now.timeIntervalSince(lastGraceCheckAt))s detected - system was likely asleep, not agent failure - resetting heartbeat grace window")
+            lastHeartbeatAt = now
+        }
+        lastGraceCheckAt = now
+
         let graceDeadline = ContentGuardConfig.heartbeatGraceSeconds
         let heartbeatOverdue: Bool
         if let lastHeartbeatAt {

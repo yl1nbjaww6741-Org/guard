@@ -177,6 +177,31 @@ enum ContentGuardConfig {
     /// session, which is bounded to this window, not unlimited.
     static let agentStartupGraceSeconds: TimeInterval = 45.0
 
+    /// If the real wall-clock gap between two consecutive grace-window
+    /// checks is larger than this, that gap itself is evidence the whole
+    /// system was actually asleep for that long - DispatchSourceTimer ticks,
+    /// like every other process's scheduling, pause during real System
+    /// Sleep. They don't fire "missed" ticks once woken, they just resume -
+    /// so a heartbeatOverdue check running for the first time after a real
+    /// sleep sees the full sleep duration as "time since last heartbeat,"
+    /// even though the agent was never actually unresponsive; it simply
+    /// couldn't send heartbeats while the whole machine was suspended
+    /// either. Found the hard way on the real Mac: reported as "sometimes
+    /// have to unlock twice after waking," distinct from and found after
+    /// the captureJustResumed fix in HeartbeatMonitor.swift, which only
+    /// covers the separate frame-stall check - this one covers the
+    /// heartbeat-arrival check, which had no sleep protection at all.
+    ///
+    /// 2x heartbeatIntervalSeconds: comfortably above the grace-check
+    /// timer's own declared leeway (1s), so ordinary tick jitter should
+    /// never approach it, while still catching even a brief lid-close.
+    /// This can't be gamed by simply killing the (unprivileged) agent -
+    /// the daemon's own grace-check timer cadence is what's measured here,
+    /// completely independent of agent state, so a real tamper scenario
+    /// still trips heartbeatOverdue correctly after heartbeatGraceSeconds
+    /// as designed.
+    static let sleepGapDetectionThresholdSeconds: TimeInterval = 10.0
+
     static let socketPath = "/var/run/contentguard.sock"
 
     // MARK: - Blackout / escalation
