@@ -108,6 +108,35 @@ async function simpleMdmFetch(env: Env, endpoint: string, init: RequestInit = {}
   return response;
 }
 
+// SimpleMDM's list endpoints are cursor-paginated - confirmed against
+// their own docs: `limit` (1-100, DEFAULTS TO 10 if omitted),
+// `starting_after` (an object id, not an opaque cursor token), and a
+// `has_more` boolean on the response. Real bug found live (2026-08-27):
+// getInstalledApps originally fetched only the first page with no
+// `limit` set at all - meaning the real default of 10 - so on a device
+// with 100+ installed apps (every built-in macOS app alone clears
+// that), anything past the 10th silently never got fetched, including
+// whatever was installed most recently. This helper fetches every page
+// (explicit limit=100 per request, following `starting_after` from the
+// last item's real id until has_more is false) so every list-backed
+// client function is correct regardless of how many items exist, not
+// just correct today because the current count happens to fit on one
+// page.
+async function fetchAllPages<T>(env: Env, endpoint: string): Promise<Array<{ id: number | string; attributes: T }>> {
+  const separator = endpoint.includes("?") ? "&" : "?";
+  const results: Array<{ id: number | string; attributes: T }> = [];
+  let startingAfter: string | number | null = null;
+  for (;;) {
+    const cursor = startingAfter !== null ? `&starting_after=${encodeURIComponent(String(startingAfter))}` : "";
+    const response = await simpleMdmFetch(env, `${endpoint}${separator}limit=100${cursor}`);
+    const parsed = (await response.json()) as SimpleMdmListEnvelope<T>;
+    results.push(...parsed.data);
+    if (!parsed.has_more || parsed.data.length === 0) break;
+    startingAfter = parsed.data[parsed.data.length - 1]!.id;
+  }
+  return results;
+}
+
 // Uploads a .pkg to SimpleMDM. `formData` arrives from softwareApi.ts
 // shaped for Fleet's own contract (a `software` file field, per this
 // project's existing dashboard upload form) - rebuilt here into
@@ -167,9 +196,12 @@ export async function getInstalledApps(
   env: Env,
   deviceId: number
 ): Promise<{ name: string; version: string | null; bundleIdentifier: string | null }[]> {
-  const response = await simpleMdmFetch(env, `/devices/${deviceId}/installed_apps`);
-  const parsed = (await response.json()) as SimpleMdmListEnvelope<SimpleMdmInstalledAppAttributes>;
-  return parsed.data.map((item) => ({
+  // Full pagination, not just the first page - see fetchAllPages' own
+  // doc comment for the real bug this fixes (a device with 100+
+  // installed apps was silently truncated to the first 10, the
+  // unstated default, missing anything installed most recently).
+  const items = await fetchAllPages<SimpleMdmInstalledAppAttributes>(env, `/devices/${deviceId}/installed_apps`);
+  return items.map((item) => ({
     name: item.attributes.name,
     version: item.attributes.version ?? null,
     bundleIdentifier: item.attributes.bundle_identifier ?? item.attributes.identifier ?? null,
@@ -187,8 +219,12 @@ export async function getDeviceStatus(env: Env, deviceId: number): Promise<MdmHo
   const device = (await deviceResponse.json()) as SimpleMdmDataEnvelope<SimpleMdmDeviceAttributes>;
   const attrs = device.data.attributes;
 
-  const profilesResponse = await simpleMdmFetch(env, `/devices/${deviceId}/profiles`);
-  const profilesParsed = (await profilesResponse.json()) as SimpleMdmListEnvelope<SimpleMdmProfileAttributes>;
+  // Full pagination too - this Mac only has 8 profiles today (comfortably
+  // under the real default page size of 10), so this specific call
+  // wasn't yet showing the same symptom getInstalledApps was, but it's
+  // the identical latent bug and would break the moment a 9th profile
+  // gets added - fixed proactively rather than waiting for it to bite.
+  const profiles = await fetchAllPages<SimpleMdmProfileAttributes>(env, `/devices/${deviceId}/profiles`);
 
   return {
     hostname: attrs.device_name ?? attrs.name ?? "unknown",
@@ -213,7 +249,7 @@ export async function getDeviceStatus(env: Env, deviceId: number): Promise<MdmHo
       // means "the API call for this device succeeded," not a real
       // heartbeat signal the way Fleet's connected_to_fleet was.
       connected_to_fleet: true,
-      profiles: profilesParsed.data.map((p) => ({
+      profiles: profiles.map((p) => ({
         profile_uuid: String(p.id),
         name: p.attributes.name ?? "unknown profile",
         // Confirmed real finding: SimpleMDM's profiles endpoint has no
