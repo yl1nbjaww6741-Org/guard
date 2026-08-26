@@ -1,40 +1,83 @@
 # Phase 1c - Migrate off Fleet entirely, to SimpleMDM
 
-**Plan written, both real open questions since resolved - not yet
-started.** Unlike `PHASE_1B_FLEET_HETZNER_MIGRATION.md` (which keeps
-Fleet, just relocates where it's hosted), this is a genuinely different
-move: **dropping Fleet as the MDM entirely** in favor of SimpleMDM, a
-hosted SaaS MDM, saving ~$25 AUD/month (Fleet Premium's $7/mo license
-fee plus Fly hosting, vs. SimpleMDM's flat $2.50-3/device/mo with
-nothing to host). If adopted, this replaces the Hetzner plan rather
-than sitting alongside it - there'd be no Fleet stack left to relocate.
+**In progress - decision made, migration underway.** Unlike
+`PHASE_1B_FLEET_HETZNER_MIGRATION.md` (which keeps Fleet, just
+relocates where it's hosted), this drops Fleet as the MDM entirely in
+favor of SimpleMDM, a hosted SaaS MDM - saving ~$25 AUD/month (Fleet
+Premium's $7/mo license fee plus Fly hosting, vs. SimpleMDM's flat
+$2.50-3/device/mo with nothing to host). Adopting this makes the
+Hetzner plan moot - there's no Fleet stack left to relocate once this
+completes.
 
-Both items in "Real open questions" below that were genuinely blocking
-- Recovery Lock inclusion, and re-enrollment risk - are now confirmed
-by the user directly: Recovery Lock is available on the plan being
-evaluated, and unenrolling from Fleet/re-enrolling in SimpleMDM is
-straightforward on this Mac's actual setup, not the wipe-and-redo risk
-originally flagged. Nothing left blocking a decision to proceed except
-choosing to.
+**Hands-on-hardware runbook, same shape as `PHASE_0_SETUP.md` and
+`PHASE_5_LOCKDOWN.md` - nothing in Phases 1-3 below is executable from
+a sandboxed session with no access to the physical Mac, Apple Business
+Manager, or the SimpleMDM/Fleet consoles. Run those yourself, on a real
+terminal/browser.** Phase 4 (the Worker code) is being built in this
+session; Phase 5 onward (decommissioning Fleet) needs your own
+confirmation before anything real gets destroyed.
+
+## Status so far
+
+- [x] SimpleMDM account created, Recovery Lock confirmed available on
+      the plan, re-enrollment mechanics confirmed straightforward on
+      this Mac's actual ABM setup (see "Real open questions" below -
+      both real blockers resolved)
+- [x] All 7 real `.mobileconfig` profiles uploaded to SimpleMDM as
+      Custom Configuration Profiles (`chrome-policy`, `restrictions`,
+      `santa-config`, `santa-tcc`, `system-extension`, `pppc`, `dns`)
+- [x] Recovery Lock profile being created in SimpleMDM's console (real
+      screenshot confirmed: device-profile-based, "Generate a random
+      password for each device," scoped to Apple Silicon)
+- [ ] Device not yet unenrolled from Fleet / enrolled in SimpleMDM
+- [ ] Profiles not yet assigned to the actual device in SimpleMDM
+- [ ] Worker code (`simpleMdmClient.ts` and callers) not yet built -
+      one real structural gap found first, see below
+- [ ] Fleet/Fly.io not yet decommissioned
+
+## One real gap, found while building the Worker side - decide how to handle it
+
+Checked directly against `api.simplemdm.com`'s own docs: **SimpleMDM
+has no per-device, per-app targeted install.** Fleet's
+`POST /hosts/:id/software/:title_id/install` lets your dashboard
+install one specific package on one specific host in a single call.
+SimpleMDM has no equivalent - app deployment is
+**Assignment-Group-based**: create a group, assign the app to the
+group, assign the device to the group, then `POST /devices/:id/push_apps`
+installs *everything* assigned-but-not-installed on that device, not a
+single targeted title.
+
+This only affects the dashboard's "Install specific `.pkg` on this
+Mac" feature (`worker/src/softwareApi.ts`) - it does not affect config
+profiles, Recovery Lock, or host status, all of which map cleanly.
+Three ways to handle it, pick one before Phase 4 starts on this piece
+specifically:
+
+1. **Build the Assignment Group dance for real parity** - more work,
+   and the Assignment Group API's exact add-app/add-device shape isn't
+   verified yet (would need another real docs check before trusting
+   it).
+2. **Simplify to `push_apps`'s real semantics** - drop per-app
+   targeting, accept "install everything currently assigned to this
+   Mac" as the new behavior. Least work, ships fastest.
+3. **Defer this piece** - migrate config profiles/host status/Recovery
+   Lock now (the clean, confirmed parts), leave `.pkg` installs on
+   Fleet a little longer, come back to it once Assignment Groups are
+   verified.
+
+Not decided yet - flag which one before Phase 4 continues past config
+profiles/host status.
 
 ## Why this is even on the table
 
 Real numbers, checked directly against each vendor's own site, not
-guessed (see the conversation this doc is written from for the full
-comparison table):
+guessed:
 
 | | Fleet (current) | SimpleMDM |
 |---|---|---|
 | MDM license cost | Free tier: $0, but no Recovery Lock. **Premium: $7/mo/host** (own licensing choice, not an Apple restriction) | **$2.50-3.00/device/mo**, no minimum, single flat plan (no tier gating Recovery Lock separately) |
-| Hosting | Self-hosted - MySQL + Redis + Fleet server + a Cloudflare Tunnel, currently 4 Fly.io apps (~$17 USD/mo), or the not-yet-executed Hetzner plan (~€4.35/mo) | **None** - SimpleMDM is Apple's-own-cloud-hosted, nothing of yours needs to be reachable at all |
-| Total real monthly cost | ~$24 AUD (Fly) or Premium $7/mo + ~$7 AUD Hetzner once migrated | **~$2.50-4 USD flat**, full stop |
-
-So the case for this isn't "Fleet is bad" - Phase 1 is fully built,
-verified, and working today. It's that **SimpleMDM is cheaper than
-Fleet Premium's license fee alone**, before counting hosting at all,
-and it eliminates the entire self-hosting problem the Hetzner doc
-exists to solve. Worth a real look before spending more effort
-relocating Fleet's hosting.
+| Hosting | Self-hosted - MySQL + Redis + Fleet server + a Cloudflare Tunnel, currently 4 Fly.io apps (~$17 USD/mo) | **None** - SimpleMDM is hosted SaaS, nothing of yours needs to be reachable at all |
+| Total real monthly cost | ~$24-25 AUD | **~$2.50-4 USD flat**, full stop |
 
 ## What stays exactly as-is
 
@@ -54,103 +97,183 @@ relocating Fleet's hosting.
 
 ## What has to change - the Worker's Fleet-specific integration code
 
-Real files, read directly, not assumed - this is exactly what a switch
-would touch:
-
-| File | What it does today (Fleet) | What it'd need to become (SimpleMDM) |
+| File | What it does today (Fleet) | What it becomes (SimpleMDM) |
 |---|---|---|
-| `worker/src/fleetClient.ts` | 7 functions: `uploadPackage`, `findHostId`, `installOnHost`, `getHostSoftware`, `getHostStatus`, `createConfigurationProfile`, `updateConfigurationProfile` - thin proxies to Fleet's real REST API | A new `simpleMdmClient.ts` with equivalent functions against SimpleMDM's real API (see table below) |
-| `worker/src/softwareApi.ts` | `.pkg` upload/install route handlers, calling `fleetClient.ts` | Same route shapes, calling the new client instead |
-| `worker/src/configProfilesApi.ts` | Config-profile upload/update route handlers (queues through the ratchet, `ratchet.ts` later calls Fleet) | Same - `ratchet.ts`'s `applyDueProfileChanges` would call the new client instead of Fleet's `createConfigurationProfile`/`updateConfigurationProfile` |
-| `worker/src/hostStatus.ts` | Merges Santa sync health (D1) with Fleet's live host/MDM-profile status | Same shape, sourced from SimpleMDM's device-detail endpoint instead |
-| `worker/src/types.ts` | `Fleet*` response types (`FleetHostDetail`, `FleetListHostsResponse`, etc.) | New `SimpleMdm*` types matching its real response shapes |
-| `worker/wrangler.toml` secrets | `FLEET_BASE_URL`, `FLEET_API_TOKEN`, `DEFAULT_FLEET_HOST` | `SIMPLEMDM_API_KEY`, `DEFAULT_SIMPLEMDM_DEVICE_ID` (or similar) |
-| `worker/src/configProfiles.ts` | Hand-kept mirror of each `.mobileconfig`'s real restrictions (unrelated to which MDM hosts them) | **Unchanged** - this is just documentation of profile content, not an API call |
+| `worker/src/fleetClient.ts` | 7 functions, thin proxies to Fleet's real REST API | New `worker/src/simpleMdmClient.ts` against SimpleMDM's real API |
+| `worker/src/softwareApi.ts` | `.pkg` upload/install route handlers | Same routes, calling the new client - pending the app-install gap decision above |
+| `worker/src/configProfilesApi.ts` | Queues profile changes through the ratchet (doesn't call Fleet directly) | **Unchanged** - only `ratchet.ts`'s apply step needs to change |
+| `worker/src/hostStatus.ts` | Merges Santa sync health with Fleet's live host/MDM-profile status | Same shape, sourced from SimpleMDM's device-detail endpoint |
+| `worker/src/ratchet.ts` | `applyDueProfileChanges` calls Fleet's create/update-configuration-profile | Calls SimpleMDM's create+assign / update instead |
+| `worker/src/types.ts` | `Fleet*` response types, `Env`'s `FLEET_*` fields | New `SimpleMdm*` types, `SIMPLEMDM_API_KEY` / `DEFAULT_SIMPLEMDM_DEVICE_ID` |
+| `worker/wrangler.toml` | `FLEET_BASE_URL`, `FLEET_API_TOKEN`, `DEFAULT_FLEET_HOST` | `SIMPLEMDM_API_KEY` (secret), `DEFAULT_SIMPLEMDM_DEVICE_ID` (var) |
+| `worker/src/configProfiles.ts` | Hand-kept mirror of each `.mobileconfig`'s real restrictions | **Unchanged** - documentation, not an API call |
 
 Real SimpleMDM endpoints, checked directly against `api.simplemdm.com`'s
-own docs - map cleanly onto what's there today:
+own docs:
 
 | Fleet (today) | SimpleMDM (real endpoint) |
 |---|---|
-| `POST /api/v1/fleet/software/package` | `POST /api/v1/apps` (accepts `.pkg` directly) |
+| `POST /api/v1/fleet/software/package` | `POST /api/v1/apps` (multipart, field name `binary`) |
 | `GET /api/v1/fleet/hosts?query=...` | `GET /api/v1/devices?search=...` |
-| `POST /api/v1/fleet/hosts/:id/software/:title_id/install` | `POST /api/v1/devices/:id/push_apps` |
+| `POST /api/v1/fleet/hosts/:id/software/:title_id/install` | No 1:1 equivalent - see the gap above |
 | `GET /api/v1/fleet/hosts/:id/software` | `GET /api/v1/devices/:id/installed_apps` |
-| `GET /api/v1/fleet/hosts/:id` | `GET /api/v1/devices/:id` + `GET /api/v1/devices/:id/profiles` |
-| `POST /api/v1/fleet/configuration_profiles` | `POST /api/v1/custom_configuration_profiles/` + `POST /api/v1/custom_configuration_profiles/:id/devices/:device_id` (create is a separate step from assignment) |
+| `GET /api/v1/fleet/hosts/:id` | `GET /api/v1/devices/:id` + `GET /api/v1/devices/:id/profiles` (exact response attribute names not yet confirmed against a real example - verify against a live device before trusting field names) |
+| `POST /api/v1/fleet/configuration_profiles` | `POST /api/v1/custom_configuration_profiles/` (create) + `POST /api/v1/custom_configuration_profiles/:id/devices/:device_id` (assign - separate call) |
 | `PATCH /api/v1/fleet/configuration_profiles/:uuid` | `PATCH /api/v1/custom_configuration_profiles/:id` |
-| N/A (Fleet Premium's `enable_recovery_lock_password` setting) | `POST /api/v1/devices/:id/rotate_recovery_lock_password`, `POST /api/v1/devices/:id/clear_recovery_lock_password` |
+| N/A (Fleet Premium's `enable_recovery_lock_password` setting) | A real device profile, created in SimpleMDM's console (per the confirmed screenshot) - not an ad-hoc API action the way Fleet's is |
 
-One real structural difference worth designing around: SimpleMDM
-separates **creating** a profile from **assigning** it to a device (two
-calls, not one) - Fleet's own model doesn't have that distinction. Not
-a blocker, just a real shape difference `configProfilesApi.ts`'s
-replacement would need to account for.
+**Auth is a real difference too**: Fleet uses a bearer token
+(`Authorization: Bearer <token>`); SimpleMDM uses HTTP Basic with the
+API key as the username and a blank password
+(`Authorization: Basic base64(API_KEY:)`).
 
-## Real open questions - verify before starting, don't assume
+## Real open questions - one still open
 
-Same discipline this whole project runs on - none of these are
-confirmed yet, and each would change the plan:
+- [x] Recovery Lock inclusion - confirmed by the user directly
+- [x] Re-enrollment risk - confirmed straightforward by the user
+      directly, not a wipe-and-redo
+- [ ] **Can the current Recovery Lock password be retrieved, not just
+      rotated/cleared?** SimpleMDM's console screen shown generates a
+      random password per device at profile-assignment time - worth
+      confirming where that generated value is actually viewable
+      afterward (the device's own detail page, presumably) before
+      relying on it the way Fleet's dashboard-viewable value works
+      today.
+- [ ] **The app-install gap above** - needs a decision, not just a fact
+      to confirm.
 
-- [x] **Does the $2.50-3/device plan actually include Recovery Lock,
-      with no further gate?** **Confirmed by the user directly** (not
-      just inferred from the API endpoint existing) - Recovery Lock is
-      available on the plan being evaluated. No longer a blocker.
-- [ ] **Is there a way to *retrieve* the current Recovery Lock password,
-      not just rotate/clear it?** Only rotate/clear endpoints turned up
-      in the docs check above - if reading the current value requires
-      generating a new one, or is only ever shown once at rotation
-      time, that changes what "check the Recovery Lock password" looks
-      like operationally compared to Fleet's own dashboard-viewable
-      value.
-- [x] **What does re-enrolling this specific Mac under a new MDM vendor
-      actually require?** **Confirmed by the user directly**: unenrolling
-      from Fleet and re-enrolling in SimpleMDM is straightforward on
-      this Mac's actual ABM setup - not the full wipe-and-redo risk this
-      item originally flagged. No longer a blocker.
-- [ ] **Does SimpleMDM's `.pkg` install path (`POST /api/v1/apps` +
-      `push_apps`) support the same install-script/self-service options
-      Fleet's software library does?** Only matters if any current
-      Santa/software deployment relies on those Fleet-specific options
-      - worth a real check of what's actually used today in
-      `worker/src/softwareApi.ts`'s callers before assuming a 1:1 swap.
-- [ ] **Confirm the real trial doesn't require committing to an annual
-      plan or entering billing details to test Recovery Lock/config
-      profile behavior for real** - the free trial itself is confirmed
-      card-free (SimpleMDM's own pricing page), but worth checking the
-      specific features being evaluated here aren't trial-restricted in
-      some other way.
+## Step-by-step migration sequence
 
-## Suggested sequence, if this is ever adopted
+### Phase 1 - Final pre-cutover checks (you, on the real Mac/consoles)
 
-Not detailed step-by-step the way the Hetzner runbook is (deliberately
-- this is a plan to revisit, not a runbook to execute), but the real
-shape it should take:
+- [ ] Confirm the 7 uploaded profiles in SimpleMDM's console actually
+      match what's committed in this repo's `profiles/` directory -
+      the files sent to you are the real, currently-deployed-via-Fleet
+      versions as of this session; re-confirm nothing's drifted since.
+- [ ] Finish creating the Recovery Lock profile (per your screenshot -
+      "Generate a random password for each device," scoped to Apple
+      Silicon).
+- [ ] Generate a SimpleMDM API key (account settings) - needed for
+      Phase 4's Worker testing, not needed yet for Phases 2-3.
+- [ ] Decide which of the three app-install-gap options above to take.
 
-1. **Trial first, decide, then commit** - start SimpleMDM's free trial
-   against a throwaway/test enrollment if at all possible (a spare
-   device, or a controlled test) before touching the real, already-
-   working Mac. Confirm the open questions above for real.
-2. **Build the Worker-side integration against the trial**, in a branch,
-   fully tested locally (`wrangler dev`) the same way every other piece
-   of this project has been - before any real device re-enrollment
-   happens. The code change is the low-risk, easily-reversible part;
-   the Mac's actual MDM re-enrollment is the real one-way step.
-3. **Only once the Worker side is proven** - re-enroll the real Mac,
-   verify every one of Phase 1's original checklist items again
-   (enrolled/supervised, all profiles applied, Recovery Lock set and
-   tested, APNs push working) against SimpleMDM specifically.
-4. **Decommission Fleet and its Fly.io apps** only after that full
-   re-verification passes - same "don't touch the old thing until the
-   new thing is proven" discipline as the Hetzner plan's own Phase 6/7.
+### Phase 2 - Unenroll from Fleet
 
-## Relationship to the Hetzner plan
+1. Fleet's host page for this Mac -> Actions -> **Turn off MDM** (or
+   equivalent unenroll action - exact wording depends on your Fleet
+   version). This is the clean path Fleet itself provides, rather than
+   pulling the device out from under it via Apple Business Manager
+   directly.
+2. Confirm on the Mac itself: `sudo profiles status -type enrollment`
+   should show no active MDM enrollment (or `profiles list` no longer
+   shows Fleet's enrollment profile).
+3. **Do not delete anything in Fleet's own UI yet** (hosts, software
+   library, config profiles) - keep it as a rollback reference until
+   Phase 6 confirms SimpleMDM is fully working.
 
-If this is adopted, `PHASE_1B_FLEET_HETZNER_MIGRATION.md` becomes moot
-- there'd be no Fleet stack left to relocate. If SimpleMDM turns out
-not to work out for some reason surfaced by the open questions above
-(Recovery Lock not really included, re-enrollment more disruptive than
-expected), the Hetzner plan is still the right fallback to keep Fleet
-but cut its hosting cost. Not choosing between them yet - this doc
-exists so that choice can be made with real information already
-gathered, not from scratch later.
+### Phase 3 - Enroll in SimpleMDM
+
+1. In Apple Business Manager, reassign this device (serial
+   `GGV7PVVR96`, per `wrangler.toml`'s own `DEFAULT_FLEET_HOST` value)
+   from Fleet's MDM server entry to SimpleMDM's - this is the real
+   mechanism per Apple's own DEP/ADE model, and what you've confirmed
+   is straightforward on this Mac's actual setup.
+2. The Mac should prompt to install the new (SimpleMDM) MDM profile on
+   next enrollment check, or via **System Settings -> General ->
+   Device Management** if it doesn't prompt automatically.
+3. Confirm in SimpleMDM's console: the device shows as enrolled and
+   supervised (not just "enrolled" - supervision is required for
+   Recovery Lock and several of the restriction profiles to actually
+   take effect).
+
+### Phase 4 - Assign profiles, verify each one
+
+1. In SimpleMDM, assign all 7 uploaded Custom Configuration Profiles
+   plus the new Recovery Lock profile to this device (or a device
+   group containing it).
+2. Re-run Phase 1's own real verification checklist (from
+   `mac/README.md`), this time against SimpleMDM instead of Fleet:
+   - [ ] `sudo profiles list` shows all 7 profiles applied
+   - [ ] Chrome shows the ContentGuard extension as "installed by your
+         administrator," no remove control (chrome-policy.mobileconfig)
+   - [ ] Non-Chrome browsers (Safari included) still refused to launch
+         (restrictions.mobileconfig)
+   - [ ] `sudo santactl status` shows `Mode: Monitor`, existing rules
+         still enforced (santa-config.mobileconfig)
+   - [ ] `santactl status` no longer errors on daemon communication
+         (santa-tcc.mobileconfig's Full Disk Access grants)
+   - [ ] Santa's System Extension activated without an interactive
+         prompt (system-extension.mobileconfig)
+   - [ ] `ContentGuardAgent` still has Screen Recording/Accessibility
+         without a re-grant prompt (pppc.mobileconfig)
+   - [ ] DoH-provider blocklist still active (dns.mobileconfig)
+   - [ ] Recovery Lock actually set - the real test is a reboot into
+         Recovery, confirming it asks for the password
+3. **Only once every box above passes** - move to Phase 5.
+
+### Phase 5 - Cut the Worker over (this session's part)
+
+1. Resolve the app-install gap decision from Phase 1.
+2. Build `worker/src/simpleMdmClient.ts` and repoint
+   `softwareApi.ts`/`hostStatus.ts`/`ratchet.ts` (see the file table
+   above) - happening in this session.
+3. Test locally against `wrangler dev` using the real SimpleMDM API
+   key from Phase 1 and this device's real SimpleMDM device ID.
+4. Push to this branch - `deploy-worker.yml`'s gated `deploy` job will
+   wait for your approval (the same `release` Environment used for
+   the APK and D1 migrations) before it reaches the real, live Worker.
+   **Do not approve that deploy until Phase 4 has fully passed** -
+   approving it while the Mac is still mid-migration would point the
+   live dashboard's Fleet-backed features at SimpleMDM for a device
+   that isn't actually there yet.
+5. Once approved and deployed, re-run Phase 4's checklist one more
+   time through the dashboard itself (`/central/`'s Fleet MDM and App
+   control tabs) rather than just the consoles directly - confirming
+   the Worker's own view of the world matches reality.
+
+### Phase 6 - Decommission Fleet and Fly.io
+
+Only once Phase 5 fully passes:
+
+```bash
+fly apps destroy contentguard-fleet
+fly apps destroy contentguard-fleet-mysql
+fly apps destroy contentguard-fleet-redis
+fly apps destroy contentguard-fleet-tunnel
+```
+
+- [ ] Cancel/downgrade the Fleet Premium subscription - the license
+      fee doesn't stop on its own just because the Fly apps are gone.
+- [ ] Remove `FLEET_BASE_URL`/`FLEET_API_TOKEN`/`DEFAULT_FLEET_HOST`
+      from `worker/wrangler.toml` and unset the secrets
+      (`wrangler secret delete`).
+- [ ] Delete `worker/src/fleetClient.ts` once nothing imports it -
+      unlike the abandoned Oracle doc (kept as a record of a blocked
+      attempt), Fleet is being fully retired here, not just relocated,
+      so this becomes genuinely dead code rather than a useful
+      historical artifact.
+- [ ] `PHASE_1B_FLEET_HETZNER_MIGRATION.md` becomes moot - mark it
+      superseded the same way the Oracle doc was, rather than deleting
+      it outright.
+
+## Rollback
+
+Fleet and its Fly.io apps stay untouched through Phase 5 - if anything
+looks wrong at any point before Phase 6, reassign the device back to
+Fleet's MDM server in Apple Business Manager and re-enroll there,
+exactly reversing Phase 2/3. The Worker-side code change (Phase 5) is
+also reversible on its own - `fleetClient.ts` isn't deleted until
+Phase 6, so reverting the branch's deploy back to the pre-migration
+commit restores Fleet-backed dashboard behavior immediately.
+
+## What NOT to touch
+
+- COMMAND (a different, unrelated repo - confirmed with the user
+  earlier in this project, no special handling needed)
+- MDM profiles' actual *content* - the same 7 `.mobileconfig` files,
+  uploaded as-is; only which MDM vendor hosts/pushes them changes
+- Santa's `SyncBaseURL` (`profiles/santa-config.mobileconfig`) -
+  already points at this project's own Worker, not Fleet, unaffected
+  either way
+- `ContentGuardAgent`/`ContentGuardDaemon` - entirely local, no
+  dependency on which MDM is enrolled
