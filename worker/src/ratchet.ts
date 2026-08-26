@@ -43,7 +43,7 @@ import type {
   PendingSafeAppAddition,
   ProfileChangeAction,
 } from "./db";
-import { createConfigurationProfile, updateConfigurationProfile } from "./fleetClient";
+import { createConfigurationProfile, updateConfigurationProfile } from "./simpleMdmClient";
 import type { Env } from "./types";
 
 export class LoosenAlreadyPendingError extends Error {
@@ -153,14 +153,15 @@ export async function requestProfileChange(
 }
 
 // Applies every profile change whose 24h delay has elapsed - unlike the
-// two ratchets above, this one has to actually reach out to Fleet's real
-// API (fleetClient.ts), which can genuinely fail (Fleet unreachable, a
-// real rejection like a PayloadIdentifier mismatch on an update). A
-// failure here does NOT mark the change applied - it's left in the
-// queue with `apply_error` recorded, so the next scheduled tick retries
+// two ratchets above, this one has to actually reach out to SimpleMDM's
+// real API (simpleMdmClient.ts - migrated off fleetClient.ts, see
+// mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md), which can
+// genuinely fail (SimpleMDM unreachable, a real rejection). A failure
+// here does NOT mark the change applied - it's left in the queue with
+// `apply_error` recorded, so the next scheduled tick retries
 // automatically rather than the change silently vanishing. Needs `env`
 // (not just `db`, unlike the other two apply* functions above) since
-// fleetClient.ts's functions need Fleet's own base URL/token.
+// simpleMdmClient.ts's functions need SIMPLEMDM_API_KEY.
 export async function applyDueProfileChanges(env: Env): Promise<number> {
   const due = await getDueProfileChanges(env.DB);
   let appliedCount = 0;

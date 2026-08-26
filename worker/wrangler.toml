@@ -101,8 +101,21 @@ bucket_name = "contentguard-extension"
 # for why this exists at all: this project only has one real Mac in
 # scope, so the "Installed apps" dashboard section defaults to it
 # instead of requiring it typed in every time.
+#
+# Kept alongside DEFAULT_SIMPLEMDM_DEVICE_ID below through the
+# Fleet-to-SimpleMDM migration (mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md)
+# - unused by any code path once ratchet.ts/hostStatus.ts/softwareApi.ts
+# are all repointed, removed for real only at that migration's Phase 6
+# once fleetClient.ts itself is deleted.
 [vars]
 DEFAULT_FLEET_HOST = "GGV7PVVR96"
+
+# SimpleMDM's own numeric device ID for the real Mac, once known (set
+# after Phase 3 of PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md enrolls it -
+# not yet a real value as of this commit, since the device hasn't been
+# re-enrolled yet). Not a secret, same reasoning as DEFAULT_FLEET_HOST
+# above.
+# DEFAULT_SIMPLEMDM_DEVICE_ID = ""
 
 # Dashboard auth was originally going to reuse the existing Cloudflare
 # Zero Trust instance (mac/README.md's Phase 4 row, first draft), but
@@ -157,7 +170,14 @@ crons = ["*/15 * * * *"]
 #     through D1/the ratchet.
 #   - FLEET_BASE_URL / FLEET_API_TOKEN (src/fleetClient.ts) - the real
 #     Fleet instance and an API token from its own UI ("My account" ->
-#     "Get API token").
+#     "Get API token"). Being migrated off - see
+#     mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md - kept set until
+#     that migration's Phase 6 decommissions Fleet for real.
+#   - SIMPLEMDM_API_KEY (src/simpleMdmClient.ts) - `wrangler secret put
+#     SIMPLEMDM_API_KEY`, generated from SimpleMDM's own account
+#     settings. Not yet set as of this commit - needed before Phase 5 of
+#     PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md's Worker cutover can be
+#     tested for real.
 # All fail closed when unset (every /api/... or sync request that needs
 # one is rejected until it's real), so leaving any unset is safe, just
 # non-functional. The dashboard password hash itself is set the same

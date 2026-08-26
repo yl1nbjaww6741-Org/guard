@@ -1,22 +1,36 @@
 // Route handlers for the software-deployment API (/api/software/...) -
-// the dashboard's ".pkg deployment via Fleet" surface from
-// mac/README.md's Phase 4 scope decision. Thin wrappers around
-// fleetClient.ts + db.ts, same separation as ratchet.ts/santaSync.ts.
+// the dashboard's ".pkg deployment via MDM" surface from mac/README.md's
+// Phase 4 scope decision. Thin wrappers around simpleMdmClient.ts + db.ts,
+// same separation as ratchet.ts/santaSync.ts.
+//
+// Migrated off fleetClient.ts to simpleMdmClient.ts (see
+// mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md) - two real,
+// structural differences from the Fleet-backed version this replaces,
+// both documented in simpleMdmClient.ts's own top comment:
+//   1. No per-title targeted install - handleInstallPackage below now
+//      pushes everything currently assigned to the host, not just the
+//      one titleId in the URL (accepted trade-off at this project's
+//      single-device scale).
+//   2. handleListInstalledSoftware's rows always have identifier/
+//      rule_type null now - SimpleMDM's installed_apps doesn't expose
+//      per-app Team ID/cdhash the way Fleet's signature_information
+//      did, so the dashboard's one-click "create a Santa rule from this
+//      installed app" action has nothing to build a rule from anymore.
+//      The row still displays; the button it used to enable doesn't.
 
-import { findHostId, getHostSoftware, installOnHost, uploadPackage } from "./fleetClient";
+import { findDeviceId, getInstalledApps, pushApps, uploadApp } from "./simpleMdmClient";
 import { listSoftwarePackages, recordUploadedPackage } from "./db";
-import type { Env, FleetHostSoftwareItem, RuleType } from "./types";
+import type { Env, RuleType } from "./types";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-// Expects a multipart/form-data request body already shaped for Fleet's
-// own "Add package" endpoint (see fleetClient.ts's top comment) - this
-// Worker passes the incoming FormData straight through rather than
-// reconstructing it, so every field Fleet's API accepts (install_script,
-// self_service, labels_include_any, etc.) works here too without this
-// file needing to know about each one individually.
+// Expects a multipart/form-data request body with a `software` file
+// field - this Worker's own long-standing upload contract (predates the
+// SimpleMDM migration), translated internally by
+// simpleMdmClient.ts's uploadApp into SimpleMDM's real required field
+// name (`binary`) rather than changing the dashboard's own form.
 export async function handleUploadPackage(request: Request, env: Env): Promise<Response> {
   let formData: FormData;
   try {
@@ -28,13 +42,17 @@ export async function handleUploadPackage(request: Request, env: Env): Promise<R
     return jsonResponse({ error: "missing required 'software' file field" }, 400);
   }
 
-  const result = await uploadPackage(env, formData);
+  const result = await uploadApp(env, formData);
   await recordUploadedPackage(env.DB, {
-    titleId: result.software_package.title_id,
-    name: result.software_package.name,
-    version: result.software_package.version,
-    platform: result.software_package.platform,
-    hashSha256: result.software_package.hash_sha256,
+    titleId: Number(result.id),
+    name: result.name,
+    version: result.version,
+    // SimpleMDM's app-upload response doesn't carry a platform string
+    // or a package hash the way Fleet's did - this project only ever
+    // uploads macOS packages, so platform is hardcoded rather than left
+    // blank; hashSha256 stays unset (recordUploadedPackage's own
+    // signature already treats it as optional).
+    platform: "darwin",
   });
   return jsonResponse(result, 201);
 }
@@ -43,95 +61,91 @@ export async function handleListSoftwarePackages(env: Env): Promise<Response> {
   return jsonResponse(await listSoftwarePackages(env.DB));
 }
 
-// `host` identifies the target host the same way Fleet's own "List
-// hosts" `query` parameter does - hostname, serial, UUID, or IP (see
-// fleetClient.ts's findHostId). Deliberately not accepting a raw numeric
-// Fleet host ID here even though the underlying Fleet API wants one -
-// forcing callers through a human-meaningful identifier avoids a
-// dashboard silently sending an install to whatever host ID happens to
-// be typed in, a stale ID, or the wrong project's host entirely.
+// `host` identifies the target device the same way SimpleMDM's own
+// device-search `search` parameter does - name, UDID, serial, IMEI,
+// MAC, or phone number (see simpleMdmClient.ts's findDeviceId).
+// Deliberately not accepting a raw numeric SimpleMDM device ID here
+// even though the underlying API wants one - forcing callers through a
+// human-meaningful identifier avoids a dashboard silently sending an
+// install to whatever device ID happens to be typed in, a stale ID, or
+// the wrong project's device entirely.
+//
+// `titleId` is accepted for route-shape/URL-compatibility with the
+// dashboard's existing "Install" button per software row, but SimpleMDM
+// has no per-title targeted install - see this file's top comment and
+// simpleMdmClient.ts's pushApps doc comment. This call installs
+// everything currently assigned to the device that isn't installed
+// yet, not just `titleId` specifically.
 export async function handleInstallPackage(titleId: number, request: Request, env: Env): Promise<Response> {
   const body = await request.json<{ host?: string }>();
   if (!body.host) {
     return jsonResponse({ error: "missing required 'host' field (hostname, serial, or UUID)" }, 400);
   }
 
-  const hostId = await findHostId(env, body.host);
-  if (hostId === null) {
-    return jsonResponse({ error: `no host found matching '${body.host}'` }, 404);
+  const deviceId = await findDeviceId(env, body.host);
+  if (deviceId === null) {
+    return jsonResponse({ error: `no device found matching '${body.host}'` }, 404);
   }
 
-  await installOnHost(env, hostId, titleId);
-  // Matches Fleet's own "Install software" response: 202, install
-  // happens asynchronously on Fleet's side. This Worker doesn't poll for
-  // completion - see fleetClient.ts's doc comment on why that's not
-  // wired up yet.
-  return jsonResponse({ hostId, titleId, status: "install requested" }, 202);
+  await pushApps(env, deviceId);
+  return jsonResponse(
+    { hostId: deviceId, titleId, status: "install requested (all assigned apps, not just this title - see simpleMdmClient.ts)" },
+    202
+  );
 }
 
 export interface InstalledSoftwareRow {
   name: string;
   version: string | null;
   bundle_identifier: string | null;
-  // null when Fleet has no usable code-signing identifier for this app
-  // yet (e.g. hasn't been queried recently, or isn't a signed macOS
-  // .app) - the dashboard disables the Block/Allow buttons for that row
-  // rather than sending a request that can only fail.
+  // Always null now, post-SimpleMDM-migration - see this file's top
+  // comment. SimpleMDM's installed_apps has no per-app code-signing
+  // Team ID/cdhash the way Fleet's signature_information did, so
+  // there's nothing to build a Santa rule identifier from anymore. The
+  // dashboard still shows the row; it disables the Block/Allow buttons
+  // whenever identifier is null, same as it always did for an app Fleet
+  // hadn't queried signature info for yet - the behavior is identical,
+  // it's just permanent now instead of transient.
   identifier: string | null;
   rule_type: RuleType | null;
 }
 
-// Preference order matches this project's own existing pattern (Tor
-// Browser's rule is TEAMID, not a hash) - a Team ID rule survives the
-// app updating itself, a hash-based one doesn't. CDHASH before BINARY
-// since Fleet's `hash_sha256` field is actually a cdhash_sha256 (see
-// types.ts's FleetSignatureInfo comment) and is more commonly populated
-// than `executable_sha256` in Fleet's current data.
-function pickIdentifier(item: FleetHostSoftwareItem): { identifier: string; rule_type: RuleType } | null {
-  const sig = item.installed_versions?.[0]?.signature_information?.[0];
-  if (!sig) return null;
-  if (sig.team_identifier) return { identifier: sig.team_identifier, rule_type: "TEAMID" };
-  if (sig.hash_sha256) return { identifier: sig.hash_sha256, rule_type: "CDHASH" };
-  if (sig.executable_sha256) return { identifier: sig.executable_sha256, rule_type: "BINARY" };
-  return null;
-}
-
-// Surfaces Fleet's own osquery-based software inventory for a host -
-// see fleetClient.ts's getHostSoftware doc comment for why (avoids the
-// user needing to manually `codesign -dv` in Terminal the way Tor
-// Browser's original Phase 3 rule was found). Same host-resolution rule
-// as handleInstallPackage: a human-meaningful identifier only, never a
-// raw Fleet host ID from a caller. Falls back to DEFAULT_FLEET_HOST
-// (types.ts) when no explicit `host` is given - this project only has
-// one real Mac in scope right now, so requiring it be typed in every
-// time is friction, not a safeguard; an explicit `host` still always
-// overrides it.
+// Surfaces SimpleMDM's real app inventory for a device - see
+// simpleMdmClient.ts's getInstalledApps doc comment for why this can no
+// longer back the "create a Santa rule from this installed app"
+// one-click action Fleet's signature_information used to enable. Same
+// host-resolution rule as handleInstallPackage: a human-meaningful
+// identifier only, never a raw SimpleMDM device ID from a caller. Falls
+// back to DEFAULT_SIMPLEMDM_DEVICE_ID (types.ts) when no explicit
+// `host` is given - this project only has one real Mac in scope right
+// now, so requiring it be typed in every time is friction, not a
+// safeguard; an explicit `host` still always overrides it.
 export async function handleListInstalledSoftware(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const host = url.searchParams.get("host") || env.DEFAULT_FLEET_HOST;
+  const explicitHost = url.searchParams.get("host");
+  const host = explicitHost || env.DEFAULT_SIMPLEMDM_DEVICE_ID;
   if (!host) {
     return jsonResponse(
-      { error: "missing required 'host' query parameter (hostname, serial, or UUID) - or set DEFAULT_FLEET_HOST" },
+      { error: "missing required 'host' query parameter (hostname, serial, or UUID) - or set DEFAULT_SIMPLEMDM_DEVICE_ID" },
       400
     );
   }
 
-  const hostId = await findHostId(env, host);
-  if (hostId === null) {
-    return jsonResponse({ error: `no host found matching '${host}'` }, 404);
+  // DEFAULT_SIMPLEMDM_DEVICE_ID is already a numeric SimpleMDM device
+  // id - only a caller-supplied `host` (name/serial/etc.) needs
+  // resolving via findDeviceId's search, same pattern as hostStatus.ts.
+  const deviceId = explicitHost ? await findDeviceId(env, host) : Number(host);
+  if (deviceId === null || Number.isNaN(deviceId)) {
+    return jsonResponse({ error: `no device found matching '${host}'` }, 404);
   }
 
-  const software = await getHostSoftware(env, hostId);
-  const rows: InstalledSoftwareRow[] = software.map((item) => {
-    const picked = pickIdentifier(item);
-    const version = item.installed_versions?.[0];
-    return {
-      name: item.name,
-      version: version?.version ?? null,
-      bundle_identifier: version?.bundle_identifier ?? null,
-      identifier: picked?.identifier ?? null,
-      rule_type: picked?.rule_type ?? null,
-    };
-  });
+  const software = await getInstalledApps(env, deviceId);
+  const rows: InstalledSoftwareRow[] = software.map((item) => ({
+    name: item.name,
+    version: item.version,
+    bundle_identifier: item.bundleIdentifier,
+    identifier: null,
+    rule_type: null,
+  }));
   return jsonResponse(rows);
 }

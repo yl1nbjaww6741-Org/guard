@@ -168,6 +168,18 @@ export interface Env {
   // falls back from still works and always will, for the day a second
   // device is genuinely in scope.
   DEFAULT_FLEET_HOST?: string;
+  // SimpleMDM API credentials - see simpleMdmClient.ts's doc comment for
+  // the real API reference this was built against. Auth is HTTP Basic
+  // with the API key as the username and a blank password - a real
+  // difference from FLEET_API_TOKEN's bearer-token model, not an
+  // oversight (see simpleMdmClient.ts's requireSimpleMdmConfig).
+  SIMPLEMDM_API_KEY?: string;
+  // SimpleMDM's own numeric device ID (not a serial/hostname the way
+  // DEFAULT_FLEET_HOST is - SimpleMDM's device-search endpoint resolves
+  // to this once, same as findHostId does for Fleet) to fall back to
+  // when no explicit `host` is given. Same "only one real Mac in scope"
+  // reasoning as DEFAULT_FLEET_HOST. Not a secret.
+  DEFAULT_SIMPLEMDM_DEVICE_ID?: string;
 }
 
 // --- Fleet's own REST API shapes (the subset this Worker uses) ---
@@ -277,4 +289,83 @@ export interface FleetGetHostResponse {
       profiles?: FleetMdmProfile[];
     };
   };
+}
+
+// --- Neutral aliases for the Fleet-to-SimpleMDM migration ---
+// The frontend (web/src/lib/useMdm.ts, Home.tsx, Fleet.tsx,
+// ChromePolicy.tsx) reads these exact field names - status, seen_time,
+// mdm.profiles[].profile_uuid/name/status - regardless of which MDM
+// vendor populated them. Rather than rename the underlying Fleet*
+// interfaces (which fleetClient.ts still uses and will until Phase 6
+// of PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md decommissions it),
+// simpleMdmClient.ts targets these neutral aliases instead - zero
+// frontend changes needed, zero changes to fleetClient.ts either.
+// `profile_uuid` in a SimpleMDM-sourced MdmProfileInfo holds a
+// SimpleMDM profile id (a plain integer, stringified), not a Fleet
+// UUID - same field name, different vendor's identifier underneath.
+export type MdmHostDetail = FleetHostDetail;
+export type MdmInfo = FleetMdmInfo;
+export type MdmProfileInfo = FleetMdmProfile;
+
+// --- SimpleMDM's own REST API shapes (the subset this Worker uses) ---
+// Built directly against api.simplemdm.com's own docs - see
+// simpleMdmClient.ts's top comment for the full real/unconfirmed
+// breakdown. SimpleMDM wraps every resource in a JSON:API-style
+// envelope - confirmed via real examples in their docs (a
+// custom_attribute_value example, an assignment_group example) for the
+// general {data: {type, id, attributes}} shape - but the EXACT
+// attribute names for a device's own detail/profiles responses were
+// only ever described narratively in their docs, never shown as a live
+// example anywhere. SimpleMdmDeviceAttributes/SimpleMdmProfileAttributes
+// below are a reasoned best guess at the real field names, not a
+// guarantee - verify against one real device before trusting
+// getHostStatus's output.
+
+export interface SimpleMdmDataEnvelope<T> {
+  data: { type: string; id: number | string; attributes: T };
+}
+
+export interface SimpleMdmListEnvelope<T> {
+  data: Array<{ type: string; id: number | string; attributes: T }>;
+  has_more?: boolean;
+}
+
+export interface SimpleMdmAppAttributes {
+  name: string;
+  app_type?: string;
+  bundle_identifier?: string;
+  version?: string;
+}
+
+// Not confirmed against a live response - see this section's own top
+// comment.
+export interface SimpleMdmDeviceAttributes {
+  name?: string;
+  device_name?: string;
+  status?: string;
+  last_seen_at?: string;
+  os_version?: string;
+  model_name?: string;
+  serial_number?: string;
+  enrollment_channel?: string;
+}
+
+// Not confirmed against a live response - see this section's own top
+// comment.
+export interface SimpleMdmProfileAttributes {
+  name?: string;
+  status?: string;
+}
+
+// SimpleMDM's installed_apps is a plain app inventory (name/version/
+// bundle identifier) - it does NOT expose per-app code-signing
+// Team ID/cdhash the way Fleet's signature_information does. See
+// simpleMdmClient.ts's getInstalledApps doc comment for what this
+// means for the dashboard's one-click Santa-rule-from-installed-app
+// feature.
+export interface SimpleMdmInstalledAppAttributes {
+  name: string;
+  bundle_identifier?: string;
+  identifier?: string;
+  version?: string;
 }
