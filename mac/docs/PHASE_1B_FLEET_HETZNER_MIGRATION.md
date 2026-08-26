@@ -1,4 +1,20 @@
-# Phase 1b - Migrate Fleet MDM from Fly.io to Hetzner
+# Phase 1b - Migrate Fleet MDM from Fly.io to Hetzner (SUPERSEDED)
+
+**Superseded by `PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md` - Fleet
+itself was dropped entirely, not just relocated.** This doc's whole
+premise (keep Fleet, cut its hosting cost by moving off Fly.io) never
+got past the planning stage before a more fundamental option won out:
+switching MDM vendors entirely to SimpleMDM, a hosted SaaS MDM with
+nothing to host at all - cheaper than Fleet Premium's license fee
+alone, before counting hosting. That migration is complete: the device
+is enrolled in SimpleMDM, the Worker's Fleet integration is fully
+replaced (`fleetClient.ts` deleted), and Fleet/Fly.io are being
+decommissioned per that doc's own Phase 6.
+
+Kept here, unedited below, purely as a record of what was planned and
+why it stopped mattering - not a runbook to follow.
+
+---
 
 **Hands-on-infrastructure runbook, same shape as `PHASE_0_SETUP.md` and
 `PHASE_5_LOCKDOWN.md` - nothing here is executable from a sandboxed

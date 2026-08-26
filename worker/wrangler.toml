@@ -92,28 +92,19 @@ database_id = "8cb09d1d-1497-449f-86d5-f7c754c5f884"
 binding = "EXTENSION_ASSETS"
 bucket_name = "contentguard-extension"
 
-# Not a secret - a Fleet host identifier isn't sensitive the way
-# FLEET_API_TOKEN is, so this is a plain var, not a `wrangler secret
-# put`. Real value: the real Mac's serial number (confirmed via Fleet's
-# own host detail page, GGV7PVVR96) - the most stable identifier for a
-# specific physical device (survives a hostname rename, unlike relying
-# on `Lukes-Air.localdomain`). See types.ts's DEFAULT_FLEET_HOST comment
-# for why this exists at all: this project only has one real Mac in
-# scope, so the "Installed apps" dashboard section defaults to it
-# instead of requiring it typed in every time.
-#
-# Kept alongside DEFAULT_SIMPLEMDM_DEVICE_ID below through the
-# Fleet-to-SimpleMDM migration (mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md)
-# - unused by any code path once ratchet.ts/hostStatus.ts/softwareApi.ts
-# are all repointed, removed for real only at that migration's Phase 6
-# once fleetClient.ts itself is deleted.
-[vars]
-DEFAULT_FLEET_HOST = "GGV7PVVR96"
-
 # SimpleMDM's own numeric device ID for the real Mac (confirmed via its
 # own device detail page URL, a.simplemdm.com/devices/2381595, after
 # Phase 3 of PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md re-enrolled it).
-# Not a secret, same reasoning as DEFAULT_FLEET_HOST above.
+# Not a secret - a device ID isn't sensitive the way SIMPLEMDM_API_KEY
+# is, so this is a plain var, not a `wrangler secret put`. Exists at all
+# because this project only has one real Mac in scope, so the
+# "Installed apps" dashboard section defaults to it instead of
+# requiring it typed in every time - see types.ts's own comment.
+#
+# Fleet's own equivalent (DEFAULT_FLEET_HOST = "GGV7PVVR96") lived here
+# until Phase 6 of that same migration decommissioned Fleet for real -
+# removed along with fleetClient.ts itself, not just left unused.
+[vars]
 DEFAULT_SIMPLEMDM_DEVICE_ID = "2381595"
 
 # Dashboard auth was originally going to reuse the existing Cloudflare
@@ -167,16 +158,17 @@ crons = ["*/15 * * * *"]
 #     session cookies. Not user-facing and not the dashboard password
 #     itself, so it stays a plain Wrangler secret rather than going
 #     through D1/the ratchet.
-#   - FLEET_BASE_URL / FLEET_API_TOKEN (src/fleetClient.ts) - the real
-#     Fleet instance and an API token from its own UI ("My account" ->
-#     "Get API token"). Being migrated off - see
-#     mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md - kept set until
-#     that migration's Phase 6 decommissions Fleet for real.
 #   - SIMPLEMDM_API_KEY (src/simpleMdmClient.ts) - `wrangler secret put
 #     SIMPLEMDM_API_KEY`, generated from SimpleMDM's own account
-#     settings. Not yet set as of this commit - needed before Phase 5 of
-#     PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md's Worker cutover can be
-#     tested for real.
+#     settings. Set and confirmed working live (2026-08-26) - see
+#     mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md.
+#   - FLEET_BASE_URL / FLEET_API_TOKEN, formerly here for
+#     src/fleetClient.ts (Fleet's real instance URL and an API token) -
+#     Fleet was fully decommissioned in that same migration's Phase 6;
+#     fleetClient.ts is deleted and these two secrets should be removed
+#     from the real deployment too (`wrangler secret delete
+#     FLEET_BASE_URL` / `FLEET_API_TOKEN`) once Fly.io's Fleet stack is
+#     confirmed torn down.
 # All fail closed when unset (every /api/... or sync request that needs
 # one is rejected until it's real), so leaving any unset is safe, just
 # non-functional. The dashboard password hash itself is set the same

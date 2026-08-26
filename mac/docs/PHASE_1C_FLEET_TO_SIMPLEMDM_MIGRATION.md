@@ -1,21 +1,19 @@
 # Phase 1c - Migrate off Fleet entirely, to SimpleMDM
 
-**In progress - decision made, migration underway.** Unlike
-`PHASE_1B_FLEET_HETZNER_MIGRATION.md` (which keeps Fleet, just
-relocates where it's hosted), this drops Fleet as the MDM entirely in
-favor of SimpleMDM, a hosted SaaS MDM - saving ~$25 AUD/month (Fleet
-Premium's $7/mo license fee plus Fly hosting, vs. SimpleMDM's flat
-$2.50-3/device/mo with nothing to host). Adopting this makes the
-Hetzner plan moot - there's no Fleet stack left to relocate once this
-completes.
+**Worker-side migration complete and verified live; Phase 6
+(decommissioning Fleet/Fly.io) in progress.** This drops Fleet as the
+MDM entirely in favor of SimpleMDM, a hosted SaaS MDM - saving ~$25
+AUD/month (Fleet Premium's $7/mo license fee plus Fly hosting, vs.
+SimpleMDM's flat $2.50-3/device/mo with nothing to host).
+`PHASE_1B_FLEET_HETZNER_MIGRATION.md` (keep Fleet, just relocate its
+hosting) is now marked superseded - there's no Fleet stack left to
+relocate.
 
 **Hands-on-hardware runbook, same shape as `PHASE_0_SETUP.md` and
-`PHASE_5_LOCKDOWN.md` - Phases 1-4 below needed the physical Mac, Apple
-Business Manager, and the SimpleMDM/Fleet consoles directly, and are
-now done.** Phase 5 (the Worker code) is built and pushed, sitting at
-`deploy-worker.yml`'s gated `deploy` job awaiting the remaining setup
-below before it's safe to approve. Phase 6 (decommissioning Fleet)
-needs your own confirmation before anything real gets destroyed.
+`PHASE_5_LOCKDOWN.md` - Phases 1-5 below are done.** Phase 6
+(decommissioning Fleet/Fly.io) needs your own confirmation before
+anything real gets destroyed - see that section for what's yours to do
+versus what's already done in code.
 
 ## Status so far
 
@@ -38,12 +36,27 @@ needs your own confirmation before anything real gets destroyed.
       grants, DNS blocklist, Recovery Lock reboot-tested) all confirmed
       by the user directly
 - [x] Worker code (`simpleMdmClient.ts` and callers) built, typechecked
-      clean, `wrangler deploy --dry-run` verified - pushed, sitting at
-      the gated `deploy` job
-- [ ] `SIMPLEMDM_API_KEY` secret not yet set, real SimpleMDM device ID
-      not yet plugged into `DEFAULT_SIMPLEMDM_DEVICE_ID` - **do this
-      before approving the pending deploy**
-- [ ] Fleet/Fly.io not yet decommissioned
+      clean, `wrangler deploy --dry-run` verified, deployed and
+      approved
+- [x] `SIMPLEMDM_API_KEY` secret set, real SimpleMDM device ID
+      (`2381595`) plugged into `DEFAULT_SIMPLEMDM_DEVICE_ID`
+- [x] **Live dashboard verified against real SimpleMDM data** - a first
+      deploy surfaced two real field-name bugs (device status compared
+      against Fleet's old "online" vocabulary instead of SimpleMDM's
+      real "enrolled"; every profile showed "unknown" since SimpleMDM's
+      profiles endpoint has no status field at all, a genuine
+      capability gap not a wrong guess) - both fixed and confirmed
+      against a real device response, not guessed a third time
+- [x] `fleetClient.ts` deleted, all `Fleet*` types removed from
+      `types.ts` (renamed to neutral `MdmHostDetail`/`MdmInfo`/
+      `MdmProfileInfo`), `FLEET_BASE_URL`/`FLEET_API_TOKEN`/
+      `DEFAULT_FLEET_HOST` removed from `wrangler.toml` and `types.ts`'s
+      `Env`
+- [ ] Fleet Premium subscription not yet cancelled (your side)
+- [ ] Fly.io's 4 Fleet apps not yet destroyed (your side)
+- [ ] `FLEET_BASE_URL`/`FLEET_API_TOKEN` secrets not yet deleted from
+      the real Cloudflare deployment (`wrangler secret delete`, your
+      side - safe to do once Fly.io is confirmed torn down)
 
 ## One real gap, found while building the Worker side - decide how to handle it
 
@@ -221,29 +234,37 @@ API key as the username and a blank password
          password
 3. **Every box above passed** - move to Phase 5.
 
-### Phase 5 - Cut the Worker over (this session's part)
+### Phase 5 - Cut the Worker over - done
 
-1. Resolve the app-install gap decision from Phase 1.
-2. Build `worker/src/simpleMdmClient.ts` and repoint
-   `softwareApi.ts`/`hostStatus.ts`/`ratchet.ts` (see the file table
-   above) - happening in this session.
-3. Test locally against `wrangler dev` using the real SimpleMDM API
-   key from Phase 1 and this device's real SimpleMDM device ID.
-4. Push to this branch - `deploy-worker.yml`'s gated `deploy` job will
-   wait for your approval (the same `release` Environment used for
-   the APK and D1 migrations) before it reaches the real, live Worker.
-   **Do not approve that deploy until Phase 4 has fully passed** -
-   approving it while the Mac is still mid-migration would point the
-   live dashboard's Fleet-backed features at SimpleMDM for a device
-   that isn't actually there yet.
-5. Once approved and deployed, re-run Phase 4's checklist one more
-   time through the dashboard itself (`/central/`'s Fleet MDM and App
-   control tabs) rather than just the consoles directly - confirming
-   the Worker's own view of the world matches reality.
+1. Resolved the app-install gap decision: option 2, simplify to
+   `push_apps`'s real semantics.
+2. Built `worker/src/simpleMdmClient.ts` and repointed
+   `softwareApi.ts`/`hostStatus.ts`/`ratchet.ts`.
+3. Pushed - `deploy-worker.yml`'s gated `deploy` job ran and was
+   approved, twice (once for the code, once for
+   `DEFAULT_SIMPLEMDM_DEVICE_ID`).
+4. **A first live check surfaced two real bugs**, both found and fixed
+   against a real device response rather than guessed further: device
+   status compared against Fleet's old "online" vocabulary (SimpleMDM
+   genuinely has no connectivity signal beyond `last_seen_at`'s
+   recency, now what the dot color is based on) and every profile
+   showing "unknown" (SimpleMDM's profiles endpoint has no status field
+   at all - a real, permanent capability gap, not a wrong guess -
+   profiles now show "assigned," the honest ceiling of what that data
+   supports).
+5. A separate, unrelated bug found the same session: the
+   `SIMPLEMDM_API_KEY` secret's first `wrangler secret put` attempt
+   silently captured a bad value (an earlier interactive-prompt hiccup)
+   - `wrangler secret list` only confirmed the secret *name* existed,
+   not that its value was correct. Re-set cleanly, confirmed fixed
+   (secrets apply immediately, no redeploy needed).
+6. Live dashboard re-verified after both fixes - real SimpleMDM data
+   confirmed showing correctly.
 
-### Phase 6 - Decommission Fleet and Fly.io
+### Phase 6 - Decommission Fleet and Fly.io - in progress
 
-Only once Phase 5 fully passes:
+Your side (real infrastructure/billing, can't be done from a sandboxed
+session):
 
 ```bash
 fly apps destroy contentguard-fleet
@@ -252,19 +273,36 @@ fly apps destroy contentguard-fleet-redis
 fly apps destroy contentguard-fleet-tunnel
 ```
 
-- [ ] Cancel/downgrade the Fleet Premium subscription - the license
-      fee doesn't stop on its own just because the Fly apps are gone.
-- [ ] Remove `FLEET_BASE_URL`/`FLEET_API_TOKEN`/`DEFAULT_FLEET_HOST`
-      from `worker/wrangler.toml` and unset the secrets
-      (`wrangler secret delete`).
-- [ ] Delete `worker/src/fleetClient.ts` once nothing imports it -
-      unlike the abandoned Oracle doc (kept as a record of a blocked
-      attempt), Fleet is being fully retired here, not just relocated,
-      so this becomes genuinely dead code rather than a useful
-      historical artifact.
-- [ ] `PHASE_1B_FLEET_HETZNER_MIGRATION.md` becomes moot - mark it
-      superseded the same way the Oracle doc was, rather than deleting
-      it outright.
+- [ ] **Fleet Premium billing** - real finding: this was paid annually,
+      upfront, not a month-to-month subscription - so there's nothing
+      to "cancel" for an immediate refund (already spent regardless).
+      The actual action: check Fleet's billing settings for an
+      auto-renew toggle and turn it off if one exists, so next year
+      doesn't silently re-charge; if there's no auto-renew (a manual
+      renewal/new-invoice model instead), nothing further to do - let
+      the current paid term run out on its own.
+- [ ] Delete the `FLEET_BASE_URL`/`FLEET_API_TOKEN` secrets from the
+      real Cloudflare deployment (`wrangler secret delete
+      FLEET_BASE_URL`, `wrangler secret delete FLEET_API_TOKEN`) -
+      safe to do once Fly.io's Fleet stack above is confirmed torn
+      down.
+
+Already done in code, this session:
+
+- [x] Removed `FLEET_BASE_URL`/`FLEET_API_TOKEN`/`DEFAULT_FLEET_HOST`
+      from `worker/wrangler.toml`
+- [x] Deleted `worker/src/fleetClient.ts` - unlike the abandoned Oracle
+      doc (kept as a record of a blocked attempt), Fleet was fully
+      retired here, not just relocated, so this was genuinely dead
+      code rather than a useful historical artifact
+- [x] Removed every `Fleet*`-prefixed type from `types.ts`, renamed the
+      shared host/profile-status shapes to neutral
+      `MdmHostDetail`/`MdmInfo`/`MdmProfileInfo` (same field names the
+      frontend depends on, just no longer named after a vendor this
+      project has already switched away from once)
+- [x] `PHASE_1B_FLEET_HETZNER_MIGRATION.md` marked superseded, same
+      pattern as the abandoned Oracle doc - kept as a record, not
+      deleted
 
 ## Rollback
 

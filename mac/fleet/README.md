@@ -1,13 +1,18 @@
-# Phase 1 - Fleet MDM on Fly.io
+# Phase 1 - Fleet MDM on Fly.io (DECOMMISSIONED)
 
-**Planning to move this off Fly.io?** See
-`mac/docs/PHASE_1B_FLEET_HETZNER_MIGRATION.md` - a migration runbook to
-Hetzner, grounded in the real app names/config below rather than a
-generic plan. (An earlier attempt targeted Oracle Cloud Always Free -
-`mac/docs/PHASE_1B_FLEET_ORACLE_MIGRATION.md` - abandoned once staging
-it live found `fleetdm/fleet` is amd64-only and Oracle's free tier is
-ARM-only; kept as a record, not a runbook to follow.) Not started yet;
-this section (Fly.io) is still the live, current setup.
+**This entire stack has been replaced.** Fleet was dropped in favor of
+SimpleMDM (a hosted SaaS MDM) - see
+`mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md` for the full real
+migration record. The Mac is enrolled in SimpleMDM now, not Fleet; the
+Worker's `fleetClient.ts` is deleted; these four Fly.io apps are being
+torn down per that doc's Phase 6. Two earlier plans to relocate
+Fleet's *hosting* instead (`PHASE_1B_FLEET_ORACLE_MIGRATION.md`,
+abandoned; `PHASE_1B_FLEET_HETZNER_MIGRATION.md`, superseded) both
+became moot once dropping Fleet entirely turned out cheaper and
+simpler than relocating it.
+
+Kept below, unedited, purely as a record of what this stack was and
+how it worked - not a runbook to follow or a live setup to maintain.
 
 Four small Fly.io apps, all in the same region so they share a private
 network: `contentguard-fleet-mysql`, `contentguard-fleet-redis`,

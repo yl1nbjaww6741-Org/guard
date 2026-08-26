@@ -148,164 +148,55 @@ export interface Env {
   // dashboard password itself does (see schema.sql's dashboard_auth
   // comment for why that one lives in D1 instead).
   SESSION_SIGNING_KEY?: string;
-  // Fleet API credentials - see fleetClient.ts's doc comment for the
-  // real API reference this was built against. FLEET_BASE_URL is the
-  // real deployed Fleet URL (mac/fleet/README.md's `fleet.yourdomain.com`,
-  // once real), not committed as a var since it's specific to this
-  // project's own Fleet deployment, same "don't guess a real value"
-  // treatment as everything else.
-  FLEET_BASE_URL?: string;
-  FLEET_API_TOKEN?: string;
-  // Fleet host identifier (hostname/serial/UUID) to fall back to when
-  // the "Installed apps" dashboard section isn't given an explicit one -
-  // this project only ever has one real Mac in scope (see
-  // mac/README.md's Phase 4 row's forward-compat note: generic enough
-  // for a future second device, not actually built for one yet), so
-  // requiring that identifier to be typed in every single time is pure
-  // friction, not a real safeguard. Not a secret - a serial number isn't
-  // sensitive the way FLEET_API_TOKEN is, so this is a plain wrangler.toml
-  // [vars] entry, not a `wrangler secret put`. The host query param this
-  // falls back from still works and always will, for the day a second
-  // device is genuinely in scope.
-  DEFAULT_FLEET_HOST?: string;
   // SimpleMDM API credentials - see simpleMdmClient.ts's doc comment for
   // the real API reference this was built against. Auth is HTTP Basic
-  // with the API key as the username and a blank password - a real
-  // difference from FLEET_API_TOKEN's bearer-token model, not an
-  // oversight (see simpleMdmClient.ts's requireSimpleMdmConfig).
+  // with the API key as the username and a blank password (Fleet, which
+  // this replaced per mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md,
+  // used a bearer token instead - see simpleMdmClient.ts's
+  // requireSimpleMdmConfig).
   SIMPLEMDM_API_KEY?: string;
-  // SimpleMDM's own numeric device ID (not a serial/hostname the way
-  // DEFAULT_FLEET_HOST is - SimpleMDM's device-search endpoint resolves
-  // to this once, same as findHostId does for Fleet) to fall back to
-  // when no explicit `host` is given. Same "only one real Mac in scope"
-  // reasoning as DEFAULT_FLEET_HOST. Not a secret.
+  // SimpleMDM's own numeric device ID to fall back to when no explicit
+  // `host` is given - this project only ever has one real Mac in scope,
+  // so requiring that identifier to be typed in every single time is
+  // pure friction, not a real safeguard. Not a secret - safe as a plain
+  // wrangler.toml [vars] entry.
   DEFAULT_SIMPLEMDM_DEVICE_ID?: string;
 }
 
-// --- Fleet's own REST API shapes (the subset this Worker uses) ---
-// Built directly against fleetdm/fleet's docs/REST API/rest-api.md,
-// fetched from the real repo, not guessed - see fleetClient.ts.
+// --- MDM host/profile status shapes ---
+// Named neutrally (not after a specific vendor) since this project has
+// switched MDM providers once already (Fleet -> SimpleMDM, see
+// mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md) and the frontend
+// (web/src/lib/useMdm.ts, Home.tsx, Fleet.tsx, ChromePolicy.tsx) only
+// ever depends on these field names - status, seen_time,
+// mdm.profiles[].profile_uuid/name/status - never on which vendor
+// populated them. `profile_uuid` holds whatever identifier the current
+// MDM vendor uses for a profile (a SimpleMDM numeric id, stringified,
+// today) - the name is a holdover from when Fleet's real UUIDs lived
+// here, kept rather than renamed again for a field nothing outside this
+// type actually parses as a UUID.
 
-export interface FleetSoftwarePackage {
-  title_id: number;
-  name: string;
-  version: string;
-  platform: string;
-  hash_sha256: string;
-  uploaded_at: string;
-}
-
-export interface FleetAddPackageResponse {
-  software_package: FleetSoftwarePackage;
-}
-
-export interface FleetHost {
-  id: number;
-  hostname: string;
-}
-
-export interface FleetListHostsResponse {
-  hosts: FleetHost[];
-}
-
-// --- Get host's software (GET /api/v1/fleet/hosts/:id/software) ---
-// Only the fields this Worker actually reads are kept required; Fleet's
-// real response has many more (vulnerabilities, software_package,
-// app_store_app, etc) - see fleetClient.ts's getHostSoftware doc comment
-// for what this is used for and the identifier-type nuance.
-
-export interface FleetSignatureInfo {
-  installed_path: string;
-  team_identifier: string | null;
-  // Per Fleet's own docs (rest-api.md's "Get host's software" section):
-  // "hash_sha256 is the cdhash_sha256" - this is a Santa CDHASH-type
-  // identifier, NOT a binary SHA-256, despite the field name. Do not
-  // treat it as a BINARY rule identifier.
-  hash_sha256: string | null;
-  executable_sha256: string | null;
-}
-
-export interface FleetInstalledVersion {
-  version: string;
-  bundle_identifier: string | null;
-  signature_information: FleetSignatureInfo[] | null;
-}
-
-export interface FleetHostSoftwareItem {
-  id: number;
-  name: string;
-  source: string;
-  installed_versions: FleetInstalledVersion[] | null;
-}
-
-export interface FleetListHostSoftwareResponse {
-  count: number;
-  software: FleetHostSoftwareItem[];
-}
-
-// --- Get host (GET /api/v1/fleet/hosts/:id) ---
-// Only the fields this Worker actually reads are kept required; Fleet's
-// real response is much larger (users, geolocation, batteries, issues,
-// etc) - see fleetClient.ts's getHostStatus doc comment for what this is
-// used for.
-
-export interface FleetMdmProfile {
+export interface MdmProfileInfo {
   profile_uuid: string;
   name: string;
-  // One of "pending" | "verifying" | "verified" | "failed" per Fleet's
-  // own docs - not narrowed to a union here since Fleet's real set could
-  // grow and a strict union would make this Worker fail to compile on a
-  // status value it hasn't seen yet, for a field this Worker only ever
-  // displays, never branches logic on.
   status: string;
   operation_type: string;
 }
 
-export interface FleetMdmInfo {
+export interface MdmInfo {
   enrollment_status: string;
   connected_to_fleet: boolean;
-  profiles: FleetMdmProfile[];
+  profiles: MdmProfileInfo[];
 }
 
-export interface FleetHostDetail {
+export interface MdmHostDetail {
   hostname: string;
-  status: string; // "online" | "offline" | "missing" per Fleet's own docs
+  status: string;
   seen_time: string;
   os_version: string;
   disk_encryption_enabled: boolean | null;
-  mdm: FleetMdmInfo | null; // null on a host that isn't MDM-enrolled at all
+  mdm: MdmInfo | null; // null on a host that isn't MDM-enrolled at all
 }
-
-export interface FleetGetHostResponse {
-  host: {
-    hostname: string;
-    status: string;
-    seen_time: string;
-    os_version: string;
-    disk_encryption_enabled?: boolean;
-    mdm?: {
-      enrollment_status: string;
-      connected_to_fleet: boolean;
-      profiles?: FleetMdmProfile[];
-    };
-  };
-}
-
-// --- Neutral aliases for the Fleet-to-SimpleMDM migration ---
-// The frontend (web/src/lib/useMdm.ts, Home.tsx, Fleet.tsx,
-// ChromePolicy.tsx) reads these exact field names - status, seen_time,
-// mdm.profiles[].profile_uuid/name/status - regardless of which MDM
-// vendor populated them. Rather than rename the underlying Fleet*
-// interfaces (which fleetClient.ts still uses and will until Phase 6
-// of PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md decommissions it),
-// simpleMdmClient.ts targets these neutral aliases instead - zero
-// frontend changes needed, zero changes to fleetClient.ts either.
-// `profile_uuid` in a SimpleMDM-sourced MdmProfileInfo holds a
-// SimpleMDM profile id (a plain integer, stringified), not a Fleet
-// UUID - same field name, different vendor's identifier underneath.
-export type MdmHostDetail = FleetHostDetail;
-export type MdmInfo = FleetMdmInfo;
-export type MdmProfileInfo = FleetMdmProfile;
 
 // --- SimpleMDM's own REST API shapes (the subset this Worker uses) ---
 // Built directly against api.simplemdm.com's own docs - see

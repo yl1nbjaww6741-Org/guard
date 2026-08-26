@@ -778,7 +778,7 @@ function renderKeywordRemovalsPending(pending) {
 // independently on page load with no ordering guarantee relative to this
 // one - a shared cache here could read stale/empty state on a race.
 async function loadInstalledApps(host) {
-  // No host -> the Worker falls back to DEFAULT_FLEET_HOST (this
+  // No host -> the Worker falls back to DEFAULT_SIMPLEMDM_DEVICE_ID (this
   // project's one real Mac) - see softwareApi.ts's handleListInstalledSoftware.
   const qs = host ? \`?host=\${encodeURIComponent(host)}\` : "";
   const [apps, staticApps, approved, pendingAdditions, knownApps] = await Promise.all([
