@@ -12,6 +12,7 @@ partly off these).
 | `chrome-policy.mobileconfig` | Ready to push | |
 | `dns.mobileconfig` | Ready to push | `ServerURL` is this org's real Gateway DoH endpoint, read from `warp-cli settings` in Phase 0. Re-check that value if Gateway config ever changes. |
 | `system-extension.mobileconfig` | **Placeholder, and won't apply to WARP** | Checked on the real Mac in Phase 1: WARP's packet tunnel runs as a Network (App) Extension, not a System Extension - `systemextensionsctl list` shows 0 extensions even with WARP connected, so this payload type doesn't govern it. Cloudflare's Team ID (`68WVV388M8`) is recorded in the profile's comment for reference only. This profile's real first use is Santa in Phase 3, whose EndpointSecurity component does use System Extensions - `__SANTA_TEAM_ID__`/`__SANTA_EXTENSION_BUNDLE_ID__` get filled in then. |
+| `background-task-management.mobileconfig` | Ready to push (2026-08-26) | Closes a real gap found live on the Mac: `com.contentguard.daemon`/`com.contentguard.agent` showed up as freely toggleable "Allow in the Background" items in System Settings, with no lock at all - a local admin could kill the entire enforcement stack with two clicks and no sudo. Uses the `com.apple.servicemanagement` payload's `Rules` (`Label` match on both ContentGuard launchd jobs, `TeamIdentifier` match on Santa's real Team ID `ZMCG7MLDV9`, same value already confirmed in `system-extension.mobileconfig`) to mark both as MDM-managed and non-removable via that UI. See the profile's own comment for the full reasoning and how to verify it applied. |
 
 ## Deliberate deviation: `forceAdminPasswordForAppInstallation = false`
 
@@ -69,10 +70,15 @@ blocked, the fix is likely scoping this restriction differently or
 dropping it from this profile, not abandoning the restriction goal
 entirely.
 
-## Pushing via Fleet
+## Pushing via SimpleMDM
 
-Once Fleet is up (`mac/fleet/`) and the Mac is enrolled: Fleet's UI has a
-**Controls > OS settings > Custom settings** (or similar, depending on
-Fleet version) section for uploading `.mobileconfig` profiles and
-assigning them to a team/host. Upload each file from this directory
-as-is; Fleet handles delivery to the enrolled Mac.
+Fleet was dropped entirely in favor of SimpleMDM - see
+`mac/docs/PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md`. Push a profile from
+this directory via SimpleMDM's own dashboard: **Configuration Profiles >
+Add Profile > Custom Configuration Profile**, upload the `.mobileconfig`
+file as-is, then assign it to the Mac's group/device. SimpleMDM handles
+delivery to the enrolled Mac from there - no Worker-side action needed
+for a first push (the Worker's `createConfigurationProfile`/
+`updateConfigurationProfile` in `worker/src/simpleMdmClient.ts` only come
+into play for the ratchet's own scheduled *updates* to an
+already-existing profile, not initial upload).

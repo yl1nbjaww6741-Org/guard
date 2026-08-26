@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadDisplayName</key>
+    <string>ContentGuard Background Task Management</string>
+    <key>PayloadIdentifier</key>
+    <string>com.contentguard.backgroundtaskmanagement</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>1A87F152-84A3-42D9-B4BF-E517529A642C</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.servicemanagement</string>
+            <key>PayloadIdentifier</key>
+            <string>com.contentguard.backgroundtaskmanagement.payload</string>
+            <key>PayloadUUID</key>
+            <string>5FCC2714-82D9-47DB-B9AA-5BA453563EA4</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>ContentGuard Background Task Management Payload</string>
+            <!--
+              Found the hard way, on the real Mac: the "Allow in the
+              Background" toggle in System Settings > General > Login
+              Items & Extensions is not cosmetic - toggling it off for a
+              LaunchDaemon/LaunchAgent actually disables it via
+              backgroundtaskmanagementd, no sudo required. Confirmed live
+              that com.contentguard.daemon and com.contentguard.agent
+              were both freely toggleable there, with no "configured by a
+              profile" lock, while other background items (macOS system
+              helpers, whatever pushed the generic Background Task
+              Management defaults already in place from prior MDM
+              enrollment) already showed that badge. This is the payload
+              that was missing - without it, a local admin (or, before
+              Phase 5's demotion lands, the standard user too) can defeat
+              the entire enforcement stack with two clicks in Settings and
+              no sudo, no killed process for EscalationManager to notice,
+              and no daemon tripwire watching for it at all.
+
+              Two rules, not more - deliberately scoped to exactly the two
+              components this project's whole threat model depends on
+              staying alive, not every background item on the machine:
+
+              1. Label match on ContentGuard's own two launchd jobs -
+                 exact values confirmed against
+                 mac/LaunchDaemons/com.contentguard.daemon.plist and
+                 mac/LaunchAgents/com.contentguard.agent.plist's own
+                 <key>Label</key> entries. Label, not
+                 BundleIdentifier/TeamIdentifier, because ContentGuard is
+                 self-signed with no real Apple Developer Team ID (see
+                 profiles/pppc.mobileconfig's own notes on the
+                 self-signed "ContentGuard Signing" identity) - Label is
+                 the one rule type that doesn't depend on signing at all.
+
+              2. TeamIdentifier match on Santa's real, public, stable
+                 Team ID (ZMCG7MLDV9 - same value already confirmed and
+                 used in profiles/system-extension.mobileconfig for
+                 Santa's System Extension pre-approval). Deliberately a
+                 TeamIdentifier rule rather than naming Santa's individual
+                 launchd labels one by one - covers santad, syncd, and any
+                 other launch item northpolesec/santa ships or adds in a
+                 future version, all under one signed identity, without
+                 this profile needing to be updated every time Santa's
+                 own packaging changes.
+
+              Once pushed, re-check System Settings > General > Login
+              Items & Extensions: both ContentGuard's and Santa's rows
+              should show the "This setting has been configured by a
+              profile" badge and stop being toggleable, matching how the
+              generic system-helper rows already behave in that same
+              list.
+            -->
+            <key>Rules</key>
+            <array>
+                <dict>
+                    <key>RuleType</key>
+                    <string>Label</string>
+                    <key>RuleValue</key>
+                    <string>com.contentguard.daemon</string>
+                    <key>Comment</key>
+                    <string>ContentGuardDaemon - root-owned tamper anchor, must not be user-disableable</string>
+                </dict>
+                <dict>
+                    <key>RuleType</key>
+                    <string>Label</string>
+                    <key>RuleValue</key>
+                    <string>com.contentguard.agent</string>
+                    <key>Comment</key>
+                    <string>ContentGuardAgent - screen capture/detection agent, must not be user-disableable</string>
+                </dict>
+                <dict>
+                    <key>RuleType</key>
+                    <string>TeamIdentifier</string>
+                    <key>RuleValue</key>
+                    <string>ZMCG7MLDV9</string>
+                    <key>Comment</key>
+                    <string>Santa (northpolesec) - EndpointSecurity binary authorization, must not be user-disableable</string>
+                </dict>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
