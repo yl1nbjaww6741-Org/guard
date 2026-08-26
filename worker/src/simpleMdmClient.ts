@@ -15,15 +15,31 @@
 //                                                      - assign to a device
 //   - PATCH /custom_configuration_profiles/:id        - update in place
 //
-// What's NOT confirmed (documented narratively only, no live JSON
-// example ever shown) - see types.ts's own comment on
-// SimpleMdmDeviceAttributes/SimpleMdmProfileAttributes:
-//   - GET /devices/:id            - exact attribute field names
-//   - GET /devices/:id/profiles   - exact attribute field names
-// getHostStatus below is written defensively (optional chaining,
-// graceful fallbacks) specifically because of this - verify its output
-// against one real device before trusting the dashboard's Fleet MDM
-// tab blindly.
+// GET /devices/:id and GET /devices/:id/profiles - confirmed for real
+// against a live device (2026-08-26, this Mac, device id 2381595) after
+// initially being reasoned guesses. Two real findings from that live
+// check, not further guessing:
+//   - Device attributes use `filevault_enabled` (a real boolean) and
+//     `status` (an enrollment-state word like "enrolled" - NOT a
+//     Fleet-style "online"/"offline"/connectivity word). getDeviceStatus
+//     below reflects both.
+//   - Profile attributes have NO status field of any kind - just name,
+//     profile_identifier, group_count, device_count. This isn't a wrong
+//     field-name guess to fix, it's a genuine, permanent capability gap:
+//     SimpleMDM's profiles endpoint confirms a profile is *assigned*
+//     (group_count/device_count), not that it's been *verified
+//     installed* the way Fleet's own per-profile verified/pending/failed
+//     status was. Nothing to parse here that isn't already being parsed
+//     - see getDeviceStatus's own comment on what this means for the
+//     dashboard's MDM lockdown display.
+//
+// Also real, confirmed the same day: GET /devices/:id's response
+// includes `recovery_lock_password` directly - Recovery Lock genuinely
+// CAN be read back, not just rotated/cleared (resolves that open
+// question from PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md). Not wired
+// into this client - the dashboard has no Recovery-Lock-display surface
+// today, and this value is sensitive enough that adding one deserves
+// its own deliberate pass, not a drive-by addition here.
 //
 // Two real, structural differences from Fleet, not oversights:
 //   1. No per-device, per-app targeted install exists in SimpleMDM's
@@ -162,13 +178,10 @@ export async function getInstalledApps(
 
 // Real connectivity + MDM-profile status for a device, shaped to match
 // MdmHostDetail exactly (types.ts's alias for FleetHostDetail) so
-// hostStatus.ts and the frontend need zero changes. UNCONFIRMED field
-// names on SimpleMDM's side - see this file's top comment. Written
-// defensively (optional chaining, graceful "unknown" fallbacks) rather
-// than asserting a shape that might not match SimpleMDM's real
-// response - verify against a real device once enrolled (Phase 4 of
-// PHASE_1C_FLEET_TO_SIMPLEMDM_MIGRATION.md) and correct the field
-// names below if they don't match.
+// hostStatus.ts and the frontend need zero changes. Field names below
+// are CONFIRMED against a real device response (2026-08-26) - see this
+// file's top comment for the two real findings that came out of that
+// check.
 export async function getDeviceStatus(env: Env, deviceId: number): Promise<MdmHostDetail> {
   const deviceResponse = await simpleMdmFetch(env, `/devices/${deviceId}`);
   const device = (await deviceResponse.json()) as SimpleMdmDataEnvelope<SimpleMdmDeviceAttributes>;
@@ -179,21 +192,37 @@ export async function getDeviceStatus(env: Env, deviceId: number): Promise<MdmHo
 
   return {
     hostname: attrs.device_name ?? attrs.name ?? "unknown",
-    // SimpleMDM's real status vocabulary isn't confirmed - passed
-    // through as-is rather than mapped to Fleet's "online"/"offline"/
-    // "missing", since guessing a mapping wrong would silently mislabel
-    // the dashboard's own status pill.
+    // Confirmed real value: an enrollment-state word ("enrolled"), not
+    // a Fleet-style "online"/"offline"/connectivity word - SimpleMDM's
+    // device-detail endpoint doesn't expose a live connectivity signal
+    // at all, only last_seen_at. dashboard.ts's own rendering has been
+    // updated to derive its status-dot color from seen_time's recency
+    // instead of comparing this field to "online" (which would always
+    // be false for a SimpleMDM-sourced value and show red regardless
+    // of real health).
     status: attrs.status ?? "unknown",
     seen_time: attrs.last_seen_at ?? "",
     os_version: attrs.os_version ?? "",
-    disk_encryption_enabled: null,
+    // Confirmed real field (filevault_enabled) - was hardcoded null
+    // before this was verified against a live response.
+    disk_encryption_enabled: attrs.filevault_enabled ?? null,
     mdm: {
-      enrollment_status: attrs.enrollment_channel ?? attrs.status ?? "unknown",
+      enrollment_status: attrs.status ?? "unknown",
+      // No live per-request connectivity check exists to base this on
+      // (see the status field's own comment above) - true here just
+      // means "the API call for this device succeeded," not a real
+      // heartbeat signal the way Fleet's connected_to_fleet was.
       connected_to_fleet: true,
       profiles: profilesParsed.data.map((p) => ({
         profile_uuid: String(p.id),
         name: p.attributes.name ?? "unknown profile",
-        status: p.attributes.status ?? "unknown",
+        // Confirmed real finding: SimpleMDM's profiles endpoint has no
+        // status field at all - see this file's top comment. "assigned"
+        // reflects what's actually confirmed (group_count/device_count
+        // show it's associated with this device, via its group), not a
+        // fabricated verified/pending/failed value this data can't
+        // support.
+        status: "assigned",
         operation_type: "install",
       })),
     },

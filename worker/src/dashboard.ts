@@ -142,6 +142,12 @@ export function renderDashboard(): string {
   .mdm-status-verified { color: #51cf66; }
   .mdm-status-pending, .mdm-status-verifying { color: #ffd43b; }
   .mdm-status-failed { color: #ff6b6b; }
+  /* SimpleMDM's profiles endpoint has no verified/pending/failed concept
+     at all (confirmed against a real device, 2026-08-26) - "assigned"
+     is the honest ceiling of what that data can say, styled distinctly
+     from "unknown" (a real absence of data) rather than colored like a
+     problem. */
+  .mdm-status-assigned { color: #74c0fc; }
   details.profile-details { border-bottom: 1px solid #22252b; padding: 0.5rem 0; }
   details.profile-details summary { cursor: pointer; font-size: 0.85rem; }
   details.profile-details summary span { font-weight: 600; margin-right: 0.5rem; }
@@ -176,8 +182,8 @@ export function renderDashboard(): string {
   </section>
 
   <section>
-    <h2>MDM lockdown (Fleet)</h2>
-    <div class="subtitle" style="margin-bottom: 0;">What Fleet has actually confirmed applied, not just what profiles/ intends.</div>
+    <h2>MDM lockdown</h2>
+    <div class="subtitle" style="margin-bottom: 0;">What the MDM (SimpleMDM) has actually confirmed applied, not just what profiles/ intends.</div>
     <div id="mdm-lockdown-body">Loading...</div>
     <div class="subtitle" style="margin-top: 1rem; margin-bottom: 0;">Uploads and updates take effect after a 24h delay, same as loosening a Santa rule - see mac/docs/PHASE_4_DASHBOARD_SETUP.md's "Loosening MDM profile restrictions" section.</div>
     <form class="inline" id="upload-profile-form" style="margin-top: 0.5rem;">
@@ -480,8 +486,8 @@ function renderPendingProfileChanges(pending) {
   }).join("");
 }
 
-// Santa's sync freshness (devices.last_preflight_at) and Fleet's own
-// online/offline status are genuinely different signals - see
+// Santa's sync freshness (devices.last_preflight_at) and the MDM's own
+// last-seen recency are genuinely different signals - see
 // hostStatus.ts's doc comment. Both shown here, neither substituting
 // for the other. 30 minutes is 3x Santa's own FullSyncInterval (10
 // minutes, confirmed via santactl status on the real Mac) - comfortably
@@ -489,15 +495,26 @@ function renderPendingProfileChanges(pending) {
 // jitter.
 const SANTA_STALE_MS = 30 * 60 * 1000;
 
+// MDM check-in cadence is inherently much coarser than Santa's active
+// sync protocol - a real device response (2026-08-26) showed a genuine
+// enrollment-state word ("enrolled") in the field Fleet used for
+// "online"/"offline"/"missing", with no separate live-connectivity
+// signal at all beyond last_seen_at. Reusing SANTA_STALE_MS's 30-minute
+// window here would show red constantly on a perfectly healthy Mac -
+// 6 hours is a much more realistic "hasn't checked in in a concerning
+// while" threshold for MDM check-ins specifically.
+const MDM_STALE_MS = 6 * 60 * 60 * 1000;
+
 function renderSyncHealth(data) {
   const el = document.getElementById("sync-health-body");
   const rows = [];
 
   if (data.fleet) {
-    const online = data.fleet.status === "online";
-    rows.push(\`<div class="status-row\${online ? "" : " error"}"><span class="status-dot" style="background:\${online ? "#51cf66" : "#ff6b6b"}"></span><strong>Fleet</strong>&nbsp;- \${escapeHtml(data.fleet.status)}, last seen \${timeAgo(data.fleet.seen_time)}</div>\`);
+    const seenAt = data.fleet.seen_time ? new Date(data.fleet.seen_time).getTime() : NaN;
+    const recent = !Number.isNaN(seenAt) && Date.now() - seenAt <= MDM_STALE_MS;
+    rows.push(\`<div class="status-row\${recent ? "" : " error"}"><span class="status-dot" style="background:\${recent ? "#51cf66" : "#ff6b6b"}"></span><strong>MDM</strong>&nbsp;- \${escapeHtml(data.fleet.status)}, last seen \${timeAgo(data.fleet.seen_time)}</div>\`);
   } else {
-    rows.push(\`<div class="status-row error"><span class="status-dot" style="background:#ff6b6b"></span><strong>Fleet</strong>&nbsp;- \${escapeHtml(data.fleetError ?? "not available")}</div>\`);
+    rows.push(\`<div class="status-row error"><span class="status-dot" style="background:#ff6b6b"></span><strong>MDM</strong>&nbsp;- \${escapeHtml(data.fleetError ?? "not available")}</div>\`);
   }
 
   if (data.devices.length === 0) {
@@ -535,7 +552,7 @@ function renderMdmLockdown(data, profileDetails, pendingProfileChanges) {
   parts.push(\`<div class="status-row\${deOn === false ? " error" : ""}">Disk encryption: <strong>\${deLabel}</strong></div>\`);
 
   if (f.mdm) {
-    parts.push(\`<div class="status-row\${f.mdm.connected_to_fleet ? "" : " error"}">MDM enrollment: \${escapeHtml(f.mdm.enrollment_status)}\${f.mdm.connected_to_fleet ? "" : " (NOT connected to Fleet)"}</div>\`);
+    parts.push(\`<div class="status-row\${f.mdm.connected_to_fleet ? "" : " error"}">MDM enrollment: \${escapeHtml(f.mdm.enrollment_status)}\${f.mdm.connected_to_fleet ? "" : " (NOT connected)"}</div>\`);
     if (f.mdm.profiles.length === 0) {
       parts.push('<div class="empty">No configuration profiles reported by Fleet.</div>');
     } else {

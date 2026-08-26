@@ -337,8 +337,16 @@ export interface SimpleMdmAppAttributes {
   version?: string;
 }
 
-// Not confirmed against a live response - see this section's own top
-// comment.
+// Confirmed against a real device response (2026-08-26, device id
+// 2381595) - only the fields this Worker actually reads are kept here;
+// the real response has many more (battery_level, firewall,
+// recovery_lock_password, os_update, etc). `status` is a real
+// enrollment-state word ("enrolled"), not a Fleet-style connectivity
+// word - see simpleMdmClient.ts's getDeviceStatus doc comment.
+// `enrollment_channel` (singular) never existed - the real field is
+// `enrollment_channels` (plural, an array); removed rather than fixed,
+// since nothing here actually needs it (getDeviceStatus now uses
+// `status` directly instead).
 export interface SimpleMdmDeviceAttributes {
   name?: string;
   device_name?: string;
@@ -347,14 +355,19 @@ export interface SimpleMdmDeviceAttributes {
   os_version?: string;
   model_name?: string;
   serial_number?: string;
-  enrollment_channel?: string;
+  filevault_enabled?: boolean;
 }
 
-// Not confirmed against a live response - see this section's own top
-// comment.
+// Confirmed against a real device response (2026-08-26) - and confirmed
+// there is genuinely no status field of any kind (no verified/pending/
+// failed concept exists here at all, unlike Fleet's own per-profile
+// status). group_count/device_count exist in the real response too
+// (how many groups/devices this profile is assigned to) but aren't
+// currently read - see simpleMdmClient.ts's getDeviceStatus doc comment
+// for what this means for the dashboard's MDM lockdown display.
 export interface SimpleMdmProfileAttributes {
   name?: string;
-  status?: string;
+  profile_identifier?: string;
 }
 
 // SimpleMDM's installed_apps is a plain app inventory (name/version/
