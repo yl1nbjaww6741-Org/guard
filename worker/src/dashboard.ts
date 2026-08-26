@@ -249,7 +249,7 @@ export function renderDashboard(): string {
 
   <section>
     <h2>Installed apps</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Pulled from Fleet's own inventory - one click to block/allow (Santa) or whitelist (excluded from screen-capture scanning), instead of manually finding a Team ID in Terminal or typing a bundle ID by hand. This is the one place to add new entries to either list, by app name - the Safe Apps and Santa Rules sections above show what's already configured. Every built-in Apple app on this Mac is always pinned at the top, even if Fleet hasn't inventoried it - Block/Allow stays disabled for one of those until Fleet reports real signing info for it, but Whitelist works immediately either way.</div>
+    <div class="subtitle" style="margin-bottom: 0;">Pulled from the MDM's own inventory (SimpleMDM) - one click to block/allow (Santa) or whitelist (excluded from screen-capture scanning), instead of manually finding a Team ID in Terminal or typing a bundle ID by hand. This is the one place to add new entries to either list, by app name - the Safe Apps and Santa Rules sections above show what's already configured. Every built-in Apple app on this Mac is always pinned at the top, from a hand-kept list (see knownApps.ts), regardless of whether the live inventory reports it - Block/Allow stays disabled until real signing info is available for one of those, but Whitelist works immediately either way. Anything else still carrying a com.apple.* bundle ID (background helpers, framework-hosted components) is filtered out entirely, not shown - nobody's realistically Block/Allow-ing or Whitelisting those, and SimpleMDM's inventory reports far more of them than Fleet's own scoped query ever surfaced.</div>
     <table id="installed-apps-table">
       <thead><tr><th>Name</th><th>Version</th><th>Detected identifier</th><th></th></tr></thead>
       <tbody id="installed-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
@@ -811,7 +811,25 @@ async function loadInstalledApps(host) {
     identifier: null,
     rule_type: null,
   });
-  const restRows = (apps || []).filter((a) => !a.bundle_identifier || !knownBundleIds.has(a.bundle_identifier));
+  // Real complaint, fixed here rather than by re-narrowing the inventory
+  // fetch itself: Fleet's old getHostSoftware call used the
+  // macos_applications=true param, which scoped results to top-level
+  // /Applications entries - SimpleMDM's installed_apps has no
+  // equivalent scoping param and reports every com.apple.* system
+  // component it finds (background helpers, framework-hosted mini-apps,
+  // etc.), not just things a human would recognize. knownApps.ts already
+  // exists specifically to make every REAL, recognizable built-in Apple
+  // app manageable by name (see its own top comment) - anything else
+  // still carrying a com.apple.* bundle ID here is exactly the noise
+  // that curated list was meant to make unnecessary to wade through, not
+  // a second category of app anyone's actually going to Block/Allow or
+  // Whitelist. Filtered out of restRows specifically (not knownRows, and
+  // not third-party apps generally) - a third-party app with no bundle
+  // ID at all still shows (existing "no bundle ID" placeholder handles
+  // it), only Apple's own unrecognized noise is hidden.
+  const restRows = (apps || []).filter(
+    (a) => !a.bundle_identifier || (!knownBundleIds.has(a.bundle_identifier) && !a.bundle_identifier.startsWith("com.apple."))
+  );
   const allRows = [...knownRows, ...restRows];
 
   const body = document.getElementById("installed-apps-body");
