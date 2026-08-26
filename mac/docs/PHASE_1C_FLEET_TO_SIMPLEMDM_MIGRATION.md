@@ -10,29 +10,39 @@ Hetzner plan moot - there's no Fleet stack left to relocate once this
 completes.
 
 **Hands-on-hardware runbook, same shape as `PHASE_0_SETUP.md` and
-`PHASE_5_LOCKDOWN.md` - nothing in Phases 1-3 below is executable from
-a sandboxed session with no access to the physical Mac, Apple Business
-Manager, or the SimpleMDM/Fleet consoles. Run those yourself, on a real
-terminal/browser.** Phase 4 (the Worker code) is being built in this
-session; Phase 5 onward (decommissioning Fleet) needs your own
-confirmation before anything real gets destroyed.
+`PHASE_5_LOCKDOWN.md` - Phases 1-4 below needed the physical Mac, Apple
+Business Manager, and the SimpleMDM/Fleet consoles directly, and are
+now done.** Phase 5 (the Worker code) is built and pushed, sitting at
+`deploy-worker.yml`'s gated `deploy` job awaiting the remaining setup
+below before it's safe to approve. Phase 6 (decommissioning Fleet)
+needs your own confirmation before anything real gets destroyed.
 
 ## Status so far
 
 - [x] SimpleMDM account created, Recovery Lock confirmed available on
       the plan, re-enrollment mechanics confirmed straightforward on
-      this Mac's actual ABM setup (see "Real open questions" below -
-      both real blockers resolved)
+      this Mac's actual ABM setup
 - [x] All 7 real `.mobileconfig` profiles uploaded to SimpleMDM as
       Custom Configuration Profiles (`chrome-policy`, `restrictions`,
       `santa-config`, `santa-tcc`, `system-extension`, `pppc`, `dns`)
-- [x] Recovery Lock profile being created in SimpleMDM's console (real
-      screenshot confirmed: device-profile-based, "Generate a random
-      password for each device," scoped to Apple Silicon)
-- [ ] Device not yet unenrolled from Fleet / enrolled in SimpleMDM
-- [ ] Profiles not yet assigned to the actual device in SimpleMDM
-- [ ] Worker code (`simpleMdmClient.ts` and callers) not yet built -
-      one real structural gap found first, see below
+- [x] Recovery Lock profile created in SimpleMDM's console
+- [x] Device unenrolled from Fleet, enrolled in SimpleMDM
+- [x] Profiles assigned to the real device
+- [x] **Phase 4's full verification checklist passed** - Santa
+      `Mode: Monitor` confirmed live (rules intact: Certificate 1,
+      TeamID 1, plus a synced CDHash rule; sync to
+      `panel.lukep009.download` confirmed still working, untouched by
+      the MDM switch, exactly as designed), daemon communication
+      working (no TCC error), plus the rest of the checklist (Chrome
+      extension forced/locked, non-Chrome browsers refused, PPPC
+      grants, DNS blocklist, Recovery Lock reboot-tested) all confirmed
+      by the user directly
+- [x] Worker code (`simpleMdmClient.ts` and callers) built, typechecked
+      clean, `wrangler deploy --dry-run` verified - pushed, sitting at
+      the gated `deploy` job
+- [ ] `SIMPLEMDM_API_KEY` secret not yet set, real SimpleMDM device ID
+      not yet plugged into `DEFAULT_SIMPLEMDM_DEVICE_ID` - **do this
+      before approving the pending deploy**
 - [ ] Fleet/Fly.io not yet decommissioned
 
 ## One real gap, found while building the Worker side - decide how to handle it
@@ -144,20 +154,17 @@ API key as the username and a blank password
 
 ## Step-by-step migration sequence
 
-### Phase 1 - Final pre-cutover checks (you, on the real Mac/consoles)
+### Phase 1 - Final pre-cutover checks (you, on the real Mac/consoles) - done
 
-- [ ] Confirm the 7 uploaded profiles in SimpleMDM's console actually
-      match what's committed in this repo's `profiles/` directory -
-      the files sent to you are the real, currently-deployed-via-Fleet
-      versions as of this session; re-confirm nothing's drifted since.
-- [ ] Finish creating the Recovery Lock profile (per your screenshot -
-      "Generate a random password for each device," scoped to Apple
-      Silicon).
-- [ ] Generate a SimpleMDM API key (account settings) - needed for
-      Phase 4's Worker testing, not needed yet for Phases 2-3.
-- [ ] Decide which of the three app-install-gap options above to take.
+- [x] Confirmed the 7 uploaded profiles in SimpleMDM's console match
+      what's committed in this repo's `profiles/` directory
+- [x] Recovery Lock profile created ("Generate a random password for
+      each device," scoped to Apple Silicon)
+- [x] SimpleMDM API key generated
+- [x] App-install-gap decision made: option 2, simplify to
+      `push_apps`'s real semantics (see that section above)
 
-### Phase 2 - Unenroll from Fleet
+### Phase 2 - Unenroll from Fleet - done
 
 1. Fleet's host page for this Mac -> Actions -> **Turn off MDM** (or
    equivalent unenroll action - exact wording depends on your Fleet
@@ -171,7 +178,7 @@ API key as the username and a blank password
    library, config profiles) - keep it as a rollback reference until
    Phase 6 confirms SimpleMDM is fully working.
 
-### Phase 3 - Enroll in SimpleMDM
+### Phase 3 - Enroll in SimpleMDM - done
 
 1. In Apple Business Manager, reassign this device (serial
    `GGV7PVVR96`, per `wrangler.toml`'s own `DEFAULT_FLEET_HOST` value)
@@ -186,30 +193,33 @@ API key as the username and a blank password
    Recovery Lock and several of the restriction profiles to actually
    take effect).
 
-### Phase 4 - Assign profiles, verify each one
+### Phase 4 - Assign profiles, verify each one - done, all checks passed
 
 1. In SimpleMDM, assign all 7 uploaded Custom Configuration Profiles
    plus the new Recovery Lock profile to this device (or a device
    group containing it).
 2. Re-run Phase 1's own real verification checklist (from
    `mac/README.md`), this time against SimpleMDM instead of Fleet:
-   - [ ] `sudo profiles list` shows all 7 profiles applied
-   - [ ] Chrome shows the ContentGuard extension as "installed by your
+   - [x] `sudo profiles list` shows all 7 profiles applied
+   - [x] Chrome shows the ContentGuard extension as "installed by your
          administrator," no remove control (chrome-policy.mobileconfig)
-   - [ ] Non-Chrome browsers (Safari included) still refused to launch
+   - [x] Non-Chrome browsers (Safari included) still refused to launch
          (restrictions.mobileconfig)
-   - [ ] `sudo santactl status` shows `Mode: Monitor`, existing rules
-         still enforced (santa-config.mobileconfig)
-   - [ ] `santactl status` no longer errors on daemon communication
+   - [x] `sudo santactl status` shows `Mode: Monitor`, existing rules
+         still enforced (santa-config.mobileconfig) - confirmed live:
+         Certificate 1, TeamID 1 (the two StaticRules), plus a synced
+         CDHash rule; sync to `panel.lukep009.download` still working,
+         untouched by the MDM switch as designed
+   - [x] `santactl status` no longer errors on daemon communication
          (santa-tcc.mobileconfig's Full Disk Access grants)
-   - [ ] Santa's System Extension activated without an interactive
+   - [x] Santa's System Extension activated without an interactive
          prompt (system-extension.mobileconfig)
-   - [ ] `ContentGuardAgent` still has Screen Recording/Accessibility
+   - [x] `ContentGuardAgent` still has Screen Recording/Accessibility
          without a re-grant prompt (pppc.mobileconfig)
-   - [ ] DoH-provider blocklist still active (dns.mobileconfig)
-   - [ ] Recovery Lock actually set - the real test is a reboot into
-         Recovery, confirming it asks for the password
-3. **Only once every box above passes** - move to Phase 5.
+   - [x] DoH-provider blocklist still active (dns.mobileconfig)
+   - [x] Recovery Lock actually set - reboot-tested, asked for the
+         password
+3. **Every box above passed** - move to Phase 5.
 
 ### Phase 5 - Cut the Worker over (this session's part)
 
