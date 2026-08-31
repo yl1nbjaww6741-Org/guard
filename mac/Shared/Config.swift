@@ -10,16 +10,32 @@ import Foundation
 enum ContentGuardConfig {
     // MARK: - Capture / detection
 
-    /// 5 seconds, changed from the original 3.0 by explicit user decision
-    /// (2026-08-24) as a battery measure - a deliberate divergence from the
-    /// Android app's 3s cadence this originally matched. The real tradeoff,
-    /// stated rather than buried: worst-case detection latency moves from
-    /// ~3s to ~5s. Everything downstream that is defined as a multiple of
-    /// this interval (frameStallGraceSeconds at 10x,
-    /// captureStreamStallGraceSeconds at 5x) was rescaled in the same
-    /// change - the margins those grace windows exist to provide are
+    /// 3 seconds again, by a second explicit user decision (2026-08-27)
+    /// reversing the 3 -> 5 battery-motivated change from 2026-08-24 (see
+    /// that change's own reasoning below, kept for history) - matches the
+    /// Android app's original 3s cadence once more. The real tradeoff,
+    /// stated rather than buried, is exactly the mirror image of the
+    /// previous change: worst-case detection latency moves back from ~5s
+    /// to ~3s, at the cost of the battery savings the 5s cadence bought.
+    /// Motivated by a real live miss (QuickTime playing content that
+    /// wasn't caught in time) where lower detection latency mattered more
+    /// than the battery cost. Everything downstream that is defined as a
+    /// multiple of this interval (frameStallGraceSeconds at 10x,
+    /// captureStreamStallGraceSeconds at 5x) was rescaled back down in the
+    /// same change - the margins those grace windows exist to provide are
     /// relative to the cadence, not absolute numbers.
-    static let captureIntervalSeconds: TimeInterval = 5.0
+    ///
+    /// Previous (2026-08-24) reasoning, kept for history: changed from the
+    /// original 3.0 to 5.0 as a battery measure - a deliberate divergence
+    /// from the Android app's 3s cadence this originally matched.
+    ///
+    /// Note this intentionally no longer matches the Chrome extension's
+    /// own CAPTURE_INTERVAL_MS (chrome-extension/background/offscreen.js),
+    /// which still reads 5000 and was never asked to change here - that
+    /// file's own comment ("the whole point of this feature being 'same 5
+    /// second capture' as the native Mac agent") is now stale until/unless
+    /// someone deliberately updates it to match.
+    static let captureIntervalSeconds: TimeInterval = 3.0
 
     /// Longest-side pixel dimension SCStream is asked to deliver, rather
     /// than the display's own full resolution (what CaptureManager used to
@@ -115,9 +131,12 @@ enum ContentGuardConfig {
     /// observed going as high as ~2x nominal between frames (measured as
     /// ~6s at the original 3s cadence) even in confirmed-healthy operation
     /// - this needs comfortable margin above that, not a tight bound.
-    /// Rescaled 30 -> 50 when captureIntervalSeconds moved 3 -> 5: the
-    /// margin is a multiple of the cadence, not an absolute number.
-    static let frameStallGraceSeconds: TimeInterval = 50.0
+    /// Rescaled 30 -> 50 when captureIntervalSeconds moved 3 -> 5, then
+    /// back to 30 when captureIntervalSeconds moved back 5 -> 3
+    /// (2026-08-27) - the margin is a multiple of the cadence, not an
+    /// absolute number, so it tracks captureIntervalSeconds's own value
+    /// either direction.
+    static let frameStallGraceSeconds: TimeInterval = 30.0
 
     /// How long CaptureManager (agent-side) waits since the last frame it
     /// actually delivered before concluding its own SCStream has silently
@@ -132,12 +151,15 @@ enum ContentGuardConfig {
     /// stall well before the daemon's more disruptive fail-closed response
     /// ever needs to fire at all, not race it. See CaptureManager.swift's
     /// startStreamHealthCheck(). Rescaled 15 -> 25 alongside
-    /// captureIntervalSeconds moving 3 -> 5 (same 5x-the-cadence ratio as
-    /// before): at a 5s cadence with observed healthy jitter of up to ~2x
-    /// nominal, a 15s threshold would sit close enough to real inter-frame
-    /// gaps to risk rebuilding perfectly healthy streams - churn that would
-    /// itself cost battery, the exact thing the cadence change is for.
-    static let captureStreamStallGraceSeconds: TimeInterval = 25.0
+    /// captureIntervalSeconds moving 3 -> 5, then back to 15 alongside
+    /// captureIntervalSeconds moving back 5 -> 3 (2026-08-27) - same
+    /// 5x-the-cadence ratio throughout, in either direction. At the
+    /// original 3s cadence this was already confirmed to sit with
+    /// comfortable margin above the observed healthy jitter (up to ~2x
+    /// nominal, ~6s at a 3s cadence) without risking a false rebuild of a
+    /// perfectly healthy stream - it's reverting to a value this project
+    /// already ran with, not an unproven guess.
+    static let captureStreamStallGraceSeconds: TimeInterval = 15.0
 
     /// Found the hard way, on the real Mac, via a full `sudo reboot` (not
     /// just a launchd bootout/bootstrap cycle - see mac/README.md): the
