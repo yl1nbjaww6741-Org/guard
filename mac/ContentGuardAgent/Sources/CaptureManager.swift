@@ -23,8 +23,20 @@ import ScreenCaptureKit
 /// log is the whole point of them existing.
 private let logger = Logger(subsystem: "com.contentguard.agent", category: "CaptureManager")
 
+/// Identifies which independent capture pipeline a frame came from - one
+/// whole-display SCStream per display (original design), or one dedicated
+/// per-window SCStream for a risky (non-safe-listed) app's window (see
+/// CaptureManager.riskyWindowStreams). FrameProcessor's own per-source
+/// state (lastFrameHash) is keyed on this rather than needing two separate
+/// dictionaries, and every detection log line names exactly which source
+/// triggered it. Hashable so it can be a dictionary key directly.
+enum CaptureSource: Hashable {
+    case display(CGDirectDisplayID)
+    case window(CGWindowID)
+}
+
 protocol CaptureManagerDelegate: AnyObject {
-    func captureManager(_ manager: CaptureManager, didCapture pixelBuffer: CVPixelBuffer, on displayID: CGDirectDisplayID)
+    func captureManager(_ manager: CaptureManager, didCapture pixelBuffer: CVPixelBuffer, from source: CaptureSource)
 
     /// Called INSTEAD of didCapture when ScreenCaptureKit delivered a frame
     /// carrying no new content (see frameStatus(of:)). The frame is not
@@ -57,6 +69,15 @@ final class CaptureManager: NSObject {
     private let appScopeManager: AppScopeManager
     private let overlayManager: OverlayManager
     private var streams: [CGDirectDisplayID: SCStream] = [:]
+
+    /// One dedicated SCStream per currently-open risky (non-safe-listed)
+    /// app window, IN ADDITION to the whole-display streams above - see
+    /// AppScopeManager.riskyAppWindows()'s doc comment for the resolution-
+    /// dilution gap this closes. Managed on its own timer
+    /// (riskyWindowPollTimer), not folded into rebuildAllStreams() - see
+    /// startRiskyWindowPoll()'s doc comment for why.
+    private var riskyWindowStreams: [CGWindowID: SCStream] = [:]
+    private var riskyWindowPollTimer: DispatchSourceTimer?
     /// Explicitly .utility, matching FrameProcessor's own processing queue
     /// (which always had it - this one was simply missed). Left unspecified,
     /// a dispatch queue can inherit the priority of whatever enqueues onto
@@ -152,6 +173,7 @@ final class CaptureManager: NSObject {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        riskyWindowPollTimer?.cancel()
     }
 
     func start() async throws {
@@ -168,6 +190,7 @@ final class CaptureManager: NSObject {
             self?.hasStartedOnce = true
         }
         startStreamHealthCheck()
+        startRiskyWindowPoll()
     }
 
     func stop() async {
@@ -175,6 +198,10 @@ final class CaptureManager: NSObject {
             try? await stream.stopCapture()
         }
         streams.removeAll()
+        for (_, stream) in riskyWindowStreams {
+            try? await stream.stopCapture()
+        }
+        riskyWindowStreams.removeAll()
     }
 
     // MARK: - Stream (re)building
@@ -299,6 +326,133 @@ final class CaptureManager: NSObject {
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
         try await stream.startCapture()
         streams[display.displayID] = stream
+    }
+
+    /// Builds one dedicated SCStream for a single risky-app window, using
+    /// SCContentFilter(desktopIndependentWindow:) rather than
+    /// SCContentFilter(display:excludingWindows:) - this captures exactly
+    /// that window's own on-screen content, independent of the desktop
+    /// around it, so a small window on a large display gets its full
+    /// relative resolution instead of being diluted by whatever empty
+    /// desktop surrounds it in the whole-display path.
+    private func buildWindowStream(for window: SCWindow) async throws {
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+
+        let config = SCStreamConfiguration()
+        config.minimumFrameInterval = CMTime(
+            seconds: ContentGuardConfig.captureIntervalSeconds,
+            preferredTimescale: 600
+        )
+        config.showsCursor = false
+        config.pixelFormat = kCVPixelFormatType_32BGRA
+
+        // Same "capture at the smallest size the pipeline can actually
+        // use" reasoning as buildStream(for:) above, applied to the
+        // window's own frame instead of a whole display's - this is the
+        // entire point of a dedicated per-window stream: the window's
+        // real on-screen size, not diluted by however much of the
+        // display around it is empty desktop. A window already smaller
+        // than maxCaptureDimension is captured at its own size, same as
+        // an already-small display in buildStream(for:).
+        //
+        // Explicit Double(...) conversions, not left implicit - SCWindow.frame
+        // is a CGRect, whose width/height are CGFloat, a different type from
+        // the Double captureScale below (Swift does not implicitly convert
+        // between them in an arithmetic expression the way it would for two
+        // Ints of different widths).
+        let windowWidth = Double(window.frame.width)
+        let windowHeight = Double(window.frame.height)
+        let longerSide = max(windowWidth, windowHeight)
+        let captureScale = longerSide > 0
+            ? min(1.0, Double(ContentGuardConfig.maxCaptureDimension) / longerSide)
+            : 1.0
+        config.width = max(2, (Int(windowWidth * captureScale) / 2) * 2)
+        config.height = max(2, (Int(windowHeight * captureScale) / 2) * 2)
+
+        let stream = SCStream(filter: filter, configuration: config, delegate: self)
+        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
+        try await stream.startCapture()
+        riskyWindowStreams[window.windowID] = stream
+    }
+
+    // MARK: - Risky-window stream reconciliation
+
+    /// Manages riskyWindowStreams on its own timer, deliberately decoupled
+    /// from rebuildAllStreams() and NOT wired into
+    /// AppScopeManager.handleAppLifecycleChange's launch/quit notification
+    /// path the way the safe-app exclusion list is. That path is
+    /// narrowly gated to safe-app transitions only, for a real, already-
+    /// measured battery reason (see that method's own doc comment) - and
+    /// under this project's own allowlist model, "risky" means "every app
+    /// NOT on the short safe list," which in practice is most apps on the
+    /// system. Reacting to every risky app's launch/quit the same way
+    /// would mean rebuilding on nearly every app launch/quit system-wide -
+    /// reintroducing exactly the cost (and brief capture gap) that safe-
+    /// app-only gating exists to avoid, just for a much bigger set of
+    /// apps.
+    ///
+    /// Polling at captureIntervalSeconds instead - the same cadence
+    /// capture itself already runs at, so a newly-opened risky window
+    /// gets its own stream within one capture tick, no slower than a
+    /// notification-triggered rebuild would have been - and diffing
+    /// incrementally rather than tearing every window stream down and
+    /// rebuilding it every tick: an unchanged window's stream keeps
+    /// delivering frames continuously (cheap), only genuinely new windows
+    /// get a fresh SCStream and genuinely closed ones get torn down
+    /// (both real, one-time costs, not paid every tick for nothing).
+    private func startRiskyWindowPoll() {
+        let t = DispatchSource.makeTimerSource(queue: outputQueue)
+        t.schedule(
+            deadline: .now() + ContentGuardConfig.captureIntervalSeconds,
+            repeating: ContentGuardConfig.captureIntervalSeconds,
+            leeway: .seconds(1)
+        )
+        t.setEventHandler { [weak self] in
+            Task { await self?.reconcileRiskyWindowStreams() }
+        }
+        t.resume()
+        riskyWindowPollTimer = t
+    }
+
+    private func reconcileRiskyWindowStreams() async {
+        // A deliberate pause (either reason - see isPaused's own doc
+        // comment) means nothing should be capturing anything right now,
+        // the same guard checkStreamHealth() applies for the same reason.
+        guard !isPaused else { return }
+
+        do {
+            try await appScopeManager.refresh()
+        } catch {
+            // Best-effort, same reasoning as every other transient
+            // SCShareableContent failure in this file - keep whatever
+            // riskyWindowStreams already exist rather than tearing them
+            // down over one failed snapshot.
+            return
+        }
+
+        let ownWindowNumbers = overlayManager.ownWindowNumbers
+        let currentWindows = appScopeManager.riskyAppWindows()
+            .filter { !ownWindowNumbers.contains(Int($0.windowID)) }
+        let currentByID = Dictionary(uniqueKeysWithValues: currentWindows.map { ($0.windowID, $0) })
+
+        // Stop streams for windows that closed, or whose app just became
+        // safe-listed (a dashboard sync could newly whitelist an app
+        // whose window already has a dedicated stream running).
+        for (windowID, stream) in riskyWindowStreams where currentByID[windowID] == nil {
+            try? await stream.stopCapture()
+            riskyWindowStreams.removeValue(forKey: windowID)
+        }
+
+        // Start streams only for genuinely new risky windows - an
+        // already-running window's stream is left alone rather than
+        // restarted, per this method's own doc comment above.
+        for (windowID, window) in currentByID where riskyWindowStreams[windowID] == nil {
+            do {
+                try await buildWindowStream(for: window)
+            } catch {
+                NSLog("ContentGuardAgent: failed to build dedicated capture stream for window \(windowID) - \(error)")
+            }
+        }
     }
 
     // MARK: - Self-healing stream health check
@@ -510,8 +664,14 @@ extension CaptureManager: SCStreamOutput {
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, sampleBuffer.isValid else { return }
 
-        let displayID = streams.first(where: { $0.value === stream })?.key
-        guard let displayID else { return }
+        let source: CaptureSource
+        if let displayID = streams.first(where: { $0.value === stream })?.key {
+            source = .display(displayID)
+        } else if let windowID = riskyWindowStreams.first(where: { $0.value === stream })?.key {
+            source = .window(windowID)
+        } else {
+            return
+        }
 
         // Set before the unchanged-frame branch below, deliberately: a frame
         // arriving at all is the liveness signal, whether or not it carries
@@ -544,7 +704,7 @@ extension CaptureManager: SCStreamOutput {
         // the exact stall-detection problem this ordering avoids.
         guard let pixelBuffer = sampleBuffer.imageBuffer else { return }
 
-        delegate?.captureManager(self, didCapture: pixelBuffer, on: displayID)
+        delegate?.captureManager(self, didCapture: pixelBuffer, from: source)
     }
 
     /// Reads SCStreamFrameInfoStatus off the sample buffer's attachments -
@@ -608,12 +768,26 @@ extension CaptureManager: SCStreamOutput {
 
 extension CaptureManager: SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        // A stream can die outside of sleep/wake too (e.g. the display
-        // disconnects mid-capture) - treat any unexpected stop the same way
-        // as a display-change event, since "rebuild everything from a fresh
-        // SCShareableContent snapshot" is correct either way.
-        Task {
-            try? await rebuildAllStreams()
+        // A display stream dying always needs the heavier, full rebuild
+        // (fresh SCShareableContent snapshot, every display stream
+        // rebuilt from scratch) - unchanged from before per-window
+        // capture existed. The display disconnecting mid-capture is the
+        // typical real-world cause.
+        if streams.contains(where: { $0.value === stream }) {
+            Task {
+                try? await rebuildAllStreams()
+            }
+            return
+        }
+        // A risky-window stream dying (most commonly: its app quit) only
+        // needs that one entry cleaned up here - reconcileRiskyWindowStreams()'s
+        // next poll tick would notice the window is gone anyway via a
+        // fresh SCShareableContent snapshot, but removing the dead
+        // reference immediately avoids holding onto an already-stopped
+        // stream in the meantime, and avoids paying for a full display-
+        // stream rebuild over something that never touched them.
+        if let windowID = riskyWindowStreams.first(where: { $0.value === stream })?.key {
+            riskyWindowStreams.removeValue(forKey: windowID)
         }
     }
 }

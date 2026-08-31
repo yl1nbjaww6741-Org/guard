@@ -65,14 +65,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppDelegate: CaptureManagerDelegate {
-    func captureManager(_ manager: CaptureManager, didCapture pixelBuffer: CVPixelBuffer, on displayID: CGDirectDisplayID) {
+    func captureManager(_ manager: CaptureManager, didCapture pixelBuffer: CVPixelBuffer, from source: CaptureSource) {
         guard let frameProcessor else {
             // No classifier loaded - already covering from
             // applicationDidFinishLaunching's failure path, nothing more to
             // do per-frame.
             return
         }
-        frameProcessor.process(pixelBuffer: pixelBuffer, displayID: displayID)
+        frameProcessor.process(pixelBuffer: pixelBuffer, source: source)
     }
 
     /// A frame ScreenCaptureKit reported as carrying no new content still
@@ -144,8 +144,8 @@ extension AppDelegate: FrameProcessorDelegate {
     // still fully active - that protects against someone killing the agent
     // process itself, a different concern from "what happens right after a
     // detection."
-    func frameProcessor(_ processor: FrameProcessor, didDetect detection: BlackoutData, on displayID: CGDirectDisplayID) {
-        NSLog("ContentGuardAgent: DETECTED - class=\(detection.detectionClass) confidence=\(detection.confidence) display=\(displayID)")
+    func frameProcessor(_ processor: FrameProcessor, didDetect detection: BlackoutData, from source: CaptureSource) {
+        NSLog("ContentGuardAgent: DETECTED - class=\(detection.detectionClass) confidence=\(detection.confidence) source=\(source)")
         quitFrontmostApp()
     }
 

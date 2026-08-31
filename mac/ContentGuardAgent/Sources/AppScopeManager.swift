@@ -147,6 +147,42 @@ final class AppScopeManager: NSObject {
         }
     }
 
+    /// The complement of safeAppWindows(): every on-screen window NOT
+    /// belonging to a safe-listed app, as of the last refresh(). Used by
+    /// CaptureManager to give each one its own dedicated, higher-
+    /// resolution SCStream (SCContentFilter(desktopIndependentWindow:))
+    /// alongside the existing whole-display capture - see
+    /// CaptureManager.swift's riskyWindowStreams for the real gap this
+    /// closes: a small window on a large display gets diluted almost to
+    /// nothing once the whole-display frame is downscaled to
+    /// ContentGuardConfig.maxCaptureDimension, exactly the gap a user
+    /// shrinking a risky app's window would exploit (the reported concern
+    /// that motivated this: QuickTime, deliberately made small so the
+    /// blocker "wouldn't see it") - the classifier still technically sees
+    /// something, just at a resolution it can't use well. Not yet
+    /// confirmed live on the real Mac, same as everything else in this
+    /// file added without hardware to test against.
+    ///
+    /// A window with no resolvable owningApplication is included here
+    /// (fails toward MORE dedicated capture, not less) - the mirror image
+    /// of safeAppWindows()'s own nil-owner handling above, which fails
+    /// toward NOT excluding such a window from the whole-display path
+    /// either. Deliberately NOT scoped to .regular-activation-policy apps
+    /// the way allRunningRegularAppsAreSafe() is - that narrower scope
+    /// exists specifically to make "is anything risky running at all"
+    /// reachable as a true/false answer; this method only decides which
+    /// of possibly-several already-on-screen windows get extra capture
+    /// attention, so there's no equivalent reason to narrow it, and real
+    /// cost (a missed window) to narrowing it wrongly.
+    func riskyAppWindows() -> [SCWindow] {
+        guard let latestContent else { return [] }
+        let safeBundleIDs = effectiveSafeAppBundleIDs
+        return latestContent.windows.filter { window in
+            guard let owner = window.owningApplication else { return true }
+            return !safeBundleIDs.contains(owner.bundleIdentifier)
+        }
+    }
+
     /// NSWorkspace posts launch/terminate notifications synchronously on the
     /// main thread, but refresh() has to be async (SCShareableContent's own
     /// API is async) - so this just kicks off a Task rather than doing the

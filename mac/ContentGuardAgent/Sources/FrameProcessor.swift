@@ -9,7 +9,7 @@ import CoreVideo
 import Foundation
 
 protocol FrameProcessorDelegate: AnyObject {
-    func frameProcessor(_ processor: FrameProcessor, didDetect detection: BlackoutData, on displayID: CGDirectDisplayID)
+    func frameProcessor(_ processor: FrameProcessor, didDetect detection: BlackoutData, from source: CaptureSource)
     func frameProcessorDidProcessFrame(_ processor: FrameProcessor)
 }
 
@@ -18,7 +18,12 @@ final class FrameProcessor {
 
     private let classifier: NudeNetClassifier
     private let ciContext = CIContext()
-    private var lastFrameHash: [CGDirectDisplayID: UInt64] = [:]
+    /// Keyed on CaptureSource, not just a display - a dedicated per-window
+    /// risky-app stream (see CaptureManager.riskyWindowStreams) needs its
+    /// own independent change-hash state exactly like a display does, so
+    /// this generalizes to whichever capture pipeline the frame came from
+    /// rather than needing two separate dictionaries.
+    private var lastFrameHash: [CaptureSource: UInt64] = [:]
     private let processingQueue = DispatchQueue(label: "com.contentguard.agent.frame-processing", qos: .utility)
 
     /// Skin-tone prefilter threshold - deliberately permissive, but no
@@ -74,13 +79,13 @@ final class FrameProcessor {
         self.classifier = classifier
     }
 
-    func process(pixelBuffer: CVPixelBuffer, displayID: CGDirectDisplayID) {
+    func process(pixelBuffer: CVPixelBuffer, source: CaptureSource) {
         processingQueue.async { [weak self] in
-            self?.processOnQueue(pixelBuffer: pixelBuffer, displayID: displayID)
+            self?.processOnQueue(pixelBuffer: pixelBuffer, source: source)
         }
     }
 
-    private func processOnQueue(pixelBuffer: CVPixelBuffer, displayID: CGDirectDisplayID) {
+    private func processOnQueue(pixelBuffer: CVPixelBuffer, source: CaptureSource) {
         defer { delegate?.frameProcessorDidProcessFrame(self) }
 
         let thumbnail = downscale(pixelBuffer, targetDimension: 64)
@@ -91,12 +96,12 @@ final class FrameProcessor {
             // -> positive" policy at the classification stage. A frame we
             // can't even downscale is at least as uncertain as one the
             // classifier fails on.
-            reportUncertainAsPositive(displayID: displayID)
+            reportUncertainAsPositive(source: source)
             return
         }
 
         let hash = perceptualHash(of: thumbnail)
-        if let lastHash = lastFrameHash[displayID], hammingDistance(hash, lastHash) < 4 {
+        if let lastHash = lastFrameHash[source], hammingDistance(hash, lastHash) < 4 {
             // Materially unchanged since last frame - skip the rest of the
             // pipeline entirely. This is a pure performance optimization,
             // not a safety-relevant decision, so no fail-open/fail-closed
@@ -104,7 +109,7 @@ final class FrameProcessor {
             // conclusion applied last time still applies.
             return
         }
-        lastFrameHash[displayID] = hash
+        lastFrameHash[source] = hash
 
         let (skinRatio, maxBlockSkinRatio) = skinAnalysis(of: thumbnail)
         // No per-frame logging here, deliberately. The 4x4-grid fix this
@@ -157,7 +162,7 @@ final class FrameProcessor {
             scaledForModel = downscale(pixelBuffer, targetDimension: modelInputDimension)
         }
         guard let scaledForModel else {
-            reportUncertainAsPositive(displayID: displayID)
+            reportUncertainAsPositive(source: source)
             return
         }
 
@@ -178,7 +183,7 @@ final class FrameProcessor {
                     // error case.
                     return
                 }
-                report(detectionClass: detectionClass, confidence: confidence, displayID: displayID)
+                report(detectionClass: detectionClass, confidence: confidence, source: source)
             }
         } catch {
             NSLog("ContentGuardAgent: classify() threw \(error) - failing closed")
@@ -191,18 +196,18 @@ final class FrameProcessor {
             // across this session's testing, and was itself a real,
             // measured cost: it ran unconditionally on every single
             // captured frame, indefinitely, for as long as the agent runs).
-            reportUncertainAsPositive(displayID: displayID)
+            reportUncertainAsPositive(source: source)
         }
     }
 
-    private func report(detectionClass: String, confidence: Float, displayID: CGDirectDisplayID) {
+    private func report(detectionClass: String, confidence: Float, source: CaptureSource) {
         let detection = BlackoutData(confidence: confidence, detectionClass: detectionClass, timestamp: Date().timeIntervalSince1970)
-        delegate?.frameProcessor(self, didDetect: detection, on: displayID)
+        delegate?.frameProcessor(self, didDetect: detection, from: source)
     }
 
-    private func reportUncertainAsPositive(displayID: CGDirectDisplayID) {
+    private func reportUncertainAsPositive(source: CaptureSource) {
         let detection = BlackoutData(confidence: 1.0, detectionClass: "UNCERTAIN_FAIL_CLOSED", timestamp: Date().timeIntervalSince1970)
-        delegate?.frameProcessor(self, didDetect: detection, on: displayID)
+        delegate?.frameProcessor(self, didDetect: detection, from: source)
     }
 
     // MARK: - Downscaling
