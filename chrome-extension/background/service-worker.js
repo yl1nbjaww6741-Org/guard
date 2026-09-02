@@ -115,6 +115,27 @@ async function syncKeywords() {
   // list in this project) so there's no meaningful cost to always doing
   // a full replace, and it can never drift out of sync with a
   // partially-applied diff.
+  // workerUrl IS the dashboard's own origin (options.js saves the exact
+  // same panel URL this fetch just hit) - excluded from every keyword
+  // rule below for the same reason keyword-blocker.js's content script
+  // exempts it from its own page-text scan (see that file's matching
+  // comment): the dashboard necessarily renders each blocked keyword as
+  // plain text (that's the whole point of the Keyword blocker section),
+  // so without this a keyword worth blocking would also block the page
+  // used to manage it. Derived from workerUrl, not hardcoded, so it
+  // tracks whichever domain is actually configured (custom domain or
+  // the *.workers.dev fallback) rather than going stale if that changes.
+  let panelHostname = null;
+  try {
+    panelHostname = new URL(workerUrl).hostname;
+  } catch {
+    // Already validated by options.js's own `new URL(workerUrl)` check
+    // before this was ever saved to storage - a malformed value here
+    // would mean storage was edited outside the options page. Fails
+    // toward no exemption (every rule still gets added, just without
+    // excludedRequestDomains) rather than toward skipping the sync.
+  }
+
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
   const removeRuleIds = existing.map((r) => r.id);
   const addRules = keywords.map((keyword) => ({
@@ -126,6 +147,7 @@ async function syncKeywords() {
       resourceTypes: ["main_frame"], // Top-level navigation only - a
       // keyword incidentally present in a sub-resource URL (an ad
       // script, a tracking pixel) isn't the page the user is visiting.
+      ...(panelHostname ? { excludedRequestDomains: [panelHostname] } : {}),
     },
   }));
   try {
