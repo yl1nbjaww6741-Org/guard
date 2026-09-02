@@ -78,13 +78,6 @@ final class CaptureManager: NSObject {
     /// startRiskyWindowPoll()'s doc comment for why.
     private var riskyWindowStreams: [CGWindowID: SCStream] = [:]
     private var riskyWindowPollTimer: DispatchSourceTimer?
-
-    /// TEMPORARY diagnostic (2026-09-02) - remove once the
-    /// com.apple.screencaptureui question below is settled either way.
-    /// Not used for anything functional, only to make the equally-
-    /// temporary log line in didOutputSampleBuffer readable (a bare
-    /// window ID means nothing on its own).
-    private var riskyWindowOwnerNames: [CGWindowID: String] = [:]
     /// Explicitly .utility, matching FrameProcessor's own processing queue
     /// (which always had it - this one was simply missed). Left unspecified,
     /// a dispatch queue can inherit the priority of whatever enqueues onto
@@ -380,8 +373,6 @@ final class CaptureManager: NSObject {
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
         try await stream.startCapture()
         riskyWindowStreams[window.windowID] = stream
-        // TEMPORARY diagnostic - see riskyWindowOwnerNames's own doc comment.
-        riskyWindowOwnerNames[window.windowID] = window.owningApplication?.bundleIdentifier ?? "unknown"
     }
 
     // MARK: - Risky-window stream reconciliation
@@ -450,12 +441,26 @@ final class CaptureManager: NSObject {
         for (windowID, stream) in riskyWindowStreams where currentByID[windowID] == nil {
             try? await stream.stopCapture()
             riskyWindowStreams.removeValue(forKey: windowID)
-            riskyWindowOwnerNames.removeValue(forKey: windowID) // TEMPORARY diagnostic cleanup
         }
 
         // Start streams only for genuinely new risky windows - an
         // already-running window's stream is left alone rather than
         // restarted, per this method's own doc comment above.
+        //
+        // A failed buildWindowStream() is expected to happen sometimes,
+        // not just theoretically - confirmed live (real Mac, 2026-09-02):
+        // "Start stream failed... The stream is nil" (CoreGraphicsErrorDomain
+        // 1003) for a window that was gone by the very next reconcile tick
+        // and never reappeared - consistent with a short-lived system UI
+        // element (e.g. part of the screenshot-taking flow itself, not the
+        // review panel, which captures fine - see riskyAppWindows()'s own
+        // doc comment) closing in the gap between SCShareableContent
+        // enumerating it and this actually calling startCapture(). No
+        // retry-loop risk from this: a window this transient stops being
+        // enumerated by riskyAppWindows() on its own by the next tick, so
+        // there's nothing here for this catch block to track or suppress -
+        // confirmed live too, the same error did not repeat on subsequent
+        // ticks for that window ID.
         for (windowID, window) in currentByID where riskyWindowStreams[windowID] == nil {
             do {
                 try await buildWindowStream(for: window)
@@ -679,18 +684,6 @@ extension CaptureManager: SCStreamOutput {
             source = .display(displayID)
         } else if let windowID = riskyWindowStreams.first(where: { $0.value === stream })?.key {
             source = .window(windowID)
-            // TEMPORARY diagnostic (2026-09-02) - remove once it's
-            // answered whether ScreenCaptureKit delivers frames for
-            // com.apple.screencaptureui's review panel at all. Logged
-            // unconditionally, before any prefilter/confidence gating,
-            // and before the unchanged-frame skip below - this only
-            // needs to prove a sample buffer arrived from this window's
-            // stream at all, regardless of content or whether it carries
-            // anything new. Deliberately NOT how this codebase normally
-            // logs frames (see FrameProcessor.swift's own git history on
-            // why per-frame logging was removed once already) - this
-            // must not become permanent.
-            NSLog("ContentGuardAgent: [TEMP DIAGNOSTIC] frame delivered from window \(windowID) owner=\(riskyWindowOwnerNames[windowID] ?? "unknown")")
         } else {
             return
         }
@@ -810,7 +803,6 @@ extension CaptureManager: SCStreamDelegate {
         // stream rebuild over something that never touched them.
         if let windowID = riskyWindowStreams.first(where: { $0.value === stream })?.key {
             riskyWindowStreams.removeValue(forKey: windowID)
-            riskyWindowOwnerNames.removeValue(forKey: windowID) // TEMPORARY diagnostic cleanup
         }
     }
 }
