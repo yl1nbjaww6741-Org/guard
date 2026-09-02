@@ -25,7 +25,7 @@ import type { Env } from "./types";
 // BUMP THIS, and re-run build/package-crx.sh + re-upload to R2, every
 // time chrome-extension/ actually changes - an unbumped version here
 // means Chrome silently never re-checks for the new .crx at all.
-const EXTENSION_VERSION = "0.2.0";
+const EXTENSION_VERSION = "0.2.1";
 
 // Real, permanent extension ID - reported back after build/package-crx.sh
 // was actually run (in the extension maintainer's own Codespace, not
