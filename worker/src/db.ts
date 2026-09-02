@@ -888,3 +888,76 @@ export async function getDueKeywordRemovals(db: D1Database): Promise<PendingKeyw
 export async function markKeywordRemovalApplied(db: D1Database, requestId: number): Promise<void> {
   await db.prepare(`UPDATE pending_keyword_removals SET applied_at = ?1 WHERE id = ?2`).bind(Date.now(), requestId).run();
 }
+
+// --- App inventory (real Team-ID data, daemon-reported - see
+// migrations/0008_app_inventory.sql's own comment for why this table
+// exists at all and why it can't be fed from SimpleMDM's own API) ---
+
+export interface AppInventoryRecord {
+  bundle_id: string;
+  name: string | null;
+  team_id: string | null;
+  path: string | null;
+  first_seen_at: number;
+  last_seen_at: number;
+}
+
+/// Wholesale replace, from a full fresh report - daemonSync.ts's
+/// handleAppInventorySync always sends every app AppInventoryScanner
+/// currently finds under /Applications, never an incremental diff (same
+/// "minimal moving parts" reasoning as this project's other sync
+/// clients), so this function's job is reconciling that full report
+/// against whatever's already stored, not applying a delta.
+export async function replaceAppInventory(
+  db: D1Database,
+  apps: { bundleId: string; name?: string; teamId?: string; path?: string }[]
+): Promise<void> {
+  const now = Date.now();
+  const statements = apps.map((app) =>
+    db
+      .prepare(
+        `INSERT INTO app_inventory (bundle_id, name, team_id, path, first_seen_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+         ON CONFLICT(bundle_id) DO UPDATE SET
+           name = excluded.name, team_id = excluded.team_id, path = excluded.path,
+           last_seen_at = excluded.last_seen_at`
+      )
+      .bind(app.bundleId, app.name ?? null, app.teamId ?? null, app.path ?? null, now)
+  );
+  if (statements.length > 0) {
+    await db.batch(statements);
+  }
+
+  // Prune rows this sync no longer reports at all - the app was
+  // uninstalled since the last sync. Deliberately NOT "delete everything
+  // then reinsert" (which would also work, but would destroy
+  // first_seen_at for every still-installed app on every single sync,
+  // undermining the whole point of that column - see the migration's own
+  // comment). D1 prepared statements don't take a dynamic-length array
+  // bind directly, so this builds one ?N placeholder per reported
+  // bundle_id instead - fine at this project's real scale (a few dozen
+  // installed apps, not thousands).
+  const reportedIds = apps.map((app) => app.bundleId);
+  if (reportedIds.length === 0) {
+    // An empty report is treated as "nothing to prune" rather than
+    // "delete everything" - a genuinely empty /Applications scan is far
+    // more likely to be a daemon-side bug or a transient failure than a
+    // real state, and wiping every row over that would be a real, silent
+    // loosening of LOCKDOWN readiness for no good reason. Same "fail
+    // toward keeping what's already there" reasoning as
+    // SafeAppsSyncClient's own fetch-failure handling.
+    return;
+  }
+  const placeholders = reportedIds.map((_, i) => `?${i + 1}`).join(",");
+  await db
+    .prepare(`DELETE FROM app_inventory WHERE bundle_id NOT IN (${placeholders})`)
+    .bind(...reportedIds)
+    .run();
+}
+
+export async function listAppInventory(db: D1Database): Promise<AppInventoryRecord[]> {
+  const result = await db
+    .prepare(`SELECT bundle_id, name, team_id, path, first_seen_at, last_seen_at FROM app_inventory ORDER BY name ASC`)
+    .all<AppInventoryRecord>();
+  return result.results ?? [];
+}

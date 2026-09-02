@@ -262,6 +262,19 @@ export function renderDashboard(): string {
   </section>
 
   <section>
+    <h2>App inventory (Team IDs)</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Real code-signing data, scanned locally on the Mac itself (AppInventoryScanner.swift, daemon-side) and synced up every 15 minutes - not from SimpleMDM's inventory API, which has no signing data at all (that's why Installed Apps above so often shows "no identifier available"). This is what makes a real per-app Allow/Block button possible, and it's the prerequisite for switching Santa to LOCKDOWN mode: LOCKDOWN is default-deny, so every app someone actually uses needs a real ALLOWLIST Team ID rule first. An app with no Team ID (unsigned, ad-hoc signed, or one of Apple's own platform binaries) has nothing to allowlist here - see the Architecture tab's Santa row for why that's fine for Apple's own binaries specifically.</div>
+    <table id="app-inventory-table">
+      <thead><tr><th>Name</th><th>Bundle ID</th><th>Team ID</th><th>Last seen</th><th></th></tr></thead>
+      <tbody id="app-inventory-body"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+    </table>
+    <div class="inline">
+      <button id="allow-all-app-inventory">Allow all (queue ALLOWLIST for every un-ruled Team ID above)</button>
+    </div>
+    <div class="status-msg" id="app-inventory-status"></div>
+  </section>
+
+  <section>
     <h2>Software (Fleet)</h2>
     <table id="software-table">
       <thead><tr><th>Name</th><th>Version</th><th>Platform</th><th></th></tr></thead>
@@ -869,6 +882,54 @@ async function loadInstalledApps(host) {
   }).join("");
 }
 
+// App inventory (Team IDs) - see this section's own subtitle in the
+// markup for what it is and why it exists. Fetches rules fresh (not a
+// shared cache) for the same reason loadInstalledApps does: no ordering
+// guarantee against loadRules()'s own independent page-load fetch.
+async function loadAppInventory() {
+  const [apps, staticRules, rules] = await Promise.all([
+    api("/api/app-inventory"),
+    api("/api/static-rules"),
+    api("/api/rules"),
+  ]);
+  // Only TEAMID rules count as "already ruled" here - this section only
+  // ever offers to add a TEAMID rule (that's what a Team ID actually
+  // is), so a BINARY/CDHASH/etc rule on the same identifier string
+  // (astronomically unlikely, but not impossible) shouldn't suppress
+  // the Allow/Block buttons for an unrelated rule type.
+  const ruledTeamIds = new Map();
+  [...(staticRules || []), ...(rules || [])]
+    .filter((r) => r.rule_type === "TEAMID")
+    .forEach((r) => ruledTeamIds.set(r.identifier, r.policy));
+  renderAppInventory(apps, ruledTeamIds);
+}
+
+function renderAppInventory(apps, ruledTeamIds) {
+  const body = document.getElementById("app-inventory-body");
+  if (!apps || apps.length === 0) {
+    body.innerHTML = '<tr><td colspan="5" class="empty">Nothing scanned yet - the daemon syncs this up to every 15 minutes; give a freshly-installed build a little time.</td></tr>';
+    return;
+  }
+  body.innerHTML = apps.map((a) => {
+    let actionCell;
+    if (!a.team_id) {
+      actionCell = '<span class="pending-note" style="color:#6b6f78;">no Team ID</span>';
+    } else if (ruledTeamIds.has(a.team_id)) {
+      const policy = ruledTeamIds.get(a.team_id);
+      actionCell = \`<span class="pending-note policy-\${policy}">\${policy}</span>\`;
+    } else {
+      actionCell = \`<button data-block-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Block</button> <button data-allow-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Allow</button>\`;
+    }
+    return \`<tr>
+      <td>\${escapeHtml(a.name || a.bundle_id)}</td>
+      <td>\${escapeHtml(a.bundle_id)}</td>
+      <td>\${a.team_id ? escapeHtml(a.team_id) : '<span class="empty" style="padding:0;">none</span>'}</td>
+      <td>\${timeAgo(a.last_seen_at)}</td>
+      <td>\${actionCell}</td>
+    </tr>\`;
+  }).join("");
+}
+
 async function loadSoftware() {
   const packages = await api("/api/software");
   const body = document.getElementById("software-body");
@@ -1120,6 +1181,76 @@ document.getElementById("installed-apps-body").addEventListener("click", async (
   }
 });
 
+document.getElementById("app-inventory-body").addEventListener("click", async (e) => {
+  const blockTeamId = e.target.getAttribute("data-block-team-id");
+  const allowTeamId = e.target.getAttribute("data-allow-team-id");
+  const teamId = blockTeamId || allowTeamId;
+  if (!teamId) return;
+  const appName = e.target.getAttribute("data-app-name");
+  const policy = blockTeamId ? "BLOCKLIST" : "ALLOWLIST";
+  try {
+    await api("/api/rules", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ identifier: teamId, rule_type: "TEAMID", policy, notification_app_name: appName || undefined }),
+    });
+    setStatus("app-inventory-status", (blockTeamId ? "Blocked " : "Allowed ") + appName + ".", false);
+    await loadAppInventory();
+  } catch (err) {
+    setStatus("app-inventory-status", "Failed to add rule: " + err.message, true);
+  }
+});
+
+// Bulk allowlisting - the actual point of this whole section (see its
+// subtitle): getting from "no allowlist at all" to "every app already
+// on this Mac has a real ALLOWLIST Team ID rule" one click at a time
+// would be tedious enough to defeat the purpose. Plain sequential
+// client-side loop over /api/rules, same endpoint the single-row
+// buttons above already use - no new bulk endpoint on the Worker side,
+// same "minimal moving parts" reasoning as everywhere else in this
+// project. Skips anything with no Team ID or already ruled (either
+// policy) - this button only ever adds, never overrides an existing
+// BLOCKLIST someone deliberately set.
+document.getElementById("allow-all-app-inventory").addEventListener("click", async () => {
+  if (!confirm("Queue an ALLOWLIST Team ID rule for every app below that doesn't have one yet?")) return;
+  setStatus("app-inventory-status", "Loading current state...", false);
+  try {
+    const [apps, staticRules, rules] = await Promise.all([
+      api("/api/app-inventory"),
+      api("/api/static-rules"),
+      api("/api/rules"),
+    ]);
+    const ruledTeamIds = new Set(
+      [...(staticRules || []), ...(rules || [])].filter((r) => r.rule_type === "TEAMID").map((r) => r.identifier)
+    );
+    const seen = new Set();
+    const targets = (apps || []).filter((a) => {
+      if (!a.team_id || ruledTeamIds.has(a.team_id) || seen.has(a.team_id)) return false;
+      seen.add(a.team_id);
+      return true;
+    });
+    if (targets.length === 0) {
+      setStatus("app-inventory-status", "Nothing to do - every scanned Team ID already has a rule.", false);
+      return;
+    }
+    let done = 0;
+    for (const a of targets) {
+      setStatus("app-inventory-status", \`Allowing \${a.name || a.bundle_id} (\${done + 1}/\${targets.length})...\`, false);
+      await api("/api/rules", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ identifier: a.team_id, rule_type: "TEAMID", policy: "ALLOWLIST", notification_app_name: a.name || undefined }),
+      });
+      done++;
+    }
+    setStatus("app-inventory-status", \`Allowed \${done} app(s).\`, false);
+    await loadAppInventory();
+  } catch (err) {
+    setStatus("app-inventory-status", "Failed partway through: " + err.message, true);
+    await loadAppInventory();
+  }
+});
+
 document.getElementById("upload-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = new FormData(e.target);
@@ -1229,6 +1360,7 @@ loadKeywords().catch((err) => setStatus("keywords-status", "Failed to load: " + 
 loadSoftware().catch((err) => setStatus("software-status", "Failed to load software: " + err.message, true));
 loadPendingPasswordChange().catch(() => {});
 loadInstalledApps().catch((err) => setStatus("installed-apps-status", "Failed to load: " + err.message, true));
+loadAppInventory().catch((err) => setStatus("app-inventory-status", "Failed to load: " + err.message, true));
 loadHostStatus().catch((err) => {
   document.getElementById("sync-health-body").innerHTML = \`<div class="empty error">Failed to load: \${escapeHtml(err.message)}</div>\`;
   document.getElementById("mdm-lockdown-body").innerHTML = "";

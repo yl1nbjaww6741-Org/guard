@@ -911,3 +911,65 @@ passes clean; unverified against a real deployed instance beyond the
 deploy itself succeeding (confirmed via GitHub Actions), since actually
 logging in needs the bootstrap step above run against the real remote
 D1, which needs Cloudflare credentials this session doesn't have.
+
+## App inventory (Team IDs) - the Santa LOCKDOWN prerequisite
+
+Built to unblock a real, specific next step: switching Santa from
+MONITOR to LOCKDOWN (`profiles/santa-config.mobileconfig`'s `ClientMode`)
+needs every app someone actually uses to already have an ALLOWLIST rule
+first, since LOCKDOWN is default-deny. The existing **Installed apps**
+section's Block/Allow buttons have never actually been reachable for
+that, though - confirmed by reading `handleListInstalledSoftware`
+(`worker/src/softwareApi.ts`) itself: it always sets
+`identifier: null, rule_type: null` on every row, because SimpleMDM's
+inventory API carries no code-signing data at all. Only the Mac itself
+can get a real Team ID (Security framework, run locally against each
+installed `.app`), so this had to be a second, independent data path,
+not an extension of the SimpleMDM-backed one.
+
+**How it works**: `AppInventoryScanner.swift` (`ContentGuardDaemon/Sources`)
+scans `/Applications` (not a recursive walk, not `/System/Applications` -
+see that file's own header for why only third-party apps need this at
+all) using `SecStaticCodeCreateWithPath`/`SecCodeCopySigningInformation`
+to pull each app's real Team ID. `AppInventorySyncClient.swift` runs that
+scan every 15 minutes (same cadence as `SafeAppsSyncClient`, same Worker
+Cron alignment) and `POST`s the result to `/sync/app-inventory`
+(`worker/src/daemonSync.ts`'s `handleAppInventorySync`), gated by the
+same `CONTENTGUARD_DAEMON_SYNC_TOKEN`/`X-ContentGuard-Daemon-Token` as
+`GET /sync/safe-apps` - opposite direction (push, not pull), same trust
+boundary, no new secret to provision. The Worker stores the result in
+`app_inventory` (`migrations/0008_app_inventory.sql`), replacing the
+table wholesale on every sync (`db.ts`'s `replaceAppInventory`) so an
+uninstalled app's row is pruned automatically rather than going stale.
+
+The dashboard's new **App inventory (Team IDs)** section
+(`GET /api/app-inventory`, session-gated, read-only) surfaces this with
+real, working per-app Block/Allow buttons - both go through the same
+`POST /api/rules` (`handleCreateRule`) the rest of this dashboard
+already uses, just with a real Team ID instead of a null identifier.
+There's also a bulk **Allow all** action: a plain client-side loop over
+`/api/rules` for every scanned Team ID that doesn't have a rule yet
+(never overriding an existing BLOCKLIST) - no new bulk endpoint on the
+Worker, same "minimal moving parts" reasoning as everywhere else in this
+project. This is the tool meant to actually build out a real allowlist
+before flipping `ClientMode` to LOCKDOWN, not just a nice-to-have.
+
+No new manual provisioning step - `AppInventorySyncClient` reads the
+same `/usr/local/var/lib/contentguard/daemon-sync-token` file
+`SafeAppsSyncClient` already does, so if that Mac-side step above is
+already done, this starts working on the next daemon restart with no
+further setup.
+
+**Verified**: `npm run typecheck` passes clean; the D1 migration and
+`db.ts` functions follow this project's own established
+batch-upsert-then-prune pattern (`upsertSoftwarePackage`/`recordEvents`).
+Unverified beyond that, same standing caveat as every other Swift change
+in this project's history - no Swift toolchain in this environment,
+needs a real `make pkg && sudo make install` on the actual Mac to
+confirm `AppInventoryScanner`'s Security-framework calls behave as
+expected and that the new files build cleanly as part of the
+`ContentGuardDaemon` Xcode target (the `.xcodeproj` was hand-edited to
+add them, following the exact same `PBXBuildFile`/`PBXFileReference`/
+group/`PBXSourcesBuildPhase` shape `SafeAppsSyncClient.swift` already
+has there - not regenerated in Xcode itself, so worth double-checking
+Xcode opens the project cleanly after pulling this change).

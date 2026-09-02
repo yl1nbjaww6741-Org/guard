@@ -56,7 +56,8 @@ import {
   handleUpdateConfigProfile,
   handleUploadConfigProfile,
 } from "./configProfilesApi";
-import { handleSafeAppsSync } from "./daemonSync";
+import { handleAppInventorySync, handleSafeAppsSync } from "./daemonSync";
+import { handleListAppInventory } from "./appInventoryApi";
 import { handleKeywordsSync } from "./extensionSync";
 import { handleExtensionCrx, handleExtensionUpdateManifest } from "./extensionUpdate";
 import {
@@ -338,6 +339,16 @@ export default {
       return handleSafeAppsSync(env);
     }
 
+    // The daemon's own POST counterpart to the GET above - see
+    // daemonSync.ts's handleAppInventorySync doc comment. Same token,
+    // opposite direction: this is the daemon PUSHING its local Team-ID
+    // scan up, not pulling dashboard-approved state down.
+    if (url.pathname === "/sync/app-inventory" && request.method === "POST") {
+      const tokenError = await requireDaemonSyncToken(request, env);
+      if (tokenError) return tokenError;
+      return handleAppInventorySync(request, env);
+    }
+
     // --- Chrome extension's own sync (static-token-gated, see
     // auth.ts's requireExtensionSyncToken - a separate token from both
     // Santa's and the daemon's above, a third distinct client) ---
@@ -498,6 +509,16 @@ export default {
         return handleCancelSafeAppAddition(Number(cancelAdditionMatch[1]), env);
       }
       return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    // --- App-inventory API (session-gated, read-only) - see
+    // appInventoryApi.ts's doc comment: the dashboard-facing view of the
+    // daemon's own Team-ID scan (app_inventory), which is what actually
+    // makes Installed Apps' Allow/Block buttons work for once. ---
+    if (url.pathname === "/api/app-inventory" && request.method === "GET") {
+      const authError = await requireSession(request, env);
+      if (authError) return authError;
+      return handleListAppInventory(env);
     }
 
     // --- Keyword-blocklist API (session-gated) - see keywordsApi.ts's

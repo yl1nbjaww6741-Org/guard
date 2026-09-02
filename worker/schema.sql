@@ -326,3 +326,18 @@ CREATE TABLE pending_keyword_removals (
     applied_at INTEGER,
     cancelled_at INTEGER
 );
+
+-- Real per-app code-signing inventory, daemon-reported (AppInventoryScanner.swift
+-- + POST /sync/app-inventory) - see migrations/0008_app_inventory.sql's own
+-- comment for the full "why" (SimpleMDM has no code-signing data; this is
+-- what makes a real Santa LOCKDOWN allowlist practical). No ratchet table
+-- of its own - this whole table is replaced wholesale on every daemon
+-- sync (db.ts's replaceAppInventory), not edited from the dashboard.
+CREATE TABLE app_inventory (
+    bundle_id TEXT PRIMARY KEY,
+    name TEXT,
+    team_id TEXT,
+    path TEXT,
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL
+);

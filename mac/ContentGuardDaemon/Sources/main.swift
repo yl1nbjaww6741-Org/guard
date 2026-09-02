@@ -98,6 +98,13 @@ do {
 let safeAppsSyncClient = SafeAppsSyncClient(log: logLine)
 safeAppsSyncClient.start()
 
+// The daemon's own local Team-ID scan, pushed up instead of pulled down -
+// see AppInventorySyncClient.swift's own header. Same token, same
+// "safe no-op with no token provisioned yet" treatment as
+// safeAppsSyncClient above.
+let appInventorySyncClient = AppInventorySyncClient(log: logLine)
+appInventorySyncClient.start()
+
 // Root LaunchDaemon, no GUI, no main-thread UI work - a plain run loop is
 // sufficient to keep the process alive while the dispatch sources above do
 // the real work on their own queues.
