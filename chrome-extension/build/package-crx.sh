@@ -32,7 +32,10 @@ mkdir -p build/dist/src
 # -L dereferences model/nudenet_640m.onnx's symlink (see manifest's own
 # comment on why that's a symlink, not a second copy) - a CRX/ZIP package
 # needs real file content, not a link pointing outside the package.
-cp -RL background content-scripts lib model options sandbox manifest.json build/dist/src/
+# content-scripts/ and options/ removed along with keyword blocking
+# (see git history) - NSFW detection (background/, lib/, model/,
+# sandbox/) is everything this extension ships now.
+cp -RL background lib model sandbox manifest.json build/dist/src/
 
 npx --yes crx3@2.0.0 \
   -p build/dist/key.pem \
