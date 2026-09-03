@@ -1,8 +1,25 @@
 // MV3 background service worker. No persistent DOM/global state survives
 // between wake-ups by design (MV3 suspends this worker when idle) - this
-// extension keeps no durable state at all (no chrome.storage use
+// extension keeps no durable state of its own (no chrome.storage use
 // anywhere in it), so nothing here needs to re-read anything left over
-// from a previous wake-up.
+// from a previous wake-up. The one real exception, and the reason the
+// "declarativeNetRequest" permission is still declared despite nothing
+// here creating rules anymore: Chrome's own dynamic-rule storage is
+// PERSISTENT ACROSS EXTENSION UPDATES (confirmed against Chrome's own
+// declarativeNetRequest docs, not assumed) - removing the code that
+// used to call updateDynamicRules() does NOT retroactively remove the
+// rules an earlier version already registered. Found live: after the
+// keyword-blocking feature (and its declarativeNetRequest usage) was
+// removed entirely, the extension kept blocking on the old keyword URL
+// rules anyway, because they were still sitting in Chrome's own dynamic
+// ruleset with no code left that could see or clear them (the
+// permission itself had also been dropped, at first, from the manifest -
+// re-added specifically so clearStaleDynamicRules() below can actually
+// reach them). Kept as a permanent, idempotent no-op rather than a
+// one-time migration removed in some later version - the check itself
+// is cheap, and a single extra permission grant costs nothing next to
+// the real risk of some future regression silently reintroducing
+// orphaned rules the same way.
 //
 // NOT YET LIVE-TESTED in a real Chrome browser (this was written without
 // a real browser available to load an unpacked extension into) - flagging
@@ -47,6 +64,19 @@ async function ensureOffscreenDocument() {
   });
 }
 
+// See this file's own header for why this exists at all - a real, live-
+// found bug, not a hypothetical. Reads back whatever's currently
+// registered and removes all of it; a completely empty ruleset (the
+// normal case from here on, once this has run once on the affected
+// install) makes this a fast no-op, not something worth skipping via
+// some "have I already done this" flag.
+async function clearStaleDynamicRules() {
+  const existing = await chrome.declarativeNetRequest.getDynamicRules();
+  if (existing.length === 0) return;
+  await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: existing.map((r) => r.id) });
+  console.log(`ContentGuard: cleared ${existing.length} stale declarativeNetRequest rule(s) left over from the removed keyword-blocking feature`);
+}
+
 // Periodic offscreen-document health-check: re-creates it if it was ever
 // unexpectedly closed (Chrome can reclaim one under real memory pressure
 // even though it's not supposed to time out on its own the way this
@@ -60,9 +90,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(OFFSCREEN_HEALTHCHECK_ALARM_NAME, { periodInMinutes: OFFSCREEN_HEALTHCHECK_PERIOD_MINUTES });
   ensureOffscreenDocument().catch((err) => console.error("ContentGuard: failed to create offscreen document", err));
+  clearStaleDynamicRules().catch((err) => console.error("ContentGuard: failed to clear stale declarativeNetRequest rules", err));
 });
 chrome.runtime.onStartup.addListener(() => {
   ensureOffscreenDocument().catch((err) => console.error("ContentGuard: failed to create offscreen document", err));
+  clearStaleDynamicRules().catch((err) => console.error("ContentGuard: failed to clear stale declarativeNetRequest rules", err));
 });
 
 // Battery optimization #1, mirroring the native agent's biggest lever

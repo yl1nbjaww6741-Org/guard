@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "ContentGuard",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Blocks NSFW content (same NudeNet model the native Mac app uses) in real time.",
-  "permissions": ["alarms", "tabs", "windows", "offscreen", "scripting"],
+  "permissions": ["alarms", "tabs", "windows", "offscreen", "scripting", "declarativeNetRequest"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background/service-worker.js"
