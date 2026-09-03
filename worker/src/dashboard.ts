@@ -24,6 +24,8 @@ const SHARED_STYLES = `
   .subtitle { color: #8b8f98; font-size: 0.85rem; margin-bottom: 2rem; }
   section { margin-bottom: 2.5rem; }
   h2 { font-size: 1.05rem; border-bottom: 1px solid #2a2d33; padding-bottom: 0.5rem; }
+  h3 { font-size: 0.9rem; color: #c3c6cc; margin: 1.75rem 0 0; }
+  h3:first-of-type { margin-top: 1rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.75rem; }
   th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #22252b; }
   th { color: #8b8f98; font-weight: 500; }
@@ -196,7 +198,10 @@ export function renderDashboard(): string {
   </section>
 
   <section>
-    <h2>Santa rules</h2>
+    <h2>Santa (app execution control)</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Two views on the same thing, not two separate lists: Rules below is Santa's actual enforced block/allow state (static profile entries plus everything added dynamically) - the source of truth for what runs on this Mac. App inventory further down is the tool for adding to it: real Team IDs scanned off the Mac itself, one click to turn one into a Rules row, instead of typing an identifier by hand.</div>
+
+    <h3>Rules</h3>
     <table id="rules-table">
       <thead><tr><th>Name</th><th>Identifier</th><th>Type</th><th>Policy</th><th>Scope</th><th></th></tr></thead>
       <tbody id="rules-body"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
@@ -219,36 +224,9 @@ export function renderDashboard(): string {
       <button type="submit">Add rule</button>
     </form>
     <div class="status-msg" id="rules-status"></div>
-  </section>
 
-  <section>
-    <h2>Safe apps (not scanned)</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Bundle IDs ContentGuardDaemon excludes from screen-capture monitoring - every entry here is a blind spot, kept short and deliberate. To add one, use the Whitelist button in Installed Apps below instead of typing a bundle ID - it takes effect after a 24h delay, same as loosening a Santa rule. Removing one here is immediate.</div>
-    <table id="safe-apps-table">
-      <thead><tr><th>App</th><th>Bundle ID</th><th>Added</th><th></th></tr></thead>
-      <tbody id="safe-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
-    </table>
-    <div class="status-msg" id="safe-apps-status"></div>
-    <div id="safe-app-additions-pending"></div>
-  </section>
-
-  <section>
-    <h2>Installed apps</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Pulled from the MDM's own inventory (SimpleMDM) - one click to block/allow (Santa) or whitelist (excluded from screen-capture scanning), instead of manually finding a Team ID in Terminal or typing a bundle ID by hand. This is the one place to add new entries to either list, by app name - the Safe Apps and Santa Rules sections above show what's already configured. Every built-in Apple app on this Mac is always pinned at the top, from a hand-kept list (see knownApps.ts), regardless of whether the live inventory reports it - Block/Allow stays disabled until real signing info is available for one of those, but Whitelist works immediately either way. Anything else still carrying a com.apple.* bundle ID (background helpers, framework-hosted components) is filtered out entirely, not shown - nobody's realistically Block/Allow-ing or Whitelisting those, and SimpleMDM's inventory reports far more of them than Fleet's own scoped query ever surfaced.</div>
-    <table id="installed-apps-table">
-      <thead><tr><th>Name</th><th>Version</th><th>Detected identifier</th><th></th></tr></thead>
-      <tbody id="installed-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
-    </table>
-    <form class="inline" id="load-apps-form">
-      <input name="host" placeholder="Different host? (hostname, serial, or UUID)" style="flex: 1; min-width: 220px;">
-      <button type="submit">Load</button>
-    </form>
-    <div class="status-msg" id="installed-apps-status"></div>
-  </section>
-
-  <section>
-    <h2>App inventory (Team IDs)</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Real code-signing data, scanned locally on the Mac itself (AppInventoryScanner.swift, daemon-side) and synced up every 15 minutes - not from SimpleMDM's inventory API, which has no signing data at all (that's why Installed Apps above so often shows "no identifier available"). This is what makes a real per-app Allow/Block button possible, and it's the prerequisite for switching Santa to LOCKDOWN mode: LOCKDOWN is default-deny, so every app someone actually uses needs a real ALLOWLIST Team ID rule first. An app with no Team ID (unsigned, ad-hoc signed, or one of Apple's own platform binaries) has nothing to allowlist here - see the Architecture tab's Santa row for why that's fine for Apple's own binaries specifically.</div>
+    <h3>App inventory (Team IDs)</h3>
+    <div class="subtitle" style="margin-bottom: 0;">Real code-signing data, scanned locally on the Mac itself (AppInventoryScanner.swift, daemon-side) and synced up every 15 minutes - not from SimpleMDM's inventory API, which has no signing data at all (that's why the Installed apps table below so often shows "no identifier available"). This is what makes a real per-app Allow/Block button possible, and it's the prerequisite for switching Santa to LOCKDOWN mode: LOCKDOWN is default-deny, so every app someone actually uses needs a real ALLOWLIST Team ID rule first (added here, then shown as a row in Rules above). An app with no Team ID (unsigned, ad-hoc signed, or one of Apple's own platform binaries) has nothing to allowlist here - see the Architecture tab's Santa row for why that's fine for Apple's own binaries specifically.</div>
     <table id="app-inventory-table">
       <thead><tr><th>Name</th><th>Bundle ID</th><th>Team ID</th><th>Last seen</th><th></th></tr></thead>
       <tbody id="app-inventory-body"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
@@ -257,6 +235,31 @@ export function renderDashboard(): string {
       <button id="allow-all-app-inventory">Allow all (queue ALLOWLIST for every un-ruled Team ID above)</button>
     </div>
     <div class="status-msg" id="app-inventory-status"></div>
+  </section>
+
+  <section>
+    <h2>ContentGuard (screen-capture scanning)</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Two views on the same thing, not two separate lists: Safe apps below is the actual exclusion list ContentGuardDaemon checks - every entry is a blind spot from screen-capture monitoring, kept short and deliberate. Installed apps further down is the tool for adding to it: every app SimpleMDM's inventory (or the hand-kept list of built-in Apple apps) knows about, by name, one click to whitelist instead of typing a bundle ID by hand.</div>
+
+    <h3>Safe apps (not scanned)</h3>
+    <table id="safe-apps-table">
+      <thead><tr><th>App</th><th>Bundle ID</th><th>Added</th><th></th></tr></thead>
+      <tbody id="safe-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+    </table>
+    <div class="status-msg" id="safe-apps-status"></div>
+    <div id="safe-app-additions-pending"></div>
+
+    <h3>Installed apps</h3>
+    <div class="subtitle" style="margin-bottom: 0;">Pulled from the MDM's own inventory (SimpleMDM), which carries no code-signing data at all - so this only ever offers Whitelist, not Block/Allow (that needs a real Team ID, which is what App inventory above is for). Every built-in Apple app on this Mac is always pinned at the top, from a hand-kept list (see knownApps.ts), regardless of whether the live inventory reports it. Anything else still carrying a com.apple.* bundle ID (background helpers, framework-hosted components) is filtered out entirely, not shown - nobody's realistically Whitelisting those, and SimpleMDM's inventory reports far more of them than Fleet's own scoped query ever surfaced.</div>
+    <table id="installed-apps-table">
+      <thead><tr><th>Name</th><th>Version</th><th></th></tr></thead>
+      <tbody id="installed-apps-body"><tr><td colspan="3" class="empty">Loading...</td></tr></tbody>
+    </table>
+    <form class="inline" id="load-apps-form">
+      <input name="host" placeholder="Different host? (hostname, serial, or UUID)" style="flex: 1; min-width: 220px;">
+      <button type="submit">Load</button>
+    </form>
+    <div class="status-msg" id="installed-apps-status"></div>
   </section>
 
   <section>
@@ -729,13 +732,16 @@ function renderSafeAppAdditionsPending(pending) {
   ).join("");
 }
 
-// Installed Apps is the single place new Block/Allow (Santa) and
-// Whitelist (safe-apps) actions get added from now - see this section's
-// own subtitle in the markup. Fetches its own safe-apps state directly
-// (static baseline + dashboard-approved + pending) rather than reusing
-// loadSafeApps()'s module-scope caches, since that function runs
-// independently on page load with no ordering guarantee relative to this
-// one - a shared cache here could read stale/empty state on a race.
+// Installed Apps is the place new Whitelist (safe-apps) actions get
+// added, by app name - see this section's own subtitle in the markup.
+// SimpleMDM's inventory has no code-signing data, so it never offers
+// Block/Allow (App inventory, backed by the daemon's own local Team-ID
+// scan, is what does that job for real - see that section instead).
+// Fetches its own safe-apps state directly (static baseline +
+// dashboard-approved + pending) rather than reusing loadSafeApps()'s
+// module-scope caches, since that function runs independently on page
+// load with no ordering guarantee relative to this one - a shared cache
+// here could read stale/empty state on a race.
 async function loadInstalledApps(host) {
   // No host -> the Worker falls back to DEFAULT_SIMPLEMDM_DEVICE_ID (this
   // project's one real Mac) - see softwareApi.ts's handleListInstalledSoftware.
@@ -756,19 +762,15 @@ async function loadInstalledApps(host) {
   // Pin knownApps.ts's curated Apple apps at the top, in their declared
   // order, ahead of whatever else Fleet reported - see this section's own
   // subtitle for why. Prefer Fleet's real row when it actually has one
-  // for a given bundle ID (better version/identifier data than this
-  // stand-in can offer); only synthesize a bare row - no version, no
-  // identifier, Block/Allow disabled - when Fleet has nothing for it at
-  // all, same "disable rather than send a request that can only fail"
-  // reasoning the identifier/whitelist columns below already use.
+  // for a given bundle ID (better version data than this stand-in can
+  // offer); only synthesize a bare row - no version - when Fleet has
+  // nothing for it at all.
   const appsByBundleId = new Map((apps || []).filter((a) => a.bundle_identifier).map((a) => [a.bundle_identifier, a]));
   const knownBundleIds = new Set((knownApps || []).map((k) => k.bundleId));
   const knownRows = (knownApps || []).map((k) => appsByBundleId.get(k.bundleId) || {
     name: k.name,
     version: null,
     bundle_identifier: k.bundleId,
-    identifier: null,
-    rule_type: null,
   });
   // Real complaint, fixed here rather than by re-narrowing the inventory
   // fetch itself: Fleet's old getHostSoftware call used the
@@ -781,8 +783,8 @@ async function loadInstalledApps(host) {
   // app manageable by name (see its own top comment) - anything else
   // still carrying a com.apple.* bundle ID here is exactly the noise
   // that curated list was meant to make unnecessary to wade through, not
-  // a second category of app anyone's actually going to Block/Allow or
-  // Whitelist. Filtered out of restRows specifically (not knownRows, and
+  // a second category of app anyone's actually going to Whitelist.
+  // Filtered out of restRows specifically (not knownRows, and
   // not third-party apps generally) - a third-party app with no bundle
   // ID at all still shows (existing "no bundle ID" placeholder handles
   // it), only Apple's own unrecognized noise is hidden.
@@ -793,22 +795,15 @@ async function loadInstalledApps(host) {
 
   const body = document.getElementById("installed-apps-body");
   if (allRows.length === 0) {
-    body.innerHTML = '<tr><td colspan="4" class="empty">No installed apps returned - Fleet may not have inventoried this host recently.</td></tr>';
+    body.innerHTML = '<tr><td colspan="3" class="empty">No installed apps returned - Fleet may not have inventoried this host recently.</td></tr>';
     return;
   }
   body.innerHTML = allRows.map((a) => {
-    const idCell = a.identifier
-      ? \`\${escapeHtml(a.identifier)} <span class="pending-note" style="color:#8b8f98;">(\${a.rule_type})</span>\`
-      : '<span class="empty" style="padding:0;">no identifier available</span>';
-    const ruleActions = a.identifier
-      ? \`<button data-block="\${escapeHtml(a.identifier)}" data-rule-type="\${a.rule_type}" data-app-name="\${escapeHtml(a.name)}">Block</button> <button data-allow="\${escapeHtml(a.identifier)}" data-rule-type="\${a.rule_type}" data-app-name="\${escapeHtml(a.name)}">Allow</button>\`
-      : "";
-    // Three states, in order of precedence: no usable bundle ID at all
-    // (Fleet hasn't reported one for this app yet - same "disable rather
-    // than send a request that can only fail" reasoning as the identifier
-    // column above), already whitelisted (static or dashboard-approved -
-    // don't offer to queue a no-op), already queued (don't offer a
-    // second, redundant 24h wait), or the real action.
+    // Four states, in order of precedence: no usable bundle ID at all
+    // (Fleet hasn't reported one for this app yet - disable rather than
+    // send a request that can only fail), already whitelisted (static or
+    // dashboard-approved - don't offer to queue a no-op), already queued
+    // (don't offer a second, redundant 24h wait), or the real action.
     let whitelistAction;
     if (!a.bundle_identifier) {
       whitelistAction = '<span class="pending-note" style="color:#6b6f78;">no bundle ID</span>';
@@ -822,8 +817,7 @@ async function loadInstalledApps(host) {
     return \`<tr>
       <td>\${escapeHtml(a.name)}</td>
       <td>\${escapeHtml(a.version ?? "")}</td>
-      <td>\${idCell}</td>
-      <td>\${ruleActions} \${whitelistAction}</td>
+      <td>\${whitelistAction}</td>
     </tr>\`;
   }).join("");
 }
@@ -1040,41 +1034,20 @@ document.getElementById("load-apps-form").addEventListener("submit", async (e) =
 
 document.getElementById("installed-apps-body").addEventListener("click", async (e) => {
   const whitelistId = e.target.getAttribute("data-whitelist");
-  if (whitelistId) {
-    const appName = e.target.getAttribute("data-app-name");
-    const password = prompt(\`Password to confirm whitelisting "\${appName}" (excluded from scanning, applies after 24h):\`);
-    if (!password) return;
-    try {
-      await api("/api/safe-apps", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ bundle_id: whitelistId, name: appName, password }),
-      });
-      setStatus("installed-apps-status", "Whitelist queued for " + appName + " - applies in ~24h.", false);
-      await loadSafeApps();
-    } catch (err) {
-      setStatus("installed-apps-status", "Failed to queue whitelist: " + err.message, true);
-    }
-    return;
-  }
-
-  const blockId = e.target.getAttribute("data-block");
-  const allowId = e.target.getAttribute("data-allow");
-  const identifier = blockId || allowId;
-  if (!identifier) return;
-  const ruleType = e.target.getAttribute("data-rule-type");
+  if (!whitelistId) return;
   const appName = e.target.getAttribute("data-app-name");
-  const policy = blockId ? "BLOCKLIST" : "ALLOWLIST";
+  const password = prompt(\`Password to confirm whitelisting "\${appName}" (excluded from scanning, applies after 24h):\`);
+  if (!password) return;
   try {
-    await api("/api/rules", {
+    await api("/api/safe-apps", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ identifier, rule_type: ruleType, policy, notification_app_name: appName || undefined }),
+      body: JSON.stringify({ bundle_id: whitelistId, name: appName, password }),
     });
-    setStatus("installed-apps-status", (blockId ? "Blocked " : "Allowed ") + appName + ".", false);
-    await loadRules();
+    setStatus("installed-apps-status", "Whitelist queued for " + appName + " - applies in ~24h.", false);
+    await loadSafeApps();
   } catch (err) {
-    setStatus("installed-apps-status", "Failed to add rule: " + err.message, true);
+    setStatus("installed-apps-status", "Failed to queue whitelist: " + err.message, true);
   }
 });
 
