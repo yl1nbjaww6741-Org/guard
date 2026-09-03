@@ -26,7 +26,18 @@ APP_VERSION="$(node -pe "require('./manifest.json').version")"
 
 echo "Packaging chrome-extension/ (version $APP_VERSION) ..."
 
-rm -rf build/dist
+# Real bug, found live (2026-09-03): this used to be `rm -rf build/dist`
+# (the whole directory) - which deletes key.pem along with the staging
+# copy, EVERY run, before crx3 ever gets a chance to check "does it
+# already exist, reuse it." That directly contradicts this file's own
+# header comment ("REUSED on every run after the first") and is the
+# actual reason the extension ID kept changing on every re-package
+# attempt, even with a real backed-up key.pem restored to
+# build/dist/key.pem beforehand - restoring it there and then running
+# this script used to delete it right back out from under itself. Only
+# the staging src/ copy needs a clean wipe each run; key.pem (and the
+# previous .crx/update.xml, harmless to regenerate) must survive.
+rm -rf build/dist/src
 mkdir -p build/dist/src
 
 # -L dereferences model/nudenet_640m.onnx's symlink (see manifest's own
