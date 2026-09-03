@@ -49,6 +49,39 @@
             <integer>1</integer>
 
             <!--
+              Suppresses every GUI popup Santa would otherwise show for a
+              block - explicit user request, 2026-09-03. Real key,
+              verified against northpolesec/santa's own source
+              (Source/common/SNTConfigurator.h's enableSilentMode
+              property, plist key capitalized the same way every other
+              key in this file already is - ClientMode/SyncBaseURL/
+              EventLogType all follow that exact Obj-C-property-to-
+              plist-key convention) and cross-checked against
+              northpole.dev's own configuration-keys reference, not
+              guessed - getting a Santa profile key wrong means this
+              silently does nothing, the same failure mode already
+              called out by this file's own SyncBaseURL comment.
+
+              Global, not per-rule: this is a DIFFERENT mechanism from
+              the dashboard's existing SILENT_BLOCKLIST rule policy
+              (worker/src/types.ts, dashboard.ts's "Block (silent)"
+              option) - SILENT_BLOCKLIST silences one specific rule at
+              creation time, this silences EVERY block regardless of
+              which rule (or StaticRules entry) caused it, including
+              ones already created as plain BLOCKLIST before this was
+              added. Santa's own doc comment on this key is a real,
+              worth-repeating caveat: "This can be a very confusing
+              experience for users, use with caution" - a blocked app
+              will now just silently fail to launch with no explanation
+              on screen at all. Blocks are still logged either way
+              (EventLogType above, and still visible in the dashboard's
+              Rules/events data) - this only removes the on-screen
+              popup, not the enforcement or the record of it.
+            -->
+            <key>EnableSilentMode</key>
+            <true/>
+
+            <!--
               Phase 3 deliberately shipped with no SyncBaseURL - StaticRules
               alone was enough for "deny a short, specific list of known-bad
               tools", and standing up + trusting a sync server wasn't
