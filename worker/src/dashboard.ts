@@ -24,8 +24,6 @@ const SHARED_STYLES = `
   .subtitle { color: #8b8f98; font-size: 0.85rem; margin-bottom: 2rem; }
   section { margin-bottom: 2.5rem; }
   h2 { font-size: 1.05rem; border-bottom: 1px solid #2a2d33; padding-bottom: 0.5rem; }
-  h3 { font-size: 0.9rem; color: #c3c6cc; margin: 1.75rem 0 0; }
-  h3:first-of-type { margin-top: 1rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.75rem; }
   th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #22252b; }
   th { color: #8b8f98; font-weight: 500; }
@@ -199,13 +197,14 @@ export function renderDashboard(): string {
 
   <section>
     <h2>Santa (app execution control)</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Two views on the same thing, not two separate lists: Rules below is Santa's actual enforced block/allow state (static profile entries plus everything added dynamically) - the source of truth for what runs on this Mac. App inventory further down is the tool for adding to it: real Team IDs scanned off the Mac itself, one click to turn one into a Rules row, instead of typing an identifier by hand.</div>
-
-    <h3>Rules</h3>
+    <div class="subtitle" style="margin-bottom: 0;">One list: Santa's actual enforced block/allow rules (static profile entries plus everything added dynamically) - the source of truth for what runs on this Mac - plus every app found on this Mac with a real Team ID (AppInventoryScanner.swift, daemon-side, synced every 15 minutes) that doesn't have a rule yet, with Allow/Block right there instead of typing an identifier by hand. LOCKDOWN mode is default-deny, so every app someone actually uses needs a real ALLOWLIST Team ID rule - that's what those un-ruled rows, and the Allow all button below, are for. An app with no Team ID (unsigned, ad-hoc signed, or one of Apple's own platform binaries) never shows up needing one - see the Architecture tab's Santa row for why that's fine for Apple's own binaries specifically.</div>
     <table id="rules-table">
       <thead><tr><th>Name</th><th>Identifier</th><th>Type</th><th>Policy</th><th>Scope</th><th></th></tr></thead>
       <tbody id="rules-body"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
     </table>
+    <div class="inline">
+      <button id="allow-all-app-inventory">Allow all (queue ALLOWLIST for every un-ruled app above)</button>
+    </div>
     <form class="inline" id="add-rule-form">
       <input name="app_name" placeholder="App name (e.g. Tor Browser)" style="min-width: 160px;">
       <input name="identifier" placeholder="Identifier (SHA-256 / Team ID / etc)" required style="flex: 1; min-width: 220px;">
@@ -224,42 +223,20 @@ export function renderDashboard(): string {
       <button type="submit">Add rule</button>
     </form>
     <div class="status-msg" id="rules-status"></div>
-
-    <h3>App inventory (Team IDs)</h3>
-    <div class="subtitle" style="margin-bottom: 0;">Real code-signing data, scanned locally on the Mac itself (AppInventoryScanner.swift, daemon-side) and synced up every 15 minutes - not from SimpleMDM's inventory API, which has no signing data at all (that's why the Installed apps table below so often shows "no identifier available"). This is what makes a real per-app Allow/Block button possible, and it's the prerequisite for switching Santa to LOCKDOWN mode: LOCKDOWN is default-deny, so every app someone actually uses needs a real ALLOWLIST Team ID rule first (added here, then shown as a row in Rules above). An app with no Team ID (unsigned, ad-hoc signed, or one of Apple's own platform binaries) has nothing to allowlist here - see the Architecture tab's Santa row for why that's fine for Apple's own binaries specifically.</div>
-    <table id="app-inventory-table">
-      <thead><tr><th>Name</th><th>Bundle ID</th><th>Team ID</th><th>Last seen</th><th></th></tr></thead>
-      <tbody id="app-inventory-body"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
-    </table>
-    <div class="inline">
-      <button id="allow-all-app-inventory">Allow all (queue ALLOWLIST for every un-ruled Team ID above)</button>
-    </div>
-    <div class="status-msg" id="app-inventory-status"></div>
   </section>
 
   <section>
     <h2>ContentGuard (screen-capture scanning)</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Two views on the same thing, not two separate lists: Safe apps below is the actual exclusion list ContentGuardDaemon checks - every entry is a blind spot from screen-capture monitoring, kept short and deliberate. Installed apps further down is the tool for adding to it: every app SimpleMDM's inventory (or the hand-kept list of built-in Apple apps) knows about, by name, one click to whitelist instead of typing a bundle ID by hand.</div>
-
-    <h3>Safe apps (not scanned)</h3>
+    <div class="subtitle" style="margin-bottom: 0;">One list: every bundle ID ContentGuardDaemon already excludes from screen-capture monitoring (a blind spot, kept short and deliberate - static compiled baseline plus everything added dynamically), plus every other app SimpleMDM's inventory (or the hand-kept list of built-in Apple apps, see knownApps.ts) knows about, with a Whitelist button right there instead of typing a bundle ID by hand. Adding one takes effect after a 24h delay and a re-entered password, same ratchet as loosening a Santa rule; removing or cancelling one is immediate. Anything still carrying an unrecognized com.apple.* bundle ID (background helpers, framework-hosted components) is filtered out entirely, not shown - nobody's realistically whitelisting those, and SimpleMDM's inventory reports far more of them than Fleet's own scoped query ever surfaced.</div>
     <table id="safe-apps-table">
-      <thead><tr><th>App</th><th>Bundle ID</th><th>Added</th><th></th></tr></thead>
+      <thead><tr><th>App</th><th>Bundle ID</th><th>Status</th><th></th></tr></thead>
       <tbody id="safe-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
-    </table>
-    <div class="status-msg" id="safe-apps-status"></div>
-    <div id="safe-app-additions-pending"></div>
-
-    <h3>Installed apps</h3>
-    <div class="subtitle" style="margin-bottom: 0;">Pulled from the MDM's own inventory (SimpleMDM), which carries no code-signing data at all - so this only ever offers Whitelist, not Block/Allow (that needs a real Team ID, which is what App inventory above is for). Every built-in Apple app on this Mac is always pinned at the top, from a hand-kept list (see knownApps.ts), regardless of whether the live inventory reports it. Anything else still carrying a com.apple.* bundle ID (background helpers, framework-hosted components) is filtered out entirely, not shown - nobody's realistically Whitelisting those, and SimpleMDM's inventory reports far more of them than Fleet's own scoped query ever surfaced.</div>
-    <table id="installed-apps-table">
-      <thead><tr><th>Name</th><th>Version</th><th></th></tr></thead>
-      <tbody id="installed-apps-body"><tr><td colspan="3" class="empty">Loading...</td></tr></tbody>
     </table>
     <form class="inline" id="load-apps-form">
       <input name="host" placeholder="Different host? (hostname, serial, or UUID)" style="flex: 1; min-width: 220px;">
       <button type="submit">Load</button>
     </form>
-    <div class="status-msg" id="installed-apps-status"></div>
+    <div class="status-msg" id="safe-apps-status"></div>
   </section>
 
   <section>
@@ -617,11 +594,22 @@ function renderMdmLockdown(data, profileDetails, pendingProfileChanges) {
   });
 }
 
+// Rules is now ONE list, not two: Santa's actual enforced rules (static
+// + dynamic, as before) PLUS a suggested row for every app-inventory
+// entry with a real Team ID that doesn't have a rule yet - real code-
+// signing data scanned locally on the Mac (AppInventoryScanner.swift,
+// daemon-side, synced every 15 minutes), not from SimpleMDM's inventory
+// API (which has none at all). A suggested row's Block/Allow buttons
+// post straight to /api/rules, same endpoint the manual Add rule form
+// below uses - clicking one is genuinely just adding a rule, same as
+// typing an identifier by hand, just without having to find the Team ID
+// in Terminal first.
 async function loadRules() {
-  const [staticRules, rules, pending] = await Promise.all([
+  const [staticRules, rules, pending, appInventory] = await Promise.all([
     api("/api/static-rules"),
     api("/api/rules"),
     api("/api/loosen-requests"),
+    api("/api/app-inventory"),
   ]);
   const pendingByRuleId = Object.fromEntries(pending.map((p) => [p.rule_id, p]));
   const body = document.getElementById("rules-body");
@@ -641,230 +629,153 @@ async function loadRules() {
     <td><span class="pending-note" style="color:#6b6f78;">edit santa-config.mobileconfig</span></td>
   </tr>\`).join("");
 
-  let dynamicRowsHtml;
-  if (rules.length === 0) {
-    dynamicRowsHtml = '<tr><td colspan="6" class="empty">No dashboard-added rules yet.</td></tr>';
-  } else {
-    dynamicRowsHtml = rules.map((r) => {
-      const p = pendingByRuleId[r.id];
-      const canLoosen = r.policy !== "REMOVE" && !p;
-      let actionCell;
-      if (p) {
-        actionCell = \`<span class="pending-note">loosen queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel="\${p.id}">Cancel</button>\`;
-      } else if (canLoosen) {
-        actionCell = \`<button data-loosen="\${r.id}">Request loosen</button>\`;
-      } else {
-        actionCell = "";
-      }
-      return \`<tr>
-        <td>\${escapeHtml(r.notification_app_name) || '<span class="empty" style="padding:0;">unnamed</span>'}</td>
-        <td>\${escapeHtml(r.identifier)}</td>
-        <td>\${r.rule_type}</td>
-        <td class="policy-\${r.policy}">\${r.policy}</td>
-        <td>\${r.device_id ?? "all devices"}</td>
-        <td>\${actionCell}</td>
-      </tr>\`;
-    }).join("");
-  }
+  const dynamicRowsHtml = rules.map((r) => {
+    const p = pendingByRuleId[r.id];
+    const canLoosen = r.policy !== "REMOVE" && !p;
+    let actionCell;
+    if (p) {
+      actionCell = \`<span class="pending-note">loosen queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel="\${p.id}">Cancel</button>\`;
+    } else if (canLoosen) {
+      actionCell = \`<button data-loosen="\${r.id}">Request loosen</button>\`;
+    } else {
+      actionCell = "";
+    }
+    return \`<tr>
+      <td>\${escapeHtml(r.notification_app_name) || '<span class="empty" style="padding:0;">unnamed</span>'}</td>
+      <td>\${escapeHtml(r.identifier)}</td>
+      <td>\${r.rule_type}</td>
+      <td class="policy-\${r.policy}">\${r.policy}</td>
+      <td>\${r.device_id ?? "all devices"}</td>
+      <td>\${actionCell}</td>
+    </tr>\`;
+  }).join("");
 
-  body.innerHTML = staticRowsHtml + dynamicRowsHtml;
-}
-
-// Cached at module scope (not just inside loadSafeApps) so
-// loadInstalledApps can check "is this app already whitelisted" without
-// a second round trip - both read the same two endpoints, and the
-// static list in particular never changes without a Mac-side recompile,
-// so there's no reason to refetch it per-section.
-let staticSafeAppsCache = null;
-let approvedSafeAppsCache = [];
-
-async function loadSafeApps() {
-  const [staticApps, approved, pending] = await Promise.all([
-    staticSafeAppsCache ? Promise.resolve(staticSafeAppsCache) : api("/api/static-safe-apps"),
-    api("/api/safe-apps"),
-    api("/api/safe-app-additions"),
-  ]);
-  staticSafeAppsCache = staticApps;
-  approvedSafeAppsCache = approved;
-  renderSafeApps(staticApps, approved);
-  renderSafeAppAdditionsPending(pending);
-}
-
-// Static (compiled baseline, dimmed, no remove button - "edit
-// Config.swift" note, same treatment as Santa's StaticRules rows in
-// loadRules) shown first, dashboard-added (removable) after - matches
-// loadRules' own static-then-dynamic ordering and reasoning exactly.
-function renderSafeApps(staticApps, approved) {
-  const body = document.getElementById("safe-apps-body");
-  const staticRowsHtml = (staticApps || []).map((a) => \`<tr class="static-rule">
-    <td>\${escapeHtml(a.name)}</td>
-    <td>\${escapeHtml(a.bundleId)}</td>
-    <td>compiled baseline</td>
-    <td><span class="pending-note" style="color:#6b6f78;">edit Config.swift</span></td>
-  </tr>\`).join("");
-  let dynamicRowsHtml;
-  if (!approved || approved.length === 0) {
-    dynamicRowsHtml = '';
-  } else {
-    dynamicRowsHtml = approved.map((a) => \`<tr>
-      <td>\${a.name ? escapeHtml(a.name) : '<span class="empty" style="padding:0;">unknown</span>'}</td>
-      <td>\${escapeHtml(a.bundle_id)}</td>
-      <td>\${timeAgo(a.added_at)}</td>
-      <td><button class="danger" data-remove-safe-app="\${escapeHtml(a.bundle_id)}">Remove</button></td>
+  // Only TEAMID rules count as "already ruled" here - a suggestion row
+  // only ever proposes a TEAMID rule (that's what a Team ID actually
+  // is), so a BINARY/CDHASH/etc rule on the same identifier string
+  // (astronomically unlikely, but not impossible) shouldn't suppress it.
+  const ruledTeamIds = new Set(
+    [...staticRules, ...rules].filter((r) => r.rule_type === "TEAMID").map((r) => r.identifier)
+  );
+  const seenSuggested = new Set();
+  const suggestedRowsHtml = (appInventory || [])
+    .filter((a) => {
+      if (!a.team_id || ruledTeamIds.has(a.team_id) || seenSuggested.has(a.team_id)) return false;
+      seenSuggested.add(a.team_id);
+      return true;
+    })
+    .map((a) => \`<tr>
+      <td>\${escapeHtml(a.name || a.bundle_id)}</td>
+      <td>\${escapeHtml(a.team_id)}</td>
+      <td>TEAMID</td>
+      <td><span class="pending-note" style="color:#6b6f78;">not ruled</span></td>
+      <td>scanned app</td>
+      <td><button data-block-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Block</button> <button data-allow-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Allow</button></td>
     </tr>\`).join("");
-  }
-  body.innerHTML = staticRowsHtml + dynamicRowsHtml || '<tr><td colspan="4" class="empty">Nothing whitelisted at all - not even the compiled baseline, which should never happen.</td></tr>';
+
+  body.innerHTML = staticRowsHtml + dynamicRowsHtml + suggestedRowsHtml
+    || '<tr><td colspan="6" class="empty">No rules and nothing scanned yet.</td></tr>';
 }
 
-// Static, lives outside #safe-apps-body on purpose - same reasoning as
-// #profile-changes-pending: that table gets fully rebuilt on every
-// loadSafeApps() call, including the one a successful add/cancel here
-// itself triggers, so a listener attached inside renderSafeApps would
-// either vanish or double up across renders.
-function renderSafeAppAdditionsPending(pending) {
-  const el = document.getElementById("safe-app-additions-pending");
-  if (!pending || pending.length === 0) {
-    el.innerHTML = "";
-    return;
-  }
-  el.innerHTML = pending.map((p) =>
-    \`<div class="status-row">Add "\${escapeHtml(p.name || p.bundle_id)}": <span class="pending-note">queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel-safe-app-addition="\${p.id}">Cancel</button></div>\`
-  ).join("");
-}
-
-// Installed Apps is the place new Whitelist (safe-apps) actions get
-// added, by app name - see this section's own subtitle in the markup.
-// SimpleMDM's inventory has no code-signing data, so it never offers
-// Block/Allow (App inventory, backed by the daemon's own local Team-ID
-// scan, is what does that job for real - see that section instead).
-// Fetches its own safe-apps state directly (static baseline +
-// dashboard-approved + pending) rather than reusing loadSafeApps()'s
-// module-scope caches, since that function runs independently on page
-// load with no ordering guarantee relative to this one - a shared cache
-// here could read stale/empty state on a race.
-async function loadInstalledApps(host) {
+// ContentGuard's scanning exclusions - now ONE list, not two: every
+// bundle ID already excluded (static compiled baseline + dashboard-
+// approved + pending) PLUS every other app SimpleMDM's inventory (or
+// the hand-kept list of built-in Apple apps, knownApps.ts) knows about
+// that isn't excluded yet, with a Whitelist button right there. Built
+// as one bundle-ID-keyed map so an app already covered by the first
+// group is never shown twice with a stray second "you could whitelist
+// this" row.
+async function loadContentGuardApps(host) {
   // No host -> the Worker falls back to DEFAULT_SIMPLEMDM_DEVICE_ID (this
   // project's one real Mac) - see softwareApi.ts's handleListInstalledSoftware.
   const qs = host ? \`?host=\${encodeURIComponent(host)}\` : "";
-  const [apps, staticApps, approved, pendingAdditions, knownApps] = await Promise.all([
-    api(\`/api/installed-software\${qs}\`),
+  const [staticApps, approved, pendingAdditions, apps, knownApps] = await Promise.all([
     api("/api/static-safe-apps"),
     api("/api/safe-apps"),
     api("/api/safe-app-additions"),
+    api(\`/api/installed-software\${qs}\`),
     api("/api/known-apps"),
   ]);
-  const whitelistedIds = new Set([
-    ...(staticApps || []).map((s) => s.bundleId),
-    ...(approved || []).map((a) => a.bundle_id),
-  ]);
-  const pendingIds = new Set((pendingAdditions || []).map((p) => p.bundle_id));
+
+  const rows = new Map();
+  for (const s of staticApps || []) {
+    rows.set(s.bundleId, { kind: "static", name: s.name, bundleId: s.bundleId });
+  }
+  for (const a of approved || []) {
+    rows.set(a.bundle_id, { kind: "approved", name: a.name, bundleId: a.bundle_id, addedAt: a.added_at });
+  }
+  // A bundle ID already approved can never also be pending - the ratchet
+  // itself guarantees that (requestAddSafeApp checks both
+  // isSafeAppBundleIdApproved and hasActivePendingSafeAppAddition before
+  // ever queuing a request) - so this never clobbers an "approved" entry
+  // set just above.
+  for (const p of pendingAdditions || []) {
+    rows.set(p.bundle_id, { kind: "pending", name: p.name, bundleId: p.bundle_id, pendingId: p.id, appliesAt: p.applies_at });
+  }
 
   // Pin knownApps.ts's curated Apple apps at the top, in their declared
-  // order, ahead of whatever else Fleet reported - see this section's own
-  // subtitle for why. Prefer Fleet's real row when it actually has one
-  // for a given bundle ID (better version data than this stand-in can
-  // offer); only synthesize a bare row - no version - when Fleet has
-  // nothing for it at all.
-  const appsByBundleId = new Map((apps || []).filter((a) => a.bundle_identifier).map((a) => [a.bundle_identifier, a]));
-  const knownBundleIds = new Set((knownApps || []).map((k) => k.bundleId));
-  const knownRows = (knownApps || []).map((k) => appsByBundleId.get(k.bundleId) || {
-    name: k.name,
-    version: null,
-    bundle_identifier: k.bundleId,
-  });
-  // Real complaint, fixed here rather than by re-narrowing the inventory
-  // fetch itself: Fleet's old getHostSoftware call used the
-  // macos_applications=true param, which scoped results to top-level
-  // /Applications entries - SimpleMDM's installed_apps has no
-  // equivalent scoping param and reports every com.apple.* system
+  // order, ahead of whatever else Fleet reported - see this section's
+  // own subtitle for why. Prefer Fleet's real row when it actually has
+  // one for a given bundle ID; only synthesize a bare row when Fleet has
+  // nothing for it at all. Real complaint, fixed here rather than by
+  // re-narrowing the inventory fetch itself: Fleet's old getHostSoftware
+  // call used the macos_applications=true param, which scoped results
+  // to top-level /Applications entries - SimpleMDM's installed_apps has
+  // no equivalent scoping param and reports every com.apple.* system
   // component it finds (background helpers, framework-hosted mini-apps,
   // etc.), not just things a human would recognize. knownApps.ts already
   // exists specifically to make every REAL, recognizable built-in Apple
-  // app manageable by name (see its own top comment) - anything else
-  // still carrying a com.apple.* bundle ID here is exactly the noise
-  // that curated list was meant to make unnecessary to wade through, not
-  // a second category of app anyone's actually going to Whitelist.
-  // Filtered out of restRows specifically (not knownRows, and
-  // not third-party apps generally) - a third-party app with no bundle
-  // ID at all still shows (existing "no bundle ID" placeholder handles
-  // it), only Apple's own unrecognized noise is hidden.
+  // app manageable by name - anything else still carrying a com.apple.*
+  // bundle ID here is exactly the noise that curated list was meant to
+  // make unnecessary to wade through, not a second category of app
+  // anyone's actually going to whitelist.
+  const appsByBundleId = new Map((apps || []).filter((a) => a.bundle_identifier).map((a) => [a.bundle_identifier, a]));
+  const knownBundleIds = new Set((knownApps || []).map((k) => k.bundleId));
+  const knownRows = (knownApps || []).map((k) => appsByBundleId.get(k.bundleId) || { name: k.name, bundle_identifier: k.bundleId });
   const restRows = (apps || []).filter(
     (a) => !a.bundle_identifier || (!knownBundleIds.has(a.bundle_identifier) && !a.bundle_identifier.startsWith("com.apple."))
   );
-  const allRows = [...knownRows, ...restRows];
-
-  const body = document.getElementById("installed-apps-body");
-  if (allRows.length === 0) {
-    body.innerHTML = '<tr><td colspan="3" class="empty">No installed apps returned - Fleet may not have inventoried this host recently.</td></tr>';
-    return;
+  let noIdCount = 0;
+  for (const a of [...knownRows, ...restRows]) {
+    if (a.bundle_identifier && rows.has(a.bundle_identifier)) continue; // already covered above
+    // An app with no bundle ID at all can't be deduped by identifier -
+    // give it a unique synthetic key so more than one doesn't collide in
+    // the Map and silently disappear.
+    const key = a.bundle_identifier || \`__no-bundle-id-\${noIdCount++}\`;
+    rows.set(key, { kind: "available", name: a.name, bundleId: a.bundle_identifier });
   }
-  body.innerHTML = allRows.map((a) => {
-    // Four states, in order of precedence: no usable bundle ID at all
-    // (Fleet hasn't reported one for this app yet - disable rather than
-    // send a request that can only fail), already whitelisted (static or
-    // dashboard-approved - don't offer to queue a no-op), already queued
-    // (don't offer a second, redundant 24h wait), or the real action.
-    let whitelistAction;
-    if (!a.bundle_identifier) {
-      whitelistAction = '<span class="pending-note" style="color:#6b6f78;">no bundle ID</span>';
-    } else if (whitelistedIds.has(a.bundle_identifier)) {
-      whitelistAction = '<span class="pending-note" style="color:#51cf66;">whitelisted</span>';
-    } else if (pendingIds.has(a.bundle_identifier)) {
-      whitelistAction = '<span class="pending-note">whitelist queued</span>';
-    } else {
-      whitelistAction = \`<button data-whitelist="\${escapeHtml(a.bundle_identifier)}" data-app-name="\${escapeHtml(a.name)}">Whitelist</button>\`;
-    }
-    return \`<tr>
-      <td>\${escapeHtml(a.name)}</td>
-      <td>\${escapeHtml(a.version ?? "")}</td>
-      <td>\${whitelistAction}</td>
-    </tr>\`;
-  }).join("");
+
+  renderContentGuardApps([...rows.values()]);
 }
 
-// App inventory (Team IDs) - see this section's own subtitle in the
-// markup for what it is and why it exists. Fetches rules fresh (not a
-// shared cache) for the same reason loadInstalledApps does: no ordering
-// guarantee against loadRules()'s own independent page-load fetch.
-async function loadAppInventory() {
-  const [apps, staticRules, rules] = await Promise.all([
-    api("/api/app-inventory"),
-    api("/api/static-rules"),
-    api("/api/rules"),
-  ]);
-  // Only TEAMID rules count as "already ruled" here - this section only
-  // ever offers to add a TEAMID rule (that's what a Team ID actually
-  // is), so a BINARY/CDHASH/etc rule on the same identifier string
-  // (astronomically unlikely, but not impossible) shouldn't suppress
-  // the Allow/Block buttons for an unrelated rule type.
-  const ruledTeamIds = new Map();
-  [...(staticRules || []), ...(rules || [])]
-    .filter((r) => r.rule_type === "TEAMID")
-    .forEach((r) => ruledTeamIds.set(r.identifier, r.policy));
-  renderAppInventory(apps, ruledTeamIds);
-}
-
-function renderAppInventory(apps, ruledTeamIds) {
-  const body = document.getElementById("app-inventory-body");
-  if (!apps || apps.length === 0) {
-    body.innerHTML = '<tr><td colspan="5" class="empty">Nothing scanned yet - the daemon syncs this up to every 15 minutes; give a freshly-installed build a little time.</td></tr>';
+function renderContentGuardApps(rows) {
+  const body = document.getElementById("safe-apps-body");
+  if (rows.length === 0) {
+    body.innerHTML = '<tr><td colspan="4" class="empty">Nothing whitelisted and no installed apps returned.</td></tr>';
     return;
   }
-  body.innerHTML = apps.map((a) => {
-    let actionCell;
-    if (!a.team_id) {
-      actionCell = '<span class="pending-note" style="color:#6b6f78;">no Team ID</span>';
-    } else if (ruledTeamIds.has(a.team_id)) {
-      const policy = ruledTeamIds.get(a.team_id);
-      actionCell = \`<span class="pending-note policy-\${policy}">\${policy}</span>\`;
+  body.innerHTML = rows.map((r) => {
+    let statusCell, actionCell;
+    if (r.kind === "static") {
+      statusCell = '<span class="pending-note" style="color:#6b6f78;">compiled baseline</span>';
+      actionCell = '<span class="pending-note" style="color:#6b6f78;">edit Config.swift</span>';
+    } else if (r.kind === "approved") {
+      statusCell = timeAgo(r.addedAt);
+      actionCell = \`<button class="danger" data-remove-safe-app="\${escapeHtml(r.bundleId)}">Remove</button>\`;
+    } else if (r.kind === "pending") {
+      statusCell = \`<span class="pending-note">queued, applies in \${timeUntil(r.appliesAt)}</span>\`;
+      actionCell = \`<button data-cancel-safe-app-addition="\${r.pendingId}">Cancel</button>\`;
+    } else if (!r.bundleId) {
+      statusCell = '<span class="empty" style="padding:0;">not whitelisted</span>';
+      actionCell = '<span class="pending-note" style="color:#6b6f78;">no bundle ID</span>';
     } else {
-      actionCell = \`<button data-block-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Block</button> <button data-allow-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Allow</button>\`;
+      statusCell = '<span class="empty" style="padding:0;">not whitelisted</span>';
+      actionCell = \`<button data-whitelist="\${escapeHtml(r.bundleId)}" data-app-name="\${escapeHtml(r.name ?? "")}">Whitelist</button>\`;
     }
-    return \`<tr>
-      <td>\${escapeHtml(a.name || a.bundle_id)}</td>
-      <td>\${escapeHtml(a.bundle_id)}</td>
-      <td>\${a.team_id ? escapeHtml(a.team_id) : '<span class="empty" style="padding:0;">none</span>'}</td>
-      <td>\${timeAgo(a.last_seen_at)}</td>
+    return \`<tr\${r.kind === "static" ? ' class="static-rule"' : ""}>
+      <td>\${r.name ? escapeHtml(r.name) : '<span class="empty" style="padding:0;">unknown</span>'}</td>
+      <td>\${r.bundleId ? escapeHtml(r.bundleId) : '<span class="empty" style="padding:0;">—</span>'}</td>
+      <td>\${statusCell}</td>
       <td>\${actionCell}</td>
     </tr>\`;
   }).join("");
@@ -967,9 +878,16 @@ document.getElementById("add-rule-form").addEventListener("submit", async (e) =>
   }
 });
 
+// Handles Rules' own loosen/cancel actions AND a suggested row's
+// Block/Allow (adding a brand-new TEAMID rule) - both now land in the
+// same tbody, since Rules is one list, not two. See loadRules()'s own
+// comment for why a suggested row's buttons just post straight to
+// /api/rules, same as the manual Add rule form below.
 document.getElementById("rules-body").addEventListener("click", async (e) => {
   const loosenId = e.target.getAttribute("data-loosen");
   const cancelId = e.target.getAttribute("data-cancel");
+  const blockTeamId = e.target.getAttribute("data-block-team-id");
+  const allowTeamId = e.target.getAttribute("data-allow-team-id");
   if (loosenId) {
     const password = prompt("Password to request loosening this rule:");
     if (!password) return;
@@ -992,98 +910,37 @@ document.getElementById("rules-body").addEventListener("click", async (e) => {
     } catch (err) {
       setStatus("rules-status", "Failed to cancel: " + err.message, true);
     }
+  } else if (blockTeamId || allowTeamId) {
+    const teamId = blockTeamId || allowTeamId;
+    const appName = e.target.getAttribute("data-app-name");
+    const policy = blockTeamId ? "BLOCKLIST" : "ALLOWLIST";
+    try {
+      await api("/api/rules", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ identifier: teamId, rule_type: "TEAMID", policy, notification_app_name: appName || undefined }),
+      });
+      setStatus("rules-status", (blockTeamId ? "Blocked " : "Allowed ") + appName + ".", false);
+      await loadRules();
+    } catch (err) {
+      setStatus("rules-status", "Failed to add rule: " + err.message, true);
+    }
   }
 });
 
-document.getElementById("safe-apps-body").addEventListener("click", async (e) => {
-  const bundleId = e.target.getAttribute("data-remove-safe-app");
-  if (!bundleId) return;
-  try {
-    await api(\`/api/safe-apps/\${encodeURIComponent(bundleId)}\`, { method: "DELETE" });
-    setStatus("safe-apps-status", "Removed - takes effect immediately.", false);
-    await loadSafeApps();
-  } catch (err) {
-    setStatus("safe-apps-status", "Failed to remove: " + err.message, true);
-  }
-});
-
-// Static, same placement reasoning as profile-changes-pending above.
-document.getElementById("safe-app-additions-pending").addEventListener("click", async (e) => {
-  const cancelId = e.target.getAttribute("data-cancel-safe-app-addition");
-  if (!cancelId) return;
-  try {
-    await api(\`/api/safe-app-additions/\${cancelId}/cancel\`, { method: "POST" });
-    setStatus("safe-apps-status", "Cancelled.", false);
-    await loadSafeApps();
-  } catch (err) {
-    setStatus("safe-apps-status", "Failed to cancel: " + err.message, true);
-  }
-});
-
-document.getElementById("load-apps-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const host = new FormData(e.target).get("host");
-  try {
-    setStatus("installed-apps-status", "Loading...", false);
-    await loadInstalledApps(host);
-    setStatus("installed-apps-status", "", false);
-  } catch (err) {
-    setStatus("installed-apps-status", "Failed to load: " + err.message, true);
-  }
-});
-
-document.getElementById("installed-apps-body").addEventListener("click", async (e) => {
-  const whitelistId = e.target.getAttribute("data-whitelist");
-  if (!whitelistId) return;
-  const appName = e.target.getAttribute("data-app-name");
-  const password = prompt(\`Password to confirm whitelisting "\${appName}" (excluded from scanning, applies after 24h):\`);
-  if (!password) return;
-  try {
-    await api("/api/safe-apps", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ bundle_id: whitelistId, name: appName, password }),
-    });
-    setStatus("installed-apps-status", "Whitelist queued for " + appName + " - applies in ~24h.", false);
-    await loadSafeApps();
-  } catch (err) {
-    setStatus("installed-apps-status", "Failed to queue whitelist: " + err.message, true);
-  }
-});
-
-document.getElementById("app-inventory-body").addEventListener("click", async (e) => {
-  const blockTeamId = e.target.getAttribute("data-block-team-id");
-  const allowTeamId = e.target.getAttribute("data-allow-team-id");
-  const teamId = blockTeamId || allowTeamId;
-  if (!teamId) return;
-  const appName = e.target.getAttribute("data-app-name");
-  const policy = blockTeamId ? "BLOCKLIST" : "ALLOWLIST";
-  try {
-    await api("/api/rules", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ identifier: teamId, rule_type: "TEAMID", policy, notification_app_name: appName || undefined }),
-    });
-    setStatus("app-inventory-status", (blockTeamId ? "Blocked " : "Allowed ") + appName + ".", false);
-    await loadAppInventory();
-  } catch (err) {
-    setStatus("app-inventory-status", "Failed to add rule: " + err.message, true);
-  }
-});
-
-// Bulk allowlisting - the actual point of this whole section (see its
-// subtitle): getting from "no allowlist at all" to "every app already
-// on this Mac has a real ALLOWLIST Team ID rule" one click at a time
-// would be tedious enough to defeat the purpose. Plain sequential
-// client-side loop over /api/rules, same endpoint the single-row
-// buttons above already use - no new bulk endpoint on the Worker side,
-// same "minimal moving parts" reasoning as everywhere else in this
-// project. Skips anything with no Team ID or already ruled (either
-// policy) - this button only ever adds, never overrides an existing
-// BLOCKLIST someone deliberately set.
+// Bulk allowlisting - the actual point of the suggested rows (see
+// loadRules()'s own comment): getting from "no allowlist at all" to
+// "every app already on this Mac has a real ALLOWLIST Team ID rule" one
+// click at a time would be tedious enough to defeat the purpose. Plain
+// sequential client-side loop over /api/rules, same endpoint the
+// single-row buttons above already use - no new bulk endpoint on the
+// Worker side, same "minimal moving parts" reasoning as everywhere else
+// in this project. Skips anything with no Team ID or already ruled
+// (either policy) - this button only ever adds, never overrides an
+// existing BLOCKLIST someone deliberately set.
 document.getElementById("allow-all-app-inventory").addEventListener("click", async () => {
   if (!confirm("Queue an ALLOWLIST Team ID rule for every app below that doesn't have one yet?")) return;
-  setStatus("app-inventory-status", "Loading current state...", false);
+  setStatus("rules-status", "Loading current state...", false);
   try {
     const [apps, staticRules, rules] = await Promise.all([
       api("/api/app-inventory"),
@@ -1100,12 +957,12 @@ document.getElementById("allow-all-app-inventory").addEventListener("click", asy
       return true;
     });
     if (targets.length === 0) {
-      setStatus("app-inventory-status", "Nothing to do - every scanned Team ID already has a rule.", false);
+      setStatus("rules-status", "Nothing to do - every scanned Team ID already has a rule.", false);
       return;
     }
     let done = 0;
     for (const a of targets) {
-      setStatus("app-inventory-status", \`Allowing \${a.name || a.bundle_id} (\${done + 1}/\${targets.length})...\`, false);
+      setStatus("rules-status", \`Allowing \${a.name || a.bundle_id} (\${done + 1}/\${targets.length})...\`, false);
       await api("/api/rules", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1113,11 +970,64 @@ document.getElementById("allow-all-app-inventory").addEventListener("click", asy
       });
       done++;
     }
-    setStatus("app-inventory-status", \`Allowed \${done} app(s).\`, false);
-    await loadAppInventory();
+    setStatus("rules-status", \`Allowed \${done} app(s).\`, false);
+    await loadRules();
   } catch (err) {
-    setStatus("app-inventory-status", "Failed partway through: " + err.message, true);
-    await loadAppInventory();
+    setStatus("rules-status", "Failed partway through: " + err.message, true);
+    await loadRules();
+  }
+});
+
+// Handles Safe apps' Remove, a pending addition's Cancel, and Whitelist
+// (queuing a brand-new one) - all three now land in the same tbody,
+// since this is one list, not two.
+document.getElementById("safe-apps-body").addEventListener("click", async (e) => {
+  const removeId = e.target.getAttribute("data-remove-safe-app");
+  const cancelId = e.target.getAttribute("data-cancel-safe-app-addition");
+  const whitelistId = e.target.getAttribute("data-whitelist");
+  if (removeId) {
+    try {
+      await api(\`/api/safe-apps/\${encodeURIComponent(removeId)}\`, { method: "DELETE" });
+      setStatus("safe-apps-status", "Removed - takes effect immediately.", false);
+      await loadContentGuardApps();
+    } catch (err) {
+      setStatus("safe-apps-status", "Failed to remove: " + err.message, true);
+    }
+  } else if (cancelId) {
+    try {
+      await api(\`/api/safe-app-additions/\${cancelId}/cancel\`, { method: "POST" });
+      setStatus("safe-apps-status", "Cancelled.", false);
+      await loadContentGuardApps();
+    } catch (err) {
+      setStatus("safe-apps-status", "Failed to cancel: " + err.message, true);
+    }
+  } else if (whitelistId) {
+    const appName = e.target.getAttribute("data-app-name");
+    const password = prompt(\`Password to confirm whitelisting "\${appName}" (excluded from scanning, applies after 24h):\`);
+    if (!password) return;
+    try {
+      await api("/api/safe-apps", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bundle_id: whitelistId, name: appName, password }),
+      });
+      setStatus("safe-apps-status", "Whitelist queued for " + appName + " - applies in ~24h.", false);
+      await loadContentGuardApps();
+    } catch (err) {
+      setStatus("safe-apps-status", "Failed to queue whitelist: " + err.message, true);
+    }
+  }
+});
+
+document.getElementById("load-apps-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const host = new FormData(e.target).get("host");
+  try {
+    setStatus("safe-apps-status", "Loading...", false);
+    await loadContentGuardApps(host);
+    setStatus("safe-apps-status", "", false);
+  } catch (err) {
+    setStatus("safe-apps-status", "Failed to load: " + err.message, true);
   }
 });
 
@@ -1225,11 +1135,9 @@ window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 showTab(location.hash.slice(1));
 
 loadRules().catch((err) => setStatus("rules-status", "Failed to load rules: " + err.message, true));
-loadSafeApps().catch((err) => setStatus("safe-apps-status", "Failed to load: " + err.message, true));
+loadContentGuardApps().catch((err) => setStatus("safe-apps-status", "Failed to load: " + err.message, true));
 loadSoftware().catch((err) => setStatus("software-status", "Failed to load software: " + err.message, true));
 loadPendingPasswordChange().catch(() => {});
-loadInstalledApps().catch((err) => setStatus("installed-apps-status", "Failed to load: " + err.message, true));
-loadAppInventory().catch((err) => setStatus("app-inventory-status", "Failed to load: " + err.message, true));
 loadHostStatus().catch((err) => {
   document.getElementById("sync-health-body").innerHTML = \`<div class="empty error">Failed to load: \${escapeHtml(err.message)}</div>\`;
   document.getElementById("mdm-lockdown-body").innerHTML = "";
