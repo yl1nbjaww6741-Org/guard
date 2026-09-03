@@ -1,24 +1,12 @@
 {
   "manifest_version": 3,
   "name": "ContentGuard",
-  "version": "0.2.1",
-  "description": "Blocks configured keywords and NSFW content (same NudeNet model the native Mac app uses) in real time.",
-  "permissions": ["storage", "alarms", "declarativeNetRequest", "tabs", "windows", "offscreen", "scripting"],
+  "version": "0.3.0",
+  "description": "Blocks NSFW content (same NudeNet model the native Mac app uses) in real time.",
+  "permissions": ["alarms", "tabs", "windows", "offscreen", "scripting"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background/service-worker.js"
-  },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content-scripts/keyword-blocker.js"],
-      "run_at": "document_start",
-      "all_frames": true
-    }
-  ],
-  "options_ui": {
-    "page": "options/options.html",
-    "open_in_tab": true
   },
   "sandbox": {
     "pages": ["sandbox/sandbox.html"]

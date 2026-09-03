@@ -1,40 +1,32 @@
 # ContentGuard - Chrome extension
 
-Phase A (keyword blocking) and Phase B (5-second screenshot capture +
-the same NudeNet ONNX classifier the native Mac app uses) are both
-built AND confirmed working end-to-end on a real Mac/real Chrome install
-(2026-08-25) - a real test image was caught by the classifier and the
-tab closed. Getting there took three real, live-found-and-fixed bugs
-(see git history / this file's own comments in each source file): a
-race between the sandbox iframe's "load" event and the model fetch, a
-doubled `lib/lib/ort/...` path plus a missing vendored `.mjs` file, and
-offscreen documents not actually having `chrome.tabs`/`chrome.windows`
-access at all (moved the real capture calls to the service worker).
-None of that was guessable in advance - real Chrome testing, each time,
-is what actually found and confirmed each fix.
+NSFW detection (5-second screenshot capture + the same NudeNet ONNX
+classifier the native Mac app uses) is built AND confirmed working
+end-to-end on a real Mac/real Chrome install (2026-08-25) - a real test
+image was caught by the classifier and the tab closed. Getting there took
+three real, live-found-and-fixed bugs (see git history / this file's own
+comments in each source file): a race between the sandbox iframe's "load"
+event and the model fetch, a doubled `lib/lib/ort/...` path plus a
+missing vendored `.mjs` file, and offscreen documents not actually having
+`chrome.tabs`/`chrome.windows` access at all (moved the real capture
+calls to the service worker). None of that was guessable in advance -
+real Chrome testing, each time, is what actually found and confirmed
+each fix.
+
+**Keyword blocking (URL/page-text matching against a dashboard-managed
+word list) was removed** - it had a real, self-inflicted bug: the
+dashboard's Keyword blocker section necessarily rendered every blocked
+keyword as plain page text (that's the whole point of a page that lets
+you manage the list), so the extension's own filter started blocking the
+dashboard itself the moment a real keyword went on it. Combined with
+keyword matching only ever catching what's on a hand-maintained word
+list (the NSFW image classifier below has no such ceiling), the decision
+was to drop the feature outright rather than patch around the panel-
+blocking bug. NSFW detection is this extension's sole enforcement now.
 
 ## What's here
 
-**Phase A - keyword blocking:**
 - `manifest.json` - MV3 manifest.
-- `background/service-worker.js` - polls the Worker's `/sync/keywords`
-  every 5 minutes (plus immediately on install/startup/options-save),
-  and turns the keyword list into `declarativeNetRequest` rules that
-  block matching URLs before they load. Also owns the offscreen
-  document's lifecycle (see Phase B below) and the shared
-  close-the-tab reaction both phases use.
-- `content-scripts/keyword-blocker.js` - the fallback for a keyword that
-  only shows up in a page's rendered text/title, not its URL. Closes the
-  tab on a match.
-- `options/options.html` + `options.js` - where the Worker URL and the
-  extension's own sync token are configured. **The token is never
-  hardcoded into this extension's source** - same discipline as every
-  other secret in this project (Santa's sync token, the daemon's sync
-  token, Fleet's API token - all provisioned separately, never
-  committed). It's entered once through this page and stored only in
-  this browser's local extension storage.
-
-**Phase B - NSFW detection:**
 - `background/offscreen.html` + `offscreen.js` - a `chrome.offscreen`
   document, which (unlike the service worker) doesn't get suspended when
   idle - the actual 5-second `setInterval` capture loop lives here. Does
@@ -46,11 +38,13 @@ is what actually found and confirmed each fix.
   `chrome.runtime.sendMessage`, decodes what comes back to raw pixel
   data, and hands it to the sandbox below for classification. On a real
   detection, tells the service worker which tab to close.
-- `background/service-worker.js` - besides Phase A's keyword sync, also
-  owns the real `chrome.tabs.captureVisibleTab` calls (~2 calls/second
-  real Chrome rate limit, comfortably above what a 5-second cadence needs
-  even with several windows open) for the reason above, responding to the
-  offscreen document's capture requests.
+- `background/service-worker.js` - owns the real
+  `chrome.tabs.captureVisibleTab` calls (~2 calls/second real Chrome rate
+  limit, comfortably above what a 5-second cadence needs even with
+  several windows open), responding to the offscreen document's capture
+  requests. Also owns the offscreen document's lifecycle (creating it,
+  and a periodic health-check re-creating it if Chrome ever reclaims it
+  unexpectedly) and the shared close-the-tab reaction.
 - `sandbox/sandbox.html` + `sandbox.js` - a manifest-declared **sandbox**
   page (relaxed CSP, no `chrome.*` API access, own opaque origin) that
   actually runs the ONNX Runtime Web session and the classifier.
@@ -79,18 +73,7 @@ is what actually found and confirmed each fix.
 
 ## Setup (do this once per Mac/Chrome install)
 
-1. **Generate a token and set it on the Worker** (from the `worker/`
-   directory, or wherever you run `wrangler`):
-   ```bash
-   openssl rand -hex 32   # copy this value
-   npx wrangler secret put CONTENTGUARD_EXTENSION_SYNC_TOKEN
-   # paste the generated value when prompted
-   ```
-   This is the same `wrangler secret put` pattern already used for
-   `SANTA_SYNC_TOKEN`/`CONTENTGUARD_DAEMON_SYNC_TOKEN` - see
-   `wrangler.toml`'s own comment block for all of them.
-
-2. **Load the extension unpacked** (this hasn't been published anywhere
+1. **Load the extension unpacked** (this hasn't been published anywhere
    yet - loading a local, unpacked directory is the real way to run and
    test it right now):
    - Chrome -> `chrome://extensions`
@@ -104,21 +87,7 @@ is what actually found and confirmed each fix.
      self-hosted - and why locking removal needs a *published* extension,
      not this unpacked dev copy).
 
-3. **Configure the extension**: click "Details" on the extension in
-   `chrome://extensions`, then "Extension options" (or right-click the
-   toolbar icon -> Options). Paste in:
-   - Worker URL (e.g. `https://panel.lukep009.download`)
-   - The token generated in step 1
-
-4. **Test keyword blocking**: add a keyword via the dashboard's
-   "Keyword blocker" section (takes effect immediately - no password,
-   that's only needed to *remove* one). Within 5 minutes (or
-   immediately, if you reload the extension from `chrome://extensions`
-   to force a fresh `onInstalled`/`onStartup` sync), try navigating to a
-   page whose URL or visible text contains that keyword and confirm it's
-   actually blocked or the tab closes.
-
-5. **Test NSFW detection**: open `chrome://extensions`, click the
+2. **Test NSFW detection**: open `chrome://extensions`, click the
    ContentGuard card's "service worker" link (or "Inspect views:
    service worker") to open its DevTools console - this is where every
    `console.log`/`console.warn`/`console.error` this extension emits
@@ -191,8 +160,6 @@ version of the same "don't pay for work that can't matter" principle.
   around. Console showed `"NudeNet ONNX session ready in sandbox"`.
 - A real test image, opened in a tab, was caught by the classifier and
   the tab closed within the expected ~5-10 second window.
-- Keyword blocking (both the URL-based `declarativeNetRequest` path and
-  the page-text content-script fallback).
 
 ## Still genuinely unverified
 
@@ -205,14 +172,12 @@ knowing about rather than assuming away:
    this doesn't lose enough detail to cause real misses on borderline
    content. If detection seems to miss something a screenshot clearly
    shows, try bumping the quality value first.
-2. **`declarativeNetRequest`'s `urlFilter` matching** - documented by
-   Chrome as case-insensitive overall; keywords are also already
-   lowercased server-side regardless, as a belt-and-suspenders measure.
-3. **`chrome.alarms`' effective minimum period** for a *published/
+2. **`chrome.alarms`' effective minimum period** for a *published/
    policy-installed* extension (vs. this unpacked dev-mode copy, which
-   has looser limits) - only matters for the 5-minute keyword sync, not
-   the NSFW capture loop (that one runs via a plain `setInterval` inside
-   the offscreen document, with no `chrome.alarms` floor at all).
-4. **Multi-window/multi-display coverage.** `service-worker.js`'s
+   has looser limits) - only matters for the periodic offscreen-document
+   health-check, not the NSFW capture loop (that one runs via a plain
+   `setInterval` inside the offscreen document, with no `chrome.alarms`
+   floor at all).
+3. **Multi-window/multi-display coverage.** `service-worker.js`'s
    `captureAllWindows()` iterates every open Chrome window each tick -
    not yet tested with more than one window open at once.

@@ -106,8 +106,8 @@ CREATE INDEX events_device_id_idx ON events(device_id);
 -- ratchet as everything else, rather than being a special case.
 --
 -- This is THE OFFICE/LOOSEN PASSWORD - checked at the moment of every
--- loosen-request (a Santa un-block, a safe-app addition, a keyword
--- removal, an MDM profile create/update) and to change itself. Changed
+-- loosen-request (a Santa un-block, a safe-app addition, an MDM
+-- profile create/update) and to change itself. Changed
 -- 2026-08-25 from this table's original design, where the same hash
 -- also gated general dashboard login: real problem that surfaced live -
 -- the office password is deliberately kept somewhere the day-to-day
@@ -295,37 +295,16 @@ CREATE TABLE pending_safe_app_additions (
               -- (ratchet.ts's applyDueSafeAppAdditions)
 );
 
--- Keyword blocklist for the Chrome extension (extensionSync.ts's GET
--- /sync/keywords, gated by CONTENTGUARD_EXTENSION_SYNC_TOKEN - see
--- types.ts's Env comment). Opposite ratchet polarity from
--- safe_app_bundle_ids above: ADDING a keyword makes the extension block
--- MORE, so it's a tightening and applies immediately (keywordsApi.ts's
--- handleAddKeyword, no password, same as Santa's handleCreateRule for a
--- new BLOCKLIST rule). REMOVING a keyword makes it block LESS, so it's a
--- loosening and goes through the same 24h-delay-plus-re-entered-password
--- ratchet as everything else (pending_keyword_removals below) - the
--- inverse of safe_app_bundle_ids's own asymmetry, not a copy-paste of it.
-CREATE TABLE blocked_keywords (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    keyword TEXT NOT NULL UNIQUE,
-    added_at INTEGER NOT NULL
-);
-
--- Ratchet for REMOVING a blocked_keywords row - same shape as
--- pending_safe_app_additions above, just gating the opposite direction
--- of change (see blocked_keywords's own comment for why). keyword is
--- captured at request time (not just keyword_id) purely for dashboard
--- display of a pending removal without a join, same reasoning as
--- pending_safe_app_additions.name.
-CREATE TABLE pending_keyword_removals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    keyword_id INTEGER NOT NULL REFERENCES blocked_keywords(id),
-    keyword TEXT NOT NULL,
-    requested_at INTEGER NOT NULL,
-    applies_at INTEGER NOT NULL,
-    applied_at INTEGER,
-    cancelled_at INTEGER
-);
+-- blocked_keywords/pending_keyword_removals (the Chrome extension's
+-- keyword blocklist) lived here until migrations/0009_drop_keyword_blocking.sql -
+-- removed along with the entire keyword-blocking subsystem (real bug:
+-- the dashboard itself necessarily renders every blocked keyword as
+-- plain text, so the extension's own filter started blocking the
+-- dashboard the moment a real keyword went on the list - and keyword
+-- matching was the fragile half of this system anyway, only ever
+-- catching what's on a hand-maintained word list). The NSFW image
+-- classifier (background/offscreen.js's NudeNet model) is the
+-- extension's sole enforcement now.
 
 -- Real per-app code-signing inventory, daemon-reported (AppInventoryScanner.swift
 -- + POST /sync/app-inventory) - see migrations/0008_app_inventory.sql's own

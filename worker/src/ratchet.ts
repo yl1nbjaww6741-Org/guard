@@ -9,26 +9,20 @@
 import {
   addSafeAppBundleId,
   applyLoosen,
-  deleteBlockedKeywordRow,
-  getBlockedKeywordById,
-  getDueKeywordRemovals,
   getDueLoosenRequests,
   getDuePasswordChanges,
   getDueProfileChanges,
   getDueSafeAppAdditions,
-  hasActivePendingKeywordRemoval,
   hasActivePendingLoosen,
   hasActivePendingPasswordChange,
   hasActivePendingProfileChange,
   hasActivePendingSafeAppAddition,
   isSafeAppBundleIdApproved,
-  markKeywordRemovalApplied,
   markLoosenRequestApplied,
   markPasswordChangeApplied,
   markProfileChangeApplied,
   markProfileChangeFailed,
   markSafeAppAdditionApplied,
-  queueKeywordRemoval,
   queueLoosenRequest,
   queuePasswordChange,
   queueProfileChange,
@@ -36,7 +30,6 @@ import {
   setDashboardPasswordHash,
 } from "./db";
 import type {
-  PendingKeywordRemoval,
   PendingLoosenRequest,
   PendingPasswordChange,
   PendingProfileChangeSummary,
@@ -73,18 +66,6 @@ export class SafeAppAlreadyApprovedError extends Error {
 export class SafeAppAdditionAlreadyPendingError extends Error {
   constructor(bundleId: string) {
     super(`${bundleId} already has an active pending addition request`);
-  }
-}
-
-export class KeywordNotFoundError extends Error {
-  constructor(id: number) {
-    super(`no blocked keyword with id ${id}`);
-  }
-}
-
-export class KeywordRemovalAlreadyPendingError extends Error {
-  constructor(keyword: string) {
-    super(`"${keyword}" already has an active pending removal request`);
   }
 }
 
@@ -210,34 +191,6 @@ export async function applyDueSafeAppAdditions(db: D1Database): Promise<number> 
   for (const request of due) {
     await addSafeAppBundleId(db, request.bundle_id, request.name);
     await markSafeAppAdditionApplied(db, request.id);
-  }
-  return due.length;
-}
-
-// Removing a blocked keyword is unambiguously a loosening (the extension
-// blocks less once it's gone) - queued through the same ratchet as
-// everything else. Called by the dashboard API once the current-password
-// re-check has already passed (same contract as requestLoosen/
-// requestAddSafeApp above). Looks the keyword up by id first so the
-// request row can capture its text at request time (same reasoning as
-// requestAddSafeApp capturing name) and so a bogus/already-deleted id
-// fails clearly rather than queuing a removal for nothing.
-export async function requestRemoveKeyword(db: D1Database, keywordId: number): Promise<PendingKeywordRemoval> {
-  const existing = await getBlockedKeywordById(db, keywordId);
-  if (!existing) {
-    throw new KeywordNotFoundError(keywordId);
-  }
-  if (await hasActivePendingKeywordRemoval(db, keywordId)) {
-    throw new KeywordRemovalAlreadyPendingError(existing.keyword);
-  }
-  return queueKeywordRemoval(db, keywordId, existing.keyword);
-}
-
-export async function applyDueKeywordRemovals(db: D1Database): Promise<number> {
-  const due = await getDueKeywordRemovals(db);
-  for (const request of due) {
-    await deleteBlockedKeywordRow(db, request.keyword_id);
-    await markKeywordRemovalApplied(db, request.id);
   }
   return due.length;
 }

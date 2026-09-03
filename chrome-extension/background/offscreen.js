@@ -3,11 +3,9 @@
 // service worker to actually capture screenshots (see below for why it
 // can't do that itself), decodes them to raw pixel data, and hands that
 // to the sandboxed iframe for classification via postMessage. On a real
-// detection, tells the service worker which tab to close - reuses the
-// exact same close-the-tab mechanism content-scripts/keyword-blocker.js's
-// matches already trigger (see service-worker.js's onMessage listener),
-// same "close the tab immediately" reasoning from this project's own
-// 2026-08-25 decision either way.
+// detection, tells the service worker which tab to close (see
+// service-worker.js's onMessage listener and closeTab()) - "close the
+// tab immediately" per this project's own 2026-08-25 decision.
 //
 // Does NOT call chrome.tabs/chrome.windows directly, despite this
 // project's own manifest.json listing those permissions - CONFIRMED LIVE
@@ -75,11 +73,13 @@ window.addEventListener("message", (event) => {
     // classifier-load-failure path (main.swift's applicationDidFinishLaunching
     // catch block: "no local cover... daemon's heartbeat-based fail-
     // closed is the backstop"). This extension has no daemon-equivalent
-    // backstop yet - a real, named gap, not hidden: if this fires, NSFW
-    // detection silently isn't running at all, only keyword blocking
-    // still is. Logged loudly so it's at least visible in the service
-    // worker's console during testing.
-    console.error("ContentGuard: sandbox session failed to initialize -", message.error, "- NSFW detection will NOT run this session (keyword blocking is unaffected)");
+    // backstop yet - a real, named gap, not hidden: if this fires, this
+    // extension provides NO enforcement at all for the rest of the
+    // session (NSFW detection is now its sole enforcement mechanism,
+    // since keyword blocking was removed - see git history). Logged
+    // loudly so it's at least visible in the service worker's console
+    // during testing.
+    console.error("ContentGuard: sandbox session failed to initialize -", message.error, "- NSFW detection will NOT run this session (this extension's only enforcement mechanism)");
     return;
   }
   if (message.type === "contentguard-result") {
@@ -333,7 +333,7 @@ async function init() {
     modelBytes = await (await fetch(modelUrl)).arrayBuffer();
     trySendInit();
   } catch (err) {
-    console.error("ContentGuard: failed to load NudeNet model -", err, "- NSFW detection will NOT run this session (keyword blocking is unaffected)");
+    console.error("ContentGuard: failed to load NudeNet model -", err, "- NSFW detection will NOT run this session (this extension's only enforcement mechanism)");
   }
 }
 

@@ -17,7 +17,7 @@
 //    the request already carries a valid session, same as the Android
 //    sibling app's pattern this whole design is modeled on.
 
-import { hashPassword, requireDaemonSyncToken, requireExtensionSyncToken, requireSession, requireSyncToken, verifyPasswordHash } from "./auth";
+import { hashPassword, requireDaemonSyncToken, requireSession, requireSyncToken, verifyPasswordHash } from "./auth";
 import { renderDashboard, renderLoginPage } from "./dashboard";
 import {
   cancelLoosenRequest,
@@ -37,7 +37,6 @@ import {
 import {
   LoosenAlreadyPendingError,
   PasswordChangeAlreadyPendingError,
-  applyDueKeywordRemovals,
   applyDueLoosenRequests,
   applyDuePasswordChanges,
   applyDueProfileChanges,
@@ -58,15 +57,7 @@ import {
 } from "./configProfilesApi";
 import { handleAppInventorySync, handleSafeAppsSync } from "./daemonSync";
 import { handleListAppInventory } from "./appInventoryApi";
-import { handleKeywordsSync } from "./extensionSync";
 import { handleExtensionCrx, handleExtensionUpdateManifest } from "./extensionUpdate";
-import {
-  handleAddKeyword,
-  handleCancelKeywordRemoval,
-  handleListKeywords,
-  handleListPendingKeywordRemovals,
-  handleRequestRemoveKeyword,
-} from "./keywordsApi";
 import { handleEventUpload, handlePostflight, handlePreflight, handleRuleDownload } from "./santaSync";
 import {
   handleCancelSafeAppAddition,
@@ -349,15 +340,6 @@ export default {
       return handleAppInventorySync(request, env);
     }
 
-    // --- Chrome extension's own sync (static-token-gated, see
-    // auth.ts's requireExtensionSyncToken - a separate token from both
-    // Santa's and the daemon's above, a third distinct client) ---
-    if (url.pathname === "/sync/keywords" && request.method === "GET") {
-      const tokenError = await requireExtensionSyncToken(request, env);
-      if (tokenError) return tokenError;
-      return handleKeywordsSync(env);
-    }
-
     // --- Login/logout (unauthenticated by nature - these ARE the auth) ---
     if (url.pathname === "/api/login" && request.method === "POST") {
       return handleLogin(request, env);
@@ -521,39 +503,6 @@ export default {
       return handleListAppInventory(env);
     }
 
-    // --- Keyword-blocklist API (session-gated) - see keywordsApi.ts's
-    // doc comment: adding is immediate (a tightening), removing queues
-    // through the ratchet (a loosening) - the opposite polarity from
-    // safe-apps above, not a copy-paste of it. ---
-    const isKeywordsApiRoute =
-      url.pathname === "/api/keywords" ||
-      url.pathname === "/api/keyword-removals" ||
-      url.pathname.match(/^\/api\/keywords\/\d+\/removal-request$/) ||
-      url.pathname.match(/^\/api\/keyword-removals\/\d+\/cancel$/);
-    if (isKeywordsApiRoute) {
-      const authError = await requireSession(request, env);
-      if (authError) return authError;
-
-      if (url.pathname === "/api/keywords" && request.method === "GET") {
-        return handleListKeywords(env);
-      }
-      if (url.pathname === "/api/keywords" && request.method === "POST") {
-        return handleAddKeyword(request, env);
-      }
-      if (url.pathname === "/api/keyword-removals" && request.method === "GET") {
-        return handleListPendingKeywordRemovals(env);
-      }
-      const removalRequestMatch = url.pathname.match(/^\/api\/keywords\/(\d+)\/removal-request$/);
-      if (removalRequestMatch && request.method === "POST") {
-        return handleRequestRemoveKeyword(Number(removalRequestMatch[1]), request, env);
-      }
-      const cancelRemovalMatch = url.pathname.match(/^\/api\/keyword-removals\/(\d+)\/cancel$/);
-      if (cancelRemovalMatch && request.method === "POST") {
-        return handleCancelKeywordRemoval(Number(cancelRemovalMatch[1]), env);
-      }
-      return new Response("Method Not Allowed", { status: 405 });
-    }
-
     // --- Login-password change (session-gated, NOT ratchet-gated - see
     // handleChangeLoginPassword's own doc comment for why this is a
     // separate route/table from the office-password group below) ---
@@ -631,10 +580,6 @@ export default {
     const appliedSafeAppAdditions = await applyDueSafeAppAdditions(env.DB);
     if (appliedSafeAppAdditions > 0) {
       console.log(`applied ${appliedSafeAppAdditions} due safe-app addition(s)`);
-    }
-    const appliedKeywordRemovals = await applyDueKeywordRemovals(env.DB);
-    if (appliedKeywordRemovals > 0) {
-      console.log(`applied ${appliedKeywordRemovals} due keyword removal(s)`);
     }
   },
 };
