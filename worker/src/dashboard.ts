@@ -321,8 +321,8 @@ export function renderDashboard(): string {
     <table>
       <thead><tr><th>Action</th><th>Where in this system</th><th>What it actually does</th></tr></thead>
       <tbody>
-        <tr><td>Un-blocking a Santa rule</td><td>Santa rules section, "loosen request"</td><td>Queues a rule for REMOVE - e.g. this is what unblocked Codex/ChatGPT's TEAMID</td></tr>
-        <tr><td>Adding a safe app (screen-capture exemption)</td><td>Safe apps section</td><td>Queues a bundle ID to stop being scanned by ContentGuardDaemon - e.g. the com.google.Chrome addition</td></tr>
+        <tr><td>Un-blocking a Santa rule</td><td>Santa section, Rules table, "loosen request"</td><td>Queues a rule for REMOVE - e.g. this is what unblocked Codex/ChatGPT's TEAMID</td></tr>
+        <tr><td>Adding a safe app (screen-capture exemption)</td><td>ContentGuard section, Safe apps table</td><td>Queues a bundle ID to stop being scanned by ContentGuardDaemon - e.g. the com.google.Chrome addition</td></tr>
         <tr><td>Uploading or updating an MDM profile</td><td>MDM lockdown section</td><td>Queues new .mobileconfig content to push to Fleet - this is how restrictions.mobileconfig/chrome-policy.mobileconfig themselves get changed</td></tr>
         <tr><td>Changing the office password itself</td><td>Change office password section</td><td>Requires the current one to set a new one - can't be reset without already having it, and the change itself still waits the same 24h delay</td></tr>
       </tbody>
