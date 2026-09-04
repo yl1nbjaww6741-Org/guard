@@ -31,22 +31,38 @@
             <string>ContentGuard Santa Payload</string>
 
             <!--
-              MONITOR (1), not LOCKDOWN (2) - a deliberate decision already
-              made and documented in this file's README before Phase 3
-              started (see the "Deliberate deviation" section there):
-              standard users install freely (forceAdminPasswordForApp
-              Installation=false in restrictions.mobileconfig), Phase 2's
-              content-capture blocker is the real backstop against NSFW
-              content regardless of which app displays it, and Santa's job
-              here narrows to denylisting specific known-bad tools rather
-              than gatekeeping all execution. If Santa ever switches to
-              LOCKDOWN, this whole file's approach changes (StaticRules
-              would need to cover everything meant to run, not just what's
-              denied) - not a small edit, revisit deliberately rather than
-              flipping this integer alone.
+              LOCKDOWN (2), not MONITOR (1) - 2026-09-04, explicit user
+              request, flipped deliberately once the actual prerequisite
+              this comment used to describe as missing was genuinely
+              built and used: a real per-app Team-ID allowlist. MONITOR
+              (default-allow, denylist known-bad tools) was the
+              considered starting point from Phase 3 - see git history
+              for that original reasoning - but it only ever covered
+              "block specific bad things," never "only run what's
+              actually allowed." This is the real switch to the latter.
+
+              What made this safe to flip, not just possible: the
+              dashboard's App inventory (Team IDs) section
+              (AppInventoryScanner.swift, daemon-side - scans every real
+              installed app's actual Team ID, since SimpleMDM's own
+              inventory has none) plus its "Allow all" bulk action, used
+              to build out real ALLOWLIST rules for every app actually in
+              use on this Mac before this switch - see the Rules table
+              itself (dashboard) for the resulting live allowlist, not
+              this file's own StaticRules array below, which only ever
+              held ContentGuard's own self-allowlist and the original
+              Tor Browser denylist entry from Phase 3.
+
+              Apple's own platform binaries (launchd, system daemons,
+              anything signed with Apple's internal cert rather than a
+              real Team ID) need no rule at all under LOCKDOWN - verified
+              via real research before relying on it, not assumed. Only
+              third-party/downloaded apps need an explicit ALLOWLIST
+              entry now; anything without one is denied by default,
+              which is the entire point of this switch.
             -->
             <key>ClientMode</key>
-            <integer>1</integer>
+            <integer>2</integer>
 
             <!--
               Suppresses every GUI popup Santa would otherwise show for a
