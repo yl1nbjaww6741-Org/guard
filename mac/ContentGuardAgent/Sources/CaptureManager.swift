@@ -498,19 +498,41 @@ final class CaptureManager: NSObject {
         // flag off. Only relevant if isPausedForNoRiskyApps is the reason
         // we're paused at all; that method's own guard already no-ops
         // otherwise.
-        //
-        // Deliberately NOT symmetric: this only ever resumes early, never
-        // re-pauses early if the screenshot window closes again with
-        // nothing else risky running - evaluateCapturePauseEligibility()
-        // (driven by regular app launch/quit) still owns re-pausing, on
-        // its own schedule. Same "fail toward keeping capture on longer
-        // than strictly necessary, never toward shedding it early" bias
-        // as every other prefilter in this project - a few extra seconds
-        // of battery cost after the screenshot window closes is an
-        // acceptable price for never silently going blind to it while
-        // it's still open.
-        if isPausedForNoRiskyApps && appScopeManager.hasForceCaptureWindow() {
+        let forceCaptureWindowOpen = appScopeManager.hasForceCaptureWindow()
+        if isPausedForNoRiskyApps && forceCaptureWindowOpen {
             appScopeManagerNonSafeAppIsRunning(appScopeManager)
+        }
+
+        // The other direction - real usability gap found live, 2026-09-04,
+        // same day as the resume fix above: reported capture correctly
+        // turning ON for the screenshot window, then never turning back
+        // OFF once it closed with nothing else risky running. Originally
+        // deliberate ("this only ever resumes early, never re-pauses
+        // early... evaluateCapturePauseEligibility() still owns re-
+        // pausing, on its own schedule") - wrong in practice, not just a
+        // battery nicety: evaluateCapturePauseEligibility() is ONLY ever
+        // called from a REGULAR app's own launch/quit notification
+        // (AppScopeManager.handleAppLifecycleChange) or the safe-apps
+        // sync poll - neither of those ever fires just because the
+        // screenshot window (not a .regular app) closed, so capture could
+        // stay on indefinitely with no path back to a real pause at all
+        // until some unrelated regular app happened to launch or quit.
+        //
+        // Fixed the same way as the resume side: reuse
+        // evaluateCapturePauseEligibility() rather than duplicating its
+        // allRunningRegularAppsAreSafe() check here (that check is
+        // private to AppScopeManager, deliberately - see its own doc
+        // comment - this isn't reaching around that, it's calling the
+        // same public entry point the launch/quit path already calls).
+        // Only called when forceCaptureWindowOpen is false and we're not
+        // already paused for this reason - if a regular risky app is
+        // also currently running, evaluateCapturePauseEligibility()
+        // correctly leaves capture on (appScopeManagerNonSafeAppIsRunning
+        // no-ops via its own guard, since isPausedForNoRiskyApps is
+        // already false); if nothing regular-risky is running either,
+        // it correctly pauses via appScopeManagerAllRunningAppsAreSafe.
+        else if !isPausedForNoRiskyApps && !forceCaptureWindowOpen {
+            appScopeManager.evaluateCapturePauseEligibility()
         }
 
         // Still paused - either isPausedForDisplaySleep started between
