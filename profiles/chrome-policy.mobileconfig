@@ -85,10 +85,65 @@
                                   extensionUpdate.ts's EXTENSION_VERSION
                                   constant do.
                                 -->
+                                <!--
+                                  ExtensionInstallForcelist TEMPORARILY
+                                  REMOVED (commented out, not deleted -
+                                  the real entry is right below, unchanged,
+                                  ready to restore) - 2026-09-04, real bug
+                                  found live: the extension got stuck on
+                                  its very first-ever version (0.2.0,
+                                  installed 2026-08-25) and never
+                                  auto-updated even once despite update.xml
+                                  correctly advertising every newer version
+                                  since. Escalating troubleshooting all
+                                  confirmed the server side was correct at
+                                  every step (a direct download+unzip of
+                                  the live .crx showed the right version,
+                                  and `chrome://policy` showed this exact
+                                  policy as "OK") - the problem is entirely
+                                  on Chrome's own side. Deleting the
+                                  extracted install directory directly
+                                  (~/Library/Application Support/Google/
+                                  Chrome/Default/Extensions/<id>/) and
+                                  restarting both Chrome and the whole Mac
+                                  did NOT make Chrome re-fetch it - working
+                                  theory: Chrome's own internal
+                                  `Secure Preferences` file (deliberately
+                                  HMAC-protected against exactly this kind
+                                  of manual repair, so not something to
+                                  hand-edit) still marks this extension as
+                                  "installed," so Chrome never falls back
+                                  to a fresh network install even with the
+                                  files gone.
+
+                                  The fix: actually remove this extension
+                                  from the forcelist (this push) so Chrome
+                                  genuinely uninstalls its stale
+                                  registration, confirm that on the real
+                                  Mac, THEN restore the entry below (a
+                                  second, separate profile push) so Chrome
+                                  treats it as a brand-new forced install
+                                  instead of a stuck "update." Both pushes
+                                  go through this dashboard's normal 24h
+                                  ratchet (MDM profile updates aren't
+                                  exempted - see
+                                  mac/docs/PHASE_4_DASHBOARD_SETUP.md) -
+                                  slower than editing Secure Preferences
+                                  directly would have been, but zero risk
+                                  to the Chrome profile, which direct
+                                  editing was not. The native macOS
+                                  ContentGuardAgent/Daemon blocker - this
+                                  project's actual primary defense - keeps
+                                  running the whole time regardless; this
+                                  gap only affects the Chrome extension's
+                                  own, supplementary NSFW detection.
+                                -->
+                                <!--
                                 <key>ExtensionInstallForcelist</key>
                                 <array>
                                     <string>pdhcmfmgdicpkanpigjpgenhhbbollpk;https://panel.lukep009.download/extension/update.xml</string>
                                 </array>
+                                -->
                                 <!--
                                   DeveloperToolsAvailability: back to 2
                                   (Disallowed) as of this version -
