@@ -391,21 +391,38 @@ final class CaptureManager: NSObject {
     /// app-only gating exists to avoid, just for a much bigger set of
     /// apps.
     ///
-    /// Polling at captureIntervalSeconds instead - the same cadence
-    /// capture itself already runs at, so a newly-opened risky window
-    /// gets its own stream within one capture tick, no slower than a
-    /// notification-triggered rebuild would have been - and diffing
+    /// Polling at ContentGuardConfig.riskyWindowPollIntervalSeconds, NOT
+    /// captureIntervalSeconds - originally reused captureIntervalSeconds
+    /// (5s, "no slower than a notification-triggered rebuild would have
+    /// been"), deliberately decoupled and tightened to 1s, 2026-09-04 -
+    /// see that constant's own doc comment for the real, specific gap
+    /// this closes: the macOS screenshot review panel is on screen for
+    /// only around 5 seconds, and detecting it up to 5s late (the old
+    /// cadence's worst case) left too little margin once dedicated-
+    /// stream startup and inference are added on top. Diffing
     /// incrementally rather than tearing every window stream down and
     /// rebuilding it every tick: an unchanged window's stream keeps
     /// delivering frames continuously (cheap), only genuinely new windows
     /// get a fresh SCStream and genuinely closed ones get torn down
-    /// (both real, one-time costs, not paid every tick for nothing).
+    /// (both real, one-time costs, not paid every tick for nothing) -
+    /// this incremental-diff design is exactly what makes a 5x-tighter
+    /// poll affordable: the recurring cost per tick is one cheap
+    /// SCShareableContent snapshot (appScopeManager.refresh(), inside
+    /// reconcileRiskyWindowStreams()), not a teardown/rebuild of every
+    /// already-running stream.
+    ///
+    /// leeway also scaled down from the old 1-second value: at a 1s
+    /// repeating interval, a full 1s of coalescing leeway would let the
+    /// OS slide a tick by 100% of the interval, quietly undoing the
+    /// tightened cadence this whole change exists for. 200ms keeps
+    /// meaningful timer-coalescing headroom for the OS without eating
+    /// the margin just bought.
     private func startRiskyWindowPoll() {
         let t = DispatchSource.makeTimerSource(queue: outputQueue)
         t.schedule(
-            deadline: .now() + ContentGuardConfig.captureIntervalSeconds,
-            repeating: ContentGuardConfig.captureIntervalSeconds,
-            leeway: .seconds(1)
+            deadline: .now() + ContentGuardConfig.riskyWindowPollIntervalSeconds,
+            repeating: ContentGuardConfig.riskyWindowPollIntervalSeconds,
+            leeway: .milliseconds(200)
         )
         t.setEventHandler { [weak self] in
             Task { await self?.reconcileRiskyWindowStreams() }
