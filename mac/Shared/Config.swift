@@ -10,23 +10,49 @@ import Foundation
 enum ContentGuardConfig {
     // MARK: - Capture / detection
 
-    /// 5 seconds. Briefly dropped to 3.0 (2026-08-27) after a real live
-    /// miss (QuickTime playing content that wasn't caught in time), then
-    /// deliberately reverted back to 5.0 the same day: ship the per-window
-    /// capture fix (the actual root cause of that miss - see
-    /// AppScopeManager.riskyAppWindows()'s doc comment) first, at the
-    /// existing 5s cadence, and only pay the extra battery cost of a
-    /// faster cadence later if real testing shows detection latency is
-    /// still a problem once that fix is in. Originally changed from 3.0 to
-    /// 5.0 (2026-08-24) as a battery measure - a deliberate divergence
-    /// from the Android app's 3s cadence this originally matched. The real
-    /// tradeoff, stated rather than buried: worst-case detection latency
-    /// is ~5s, not ~3s. Everything downstream that is defined as a
-    /// multiple of this interval (frameStallGraceSeconds at 10x,
-    /// captureStreamStallGraceSeconds at 5x) stays at its own 5s-cadence
-    /// value accordingly - the margins those grace windows exist to
-    /// provide are relative to the cadence, not absolute numbers.
-    static let captureIntervalSeconds: TimeInterval = 5.0
+    /// 2.5 seconds. Dropped from 5.0 (2026-09-04), explicit user request,
+    /// once the per-window capture fix (AppScopeManager.riskyAppWindows())
+    /// and the force-capture-window fix (forceCaptureOnBundleIDs below)
+    /// were both confirmed live - the same "ship the actual fix first,
+    /// pay for a faster cadence later only if still needed" reasoning
+    /// from the 3.0 -> 5.0 history below, now on the other side of it:
+    /// detection latency was worth tightening further once those real
+    /// misses were already closed by a correctness fix rather than a
+    /// cadence change. The real tradeoff, stated rather than buried:
+    /// worst-case detection latency is ~2.5s, at roughly double the
+    /// battery cost of the 5s cadence's own frame-capture work (the risky-
+    /// window poll that used to share this constant is now decoupled -
+    /// see riskyWindowPollIntervalSeconds below - so this change does NOT
+    /// also double the poll's own cost).
+    ///
+    /// Everything downstream that is defined as a multiple of this
+    /// interval (frameStallGraceSeconds at 10x, captureStreamStallGraceSeconds
+    /// at 5x) is rescaled to its own 2.5s-cadence value accordingly - the
+    /// margins those grace windows exist to provide are relative to the
+    /// cadence, not absolute numbers.
+    ///
+    /// Prior history: briefly dropped to 3.0 (2026-08-27) after a real
+    /// live miss (QuickTime playing content that wasn't caught in time),
+    /// then reverted back to 5.0 the same day pending the per-window
+    /// capture fix above; originally changed from 3.0 to 5.0 (2026-08-24)
+    /// as a battery measure - a deliberate divergence from the Android
+    /// app's 3s cadence this originally matched.
+    static let captureIntervalSeconds: TimeInterval = 2.5
+
+    /// How often CaptureManager checks for new/closed risky-app windows
+    /// (reconcileRiskyWindowStreams()) - deliberately its OWN constant,
+    /// not a reuse of captureIntervalSeconds, as of 2026-09-04: explicit
+    /// user request to drop captureIntervalSeconds to 2.5s while keeping
+    /// this poll at its existing 5s cadence, rather than the two moving
+    /// together. Before this, the two constants had a real, live
+    /// back-and-forth on 2026-09-04 (see CaptureManager.swift's
+    /// startRiskyWindowPoll() doc comment for the fleeting-thumbnail
+    /// story) that ended with them intentionally reunified at 5s each -
+    /// this reintroduces the split, but for an unrelated reason (a
+    /// battery/latency tradeoff on the capture side only, not a
+    /// detection-window-timing concern on the poll side), so it is not a
+    /// simple revert back to that earlier state.
+    static let riskyWindowPollIntervalSeconds: TimeInterval = 5.0
 
     /// Longest-side pixel dimension SCStream is asked to deliver, rather
     /// than the display's own full resolution (what CaptureManager used to
@@ -160,10 +186,11 @@ enum ContentGuardConfig {
     /// (2026-08-24), briefly back to 30 alongside a same-day-reverted
     /// 5 -> 3 cadence change (2026-08-27, see captureIntervalSeconds's own
     /// history), then back to 50 once that cadence change was itself
-    /// reverted the same day - the margin is a multiple of the cadence,
-    /// not an absolute number, so it tracks captureIntervalSeconds's own
-    /// current value.
-    static let frameStallGraceSeconds: TimeInterval = 50.0
+    /// reverted the same day; rescaled again, 50 -> 25, alongside
+    /// captureIntervalSeconds moving 5 -> 2.5 (2026-09-04) - the margin is
+    /// a multiple of the cadence, not an absolute number, so it tracks
+    /// captureIntervalSeconds's own current value.
+    static let frameStallGraceSeconds: TimeInterval = 25.0
 
     /// How long CaptureManager (agent-side) waits since the last frame it
     /// actually delivered before concluding its own SCStream has silently
@@ -181,10 +208,11 @@ enum ContentGuardConfig {
     /// captureIntervalSeconds moving 3 -> 5 (2026-08-24); briefly back to
     /// 15 alongside a same-day-reverted 5 -> 3 cadence change
     /// (2026-08-27, see captureIntervalSeconds's own history), then back
-    /// to 25 once that cadence change was itself reverted the same day -
-    /// same 5x-the-cadence ratio throughout, tracking
-    /// captureIntervalSeconds's own current value.
-    static let captureStreamStallGraceSeconds: TimeInterval = 25.0
+    /// to 25 once that cadence change was itself reverted the same day;
+    /// rescaled again, 25 -> 12.5, alongside captureIntervalSeconds moving
+    /// 5 -> 2.5 (2026-09-04) - same 5x-the-cadence ratio throughout,
+    /// tracking captureIntervalSeconds's own current value.
+    static let captureStreamStallGraceSeconds: TimeInterval = 12.5
 
     /// Found the hard way, on the real Mac, via a full `sudo reboot` (not
     /// just a launchd bootout/bootstrap cycle - see mac/README.md): the

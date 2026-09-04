@@ -391,35 +391,43 @@ final class CaptureManager: NSObject {
     /// app-only gating exists to avoid, just for a much bigger set of
     /// apps.
     ///
-    /// Polling at captureIntervalSeconds - the same cadence capture itself
-    /// already runs at, so a newly-opened risky window gets its own stream
-    /// within one capture tick, no slower than a notification-triggered
-    /// rebuild would have been. Diffing incrementally rather than tearing
-    /// every window stream down and rebuilding it every tick: an unchanged
-    /// window's stream keeps delivering frames continuously (cheap), only
-    /// genuinely new windows get a fresh SCStream and genuinely closed
-    /// ones get torn down (both real, one-time costs, not paid every tick
-    /// for nothing).
+    /// Polling at ContentGuardConfig.riskyWindowPollIntervalSeconds - its
+    /// own dedicated constant, deliberately NOT captureIntervalSeconds,
+    /// as of 2026-09-04. History worth keeping straight rather than
+    /// flattening into "always been separate" or "always been shared":
+    /// this poll and capture itself used to share one constant at 5s
+    /// each; that same day, the poll was briefly tightened to its own
+    /// 1-second constant (riskyWindowPollIntervalSeconds) specifically to
+    /// catch the macOS screenshot FLOATING THUMBNAIL
+    /// (com.apple.screencaptureui) before its ~5s auto-dismiss, then
+    /// reverted back to sharing captureIntervalSeconds the same day once
+    /// the user clarified that fleeting thumbnail was never the actual
+    /// thing worth protecting - the click-to-expand review/editor window
+    /// is, and that one stays open indefinitely, so it was never racing a
+    /// dismiss timer at all; the 1s cadence was paying a real, measurable
+    /// recurring battery cost (visible in Activity Monitor's Energy tab)
+    /// for an already-deprioritized case.
     ///
-    /// Briefly tightened to a dedicated 1-second constant
-    /// (riskyWindowPollIntervalSeconds), then reverted back to sharing
-    /// this one, same day (2026-09-04) - real, live back-and-forth worth
-    /// keeping the record of rather than pretending this number was
-    /// always obviously 5s: the tightening was specifically to catch the
-    /// macOS screenshot FLOATING THUMBNAIL (com.apple.screencaptureui)
-    /// before its ~5s auto-dismiss. Explicit user clarification afterward:
-    /// that fleeting thumbnail was never the actual thing worth
-    /// protecting - the click-to-expand review/editor window is, and that
-    /// one stays open indefinitely until manually closed, so it was never
-    /// racing a dismiss timer at all. Once that was clear, the 1s cadence
-    /// was paying a real, measurable recurring cost (visible in Activity
-    /// Monitor's Energy tab) for a case that had already been explicitly
-    /// deprioritized - reverted rather than kept "just in case."
+    /// The split reappeared for an unrelated reason once captureIntervalSeconds
+    /// itself dropped 5 -> 2.5 (same day): a newly-opened risky window
+    /// still only needs to be noticed within roughly one capture tick or
+    /// so to protect against it, not within literally the very next
+    /// frame, so this poll intentionally stayed at 5s (its own constant
+    /// again) rather than tightening in lockstep with capture and paying
+    /// that cost a second time for no detection-latency benefit -
+    /// explicit user request, not a rediscovery of the 1s experiment's
+    /// reasoning.
+    ///
+    /// Diffing incrementally rather than tearing every window stream down
+    /// and rebuilding it every tick: an unchanged window's stream keeps
+    /// delivering frames continuously (cheap), only genuinely new windows
+    /// get a fresh SCStream and genuinely closed ones get torn down (both
+    /// real, one-time costs, not paid every tick for nothing).
     private func startRiskyWindowPoll() {
         let t = DispatchSource.makeTimerSource(queue: outputQueue)
         t.schedule(
-            deadline: .now() + ContentGuardConfig.captureIntervalSeconds,
-            repeating: ContentGuardConfig.captureIntervalSeconds,
+            deadline: .now() + ContentGuardConfig.riskyWindowPollIntervalSeconds,
+            repeating: ContentGuardConfig.riskyWindowPollIntervalSeconds,
             leeway: .seconds(1)
         )
         t.setEventHandler { [weak self] in
