@@ -137,23 +137,106 @@ async function fetchAllPages<T>(env: Env, endpoint: string): Promise<Array<{ id:
   return results;
 }
 
-// Uploads a .pkg to SimpleMDM. `formData` arrives from softwareApi.ts
-// shaped for Fleet's own contract (a `software` file field, per this
-// project's existing dashboard upload form) - rebuilt here into
-// SimpleMDM's real required shape (`binary` field, confirmed against
-// their docs: "One and only one of app_store_id, bundle_id, or binary
-// must be specified") rather than changing the dashboard's own upload
-// contract for one vendor's field-naming choice.
-export async function uploadApp(env: Env, formData: FormData): Promise<{ id: string; name: string; version?: string }> {
-  const file = formData.get("software");
-  if (!(file instanceof File)) {
-    throw new Error("uploadApp expects a 'software' file field in formData");
-  }
-  const outgoing = new FormData();
-  outgoing.append("binary", file, file.name);
+// Manually builds a multipart/form-data body as a stream instead of
+// buffering the whole file into a Blob/FormData first - a single
+// `outgoing.append("binary", file)` (the original shape of this
+// function, see git history) reads fine for a small file, but a real
+// .pkg upload found live (2026-09-04) that was well over 100MB
+// exposed two separate real ceilings that buffering would hit even if
+// Cloudflare's edge let the request through at all:
+//   1. Cloudflare Workers' incoming-request body limit - confirmed via
+//      Cloudflare's own docs: 100MB on Free/Pro, 200MB Business, 500MB
+//      Enterprise. This is enforced at the edge, before this Worker's
+//      own code ever runs, on the *inbound* dashboard->Worker request -
+//      which is exactly why softwareApi.ts no longer sends the whole
+//      file in one request at all (see its own top comment: the
+//      dashboard now uploads in R2-multipart chunks instead). This
+//      function only ever sees the file after it's already sitting in
+//      R2, so that limit doesn't apply here.
+//   2. A Worker instance's own memory ceiling (~128MB) - confirmed via
+//      Cloudflare's own docs, separate from the request-size limit
+//      above and NOT bypassed by fixing (1). Reading the whole file
+//      into one ArrayBuffer/Blob (what `new FormData().append(name,
+//      blob)` requires) to hand to SimpleMDM would still blow past
+//      this for anything approaching that size, even once the file's
+//      already safely in R2. Streaming the multipart body - reading
+//      the R2 object's own ReadableStream and piping it straight into
+//      this outgoing fetch's body - never holds more than one chunk in
+//      memory at a time, so it's correct regardless of file size.
+function buildStreamingMultipartBody(
+  fieldName: string,
+  filename: string,
+  fileStream: ReadableStream<Uint8Array>,
+  fileSize: number
+): { body: ReadableStream<Uint8Array>; contentType: string; contentLength: number } {
+  const boundary = `----ContentGuardBoundary${crypto.randomUUID().replace(/-/g, "")}`;
+  const encoder = new TextEncoder();
+  // Escaping isn't needed for filename here - it's always the sanitized
+  // key softwareUpload.ts already generated, never raw user input.
+  const preamble = encoder.encode(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\n` +
+      `Content-Type: application/octet-stream\r\n\r\n`
+  );
+  const epilogue = encoder.encode(`\r\n--${boundary}--\r\n`);
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controller.enqueue(preamble);
+      const reader = fileStream.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          controller.enqueue(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      controller.enqueue(epilogue);
+      controller.close();
+    },
+  });
+
+  return {
+    body,
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    contentLength: preamble.byteLength + fileSize + epilogue.byteLength,
+  };
+}
+
+// Uploads a .pkg to SimpleMDM from an R2 object's own stream, rather
+// than from a FormData already sitting in Worker memory - see
+// buildStreamingMultipartBody's doc comment above for why. Called by
+// softwareApi.ts's handleUploadComplete once softwareUpload.ts's
+// R2-multipart flow has finished reassembling the file server-side.
+export async function uploadAppFromStream(
+  env: Env,
+  fileStream: ReadableStream<Uint8Array>,
+  fileSize: number,
+  filename: string
+): Promise<{ id: string; name: string; version?: string }> {
+  const { apiKey } = requireSimpleMdmConfig(env);
+  const { body, contentType, contentLength } = buildStreamingMultipartBody("binary", filename, fileStream, fileSize);
 
   const endpoint = "/apps";
-  const response = await simpleMdmFetch(env, endpoint, { method: "POST", body: outgoing });
+  // Streaming request bodies need `duplex: "half"` per the fetch spec's
+  // half-duplex streaming-body requirement - not yet in the TS DOM lib's
+  // RequestInit type workerd otherwise matches, hence the cast.
+  const response = await fetch(`${BASE_URL}${endpoint}`, {
+    method: "POST",
+    headers: {
+      Authorization: authHeader(apiKey),
+      "Content-Type": contentType,
+      "Content-Length": String(contentLength),
+    },
+    body,
+    duplex: "half",
+  } as RequestInit);
+  if (!response.ok) {
+    const bodyText = await response.text();
+    throw new SimpleMdmApiError(endpoint, response.status, bodyText);
+  }
   const parsed = (await response.json()) as SimpleMdmDataEnvelope<SimpleMdmAppAttributes>;
   return {
     id: String(parsed.data.id),

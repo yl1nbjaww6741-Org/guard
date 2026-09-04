@@ -88,6 +88,16 @@ database_id = "8cb09d1d-1497-449f-86d5-f7c754c5f884"
 # (contentguard_extension) or any other name a different session might
 # suggest, since a mismatch here would silently leave those references
 # unbound rather than erroring.
+#
+# Also backs the Software section's .pkg upload scratch space
+# (softwareApi.ts, key prefix `software-uploads/`) as of 2026-09-04 -
+# reusing this same bucket/binding rather than provisioning a second
+# one, since a new bucket would need this project's deploy token
+# granted R2 access all over again for no real benefit at this
+# project's single-bucket scale. See softwareApi.ts's own top comment
+# for why uploads need R2 scratch space at all now (Cloudflare's
+# ~100MB incoming-request-body limit silently rejected larger .pkg
+# uploads under the old single-POST design).
 [[r2_buckets]]
 binding = "EXTENSION_ASSETS"
 bucket_name = "contentguard-extension"

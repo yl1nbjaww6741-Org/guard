@@ -80,7 +80,10 @@ import {
   handleInstallPackage,
   handleListInstalledSoftware,
   handleListSoftwarePackages,
-  handleUploadPackage,
+  handleUploadAbort,
+  handleUploadComplete,
+  handleUploadInit,
+  handleUploadPart,
 } from "./softwareApi";
 import type { Env, Policy, RuleType } from "./types";
 
@@ -398,6 +401,10 @@ export default {
     // --- Software-deployment API (session-gated) ---
     const isSoftwareApiRoute =
       url.pathname === "/api/software" ||
+      url.pathname === "/api/software/upload-init" ||
+      url.pathname === "/api/software/upload-part" ||
+      url.pathname === "/api/software/upload-complete" ||
+      url.pathname === "/api/software/upload-abort" ||
       url.pathname === "/api/installed-software" ||
       url.pathname === "/api/known-apps" ||
       url.pathname.match(/^\/api\/software\/\d+\/install$/);
@@ -408,8 +415,24 @@ export default {
       if (url.pathname === "/api/software" && request.method === "GET") {
         return handleListSoftwarePackages(env);
       }
-      if (url.pathname === "/api/software" && request.method === "POST") {
-        return handleUploadPackage(request, env);
+      // Replaces the old single-POST `/api/software` upload (a
+      // multipart/form-data body carrying the whole file) - see
+      // softwareApi.ts's own top comment for why: Cloudflare's
+      // incoming-request body limit silently rejected anything over
+      // ~100MB before this Worker's code ever ran. These three routes
+      // are the R2-multipart-backed replacement dashboard.ts's
+      // upload-form handler now drives.
+      if (url.pathname === "/api/software/upload-init" && request.method === "POST") {
+        return handleUploadInit(request, env);
+      }
+      if (url.pathname === "/api/software/upload-part" && request.method === "PUT") {
+        return handleUploadPart(request, env);
+      }
+      if (url.pathname === "/api/software/upload-complete" && request.method === "POST") {
+        return handleUploadComplete(request, env);
+      }
+      if (url.pathname === "/api/software/upload-abort" && request.method === "POST") {
+        return handleUploadAbort(request, env);
       }
       if (url.pathname === "/api/installed-software" && request.method === "GET") {
         return handleListInstalledSoftware(request, env);

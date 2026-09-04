@@ -1124,16 +1124,65 @@ document.getElementById("keywords-body").addEventListener("click", async (e) => 
   }
 });
 
+// Uploads in R2-multipart chunks rather than one POST carrying the
+// whole file - see softwareApi.ts's own top comment for why: a real
+// upload found live (2026-09-04) was well over Cloudflare's ~100MB
+// incoming-request-body limit, which the previous single-POST version
+// of this handler hit silently - the request never reached the Worker
+// at all, so nothing here ever ran to report an error; the button just
+// appeared to do nothing. CHUNK_SIZE is comfortably above R2's own
+// 5MB-minimum-part-size requirement (confirmed against Cloudflare's R2
+// multipart docs) with room to spare.
+const SOFTWARE_UPLOAD_CHUNK_SIZE = 20 * 1024 * 1024;
+
 document.getElementById("upload-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const form = new FormData(e.target);
+  const fileInput = e.target.querySelector("input[type=file]");
+  const file = fileInput.files[0];
+  if (!file) return;
+  const submitBtn = e.target.querySelector("button[type=submit]");
+
+  let key, uploadId;
+  submitBtn.disabled = true;
   try {
-    await api("/api/software", { method: "POST", body: form });
+    ({ key, uploadId } = await api("/api/software/upload-init", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ filename: file.name }),
+    }));
+
+    const totalParts = Math.max(1, Math.ceil(file.size / SOFTWARE_UPLOAD_CHUNK_SIZE));
+    const parts = [];
+    for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+      setStatus("software-status", \`Uploading part \${partNumber}/\${totalParts}...\`, false);
+      const start = (partNumber - 1) * SOFTWARE_UPLOAD_CHUNK_SIZE;
+      const chunk = file.slice(start, start + SOFTWARE_UPLOAD_CHUNK_SIZE);
+      const qs = \`key=\${encodeURIComponent(key)}&uploadId=\${encodeURIComponent(uploadId)}&partNumber=\${partNumber}\`;
+      const part = await api(\`/api/software/upload-part?\${qs}\`, { method: "PUT", body: chunk });
+      parts.push(part);
+    }
+
+    setStatus("software-status", "Finishing upload...", false);
+    await api("/api/software/upload-complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ key, uploadId, parts, filename: file.name }),
+    });
+
     e.target.reset();
     setStatus("software-status", "Package uploaded.", false);
     await loadSoftware();
   } catch (err) {
     setStatus("software-status", "Upload failed: " + err.message, true);
+    if (key && uploadId) {
+      api("/api/software/upload-abort", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key, uploadId }),
+      }).catch(() => undefined);
+    }
+  } finally {
+    submitBtn.disabled = false;
   }
 });
 
