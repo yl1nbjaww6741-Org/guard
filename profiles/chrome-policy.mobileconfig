@@ -86,61 +86,40 @@
                                   constant do.
                                 -->
                                 <!--
-                                  ExtensionInstallForcelist TEMPORARILY
-                                  REMOVED AGAIN (commented out, not
-                                  deleted - the real entry is right below,
-                                  unchanged, ready to restore) - 2026-09-04,
-                                  SAME bug recurring on a second version
-                                  bump: this exact remove/confirm/restore
-                                  cycle already fixed a stuck-on-0.2.0
-                                  extension earlier today (see git history:
-                                  67ad128/512c319), and update.xml/the
-                                  live .crx are both confirmed correct
-                                  again now (served version 0.4.0, byte-
-                                  exact against the local build) - but
-                                  Chrome still isn't pulling it. Same
-                                  working theory as last time, now with a
-                                  second data point supporting it: this
-                                  isn't a one-off Secure-Preferences
-                                  corruption, it looks like Chrome's own
-                                  managed-extension update path doesn't
-                                  reliably re-check a force-installed
-                                  extension at all once it's already
-                                  installed, regardless of version - only
-                                  a genuine remove-then-reinstall (this
-                                  cycle) has ever actually worked.
+                                  Restored 2026-09-04, second time today:
+                                  briefly removed again (see git history:
+                                  67ad128/512c319 for the first cycle,
+                                  earlier this same session for the
+                                  second) to fix the exact same
+                                  stuck-extension bug recurring on a
+                                  second version bump (0.3.1 -> 0.4.0).
+                                  Confirmed live before restoring, same as
+                                  last time: the ContentGuard card
+                                  genuinely disappeared from
+                                  chrome://extensions once the policy no
+                                  longer required it. Restoring it now
+                                  should make Chrome treat this as a
+                                  brand-new forced install and pull the
+                                  current 0.4.0 build fresh, rather than
+                                  repeating the stuck "update" that never
+                                  fired on its own.
 
-                                  Same two-step fix: this push removes the
-                                  entry so Chrome genuinely uninstalls its
-                                  current registration, confirm that on
-                                  the real Mac (the ContentGuard card
-                                  should disappear from chrome://extensions
-                                  entirely, same as last time), THEN a
-                                  second, separate commit restores the
-                                  entry so Chrome treats it as a brand-new
-                                  forced install and pulls 0.4.0 fresh
-                                  rather than repeating a stuck "update."
-                                  Push this via SimpleMDM's own UI directly
-                                  if faster turnaround matters (bypasses
-                                  this dashboard's 24h ratchet entirely,
-                                  same as last time's actual real-world
-                                  path - see mac/docs/PHASE_4_DASHBOARD_SETUP.md's
-                                  "Loosening MDM profile restrictions"
-                                  section for why the ratchet doesn't
-                                  reach direct MDM pushes at all). The
-                                  native macOS ContentGuardAgent/Daemon
-                                  blocker - this project's actual primary
-                                  defense - is entirely unaffected and
-                                  keeps running throughout; this only
-                                  concerns the Chrome extension's own,
-                                  supplementary NSFW/keyword blocking.
+                                  This has now happened on two consecutive
+                                  version bumps (0.2.0 stuck all the way
+                                  through 0.3.1's release, then 0.3.1
+                                  stuck on 0.4.0's) - worth treating as a
+                                  structural gap in how Chrome handles
+                                  force-installed-extension updates rather
+                                  than a one-off, and expecting this same
+                                  remove/confirm/restore cycle to be
+                                  needed again on the next real version
+                                  bump, not assuming it'll "just work" by
+                                  then.
                                 -->
-                                <!--
                                 <key>ExtensionInstallForcelist</key>
                                 <array>
                                     <string>pdhcmfmgdicpkanpigjpgenhhbbollpk;https://panel.lukep009.download/extension/update.xml</string>
                                 </array>
-                                -->
                                 <!--
                                   DeveloperToolsAvailability: back to 2
                                   (Disallowed) as of this version -
