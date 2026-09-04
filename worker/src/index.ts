@@ -606,11 +606,20 @@ export default {
 
     // --- Chrome extension self-hosted update endpoints (unauthenticated
     // by necessity - see extensionUpdate.ts's own doc comment for why) ---
-    if (url.pathname === "/extension/update.xml" && request.method === "GET") {
+    // HEAD accepted alongside GET - real bug found live (2026-09-04):
+    // this only matched GET, so `curl -sI` (a HEAD request) - the exact
+    // verification command chrome-extension/build/README.md itself
+    // documents as how to confirm a .crx upload landed - fell through to
+    // this Worker's generic 404 even when the real GET worked fine and
+    // returned the correct file. Chrome's own extension-update fetcher
+    // also uses GET, so this was never actually blocking a real install -
+    // only ever a false alarm on the verification step people (and this
+    // project's own README) are told to run.
+    if (url.pathname === "/extension/update.xml" && (request.method === "GET" || request.method === "HEAD")) {
       return handleExtensionUpdateManifest(request);
     }
-    if (url.pathname === "/extension/contentguard.crx" && request.method === "GET") {
-      return handleExtensionCrx(env);
+    if (url.pathname === "/extension/contentguard.crx" && (request.method === "GET" || request.method === "HEAD")) {
+      return handleExtensionCrx(env, request.method);
     }
 
     // --- Chrome extension's own keyword-blocklist sync - deliberately

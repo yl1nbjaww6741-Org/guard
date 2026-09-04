@@ -47,10 +47,21 @@ function updateManifestXml(origin: string): string {
 </gupdate>`;
 }
 
+// HEAD support (index.ts routes both here) matters beyond spec
+// correctness for its own sake: chrome-extension/build/README.md's own
+// documented verification step is `curl -sI` against this endpoint - a
+// HEAD request - so a HEAD-less version of this handler would make that
+// exact recommended check falsely report "not there" even when a real
+// GET works fine (found live, 2026-09-04). A HEAD response carries the
+// same headers as GET but no body, per HTTP's own definition.
 export function handleExtensionUpdateManifest(request: Request): Response {
   const url = new URL(request.url);
-  return new Response(updateManifestXml(url.origin), {
-    headers: { "content-type": "application/xml" },
+  const xml = updateManifestXml(url.origin);
+  return new Response(request.method === "HEAD" ? null : xml, {
+    headers: {
+      "content-type": "application/xml",
+      "content-length": String(xml.length),
+    },
   });
 }
 
@@ -58,21 +69,32 @@ export function handleExtensionUpdateManifest(request: Request): Response {
 // [[r2_buckets]] binding and chrome-extension/build/README.md for how it
 // gets uploaded there (`wrangler r2 object put`, never something this
 // Worker writes itself - this route is read-only).
-export async function handleExtensionCrx(env: Env): Promise<Response> {
-  const object = await env.EXTENSION_ASSETS?.get("contentguard.crx");
+//
+// `method` distinguishes GET from HEAD (see this file's top-of-block
+// comment above) - a HEAD request uses R2's own head() rather than
+// get(), so verifying the upload landed doesn't mean transferring the
+// full ~90MB object (this .crx bundles the NudeNet ONNX model, not a
+// typical small extension) just to discard the body.
+export async function handleExtensionCrx(env: Env, method: string): Promise<Response> {
+  const object =
+    method === "HEAD"
+      ? await env.EXTENSION_ASSETS?.head("contentguard.crx")
+      : await env.EXTENSION_ASSETS?.get("contentguard.crx");
   if (!object) {
     return new Response(
       "Extension package not uploaded yet - see chrome-extension/build/README.md",
       { status: 404 }
     );
   }
-  return new Response(object.body, {
-    headers: {
-      // application/x-chrome-extension, not application/octet-stream -
-      // crx3's own README specifically calls this out as needed for
-      // Chrome to reliably recognize and apply a self-hosted update.
-      "content-type": "application/x-chrome-extension",
-      "content-length": String(object.size),
-    },
-  });
+  const headers = {
+    // application/x-chrome-extension, not application/octet-stream -
+    // crx3's own README specifically calls this out as needed for
+    // Chrome to reliably recognize and apply a self-hosted update.
+    "content-type": "application/x-chrome-extension",
+    "content-length": String(object.size),
+  };
+  // Only an R2ObjectBody (the get() result) has a readable .body -
+  // head() returns metadata only (R2Object), nothing to stream even if
+  // this weren't already a HEAD response.
+  return new Response(method === "HEAD" ? null : (object as R2ObjectBody).body, { headers });
 }
