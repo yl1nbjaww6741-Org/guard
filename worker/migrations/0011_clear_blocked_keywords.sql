@@ -1,0 +1,28 @@
+-- One-time data fix, not a schema change: wipes every currently-blocked
+-- keyword. Explicit user request, 2026-09-04 - the extension started
+-- blocking ordinary pages (Google itself among them), and the fix
+-- wanted was "keep the capability, remove all the keywords for the
+-- moment" rather than tracking down which specific keyword(s) were
+-- over-broad. Bypasses the normal 24h-delay-plus-password ratchet on
+-- removing a keyword (ratchet.ts's requestRemoveKeyword/
+-- applyDueKeywordRemovals) the same deliberate way this project's own
+-- history already did once for a single bad keyword ("reddit media
+-- downloader") - a direct D1 write via the tag-triggered
+-- apply-d1-migration.yml workflow, not a dashboard action, since this
+-- Codespace/session has no CLOUDFLARE_API_TOKEN of its own to run
+-- `wrangler d1 execute` directly (see that workflow's own top comment
+-- for why it exists at all).
+--
+-- pending_keyword_removals first, not blocked_keywords - its
+-- keyword_id column REFERENCES blocked_keywords(id), so deleting the
+-- parent row first would fail with SQLITE_CONSTRAINT_FOREIGNKEY (hit
+-- live during the "reddit media downloader" cleanup, same reason).
+--
+-- The blocked_keywords/pending_keyword_removals TABLES themselves are
+-- untouched - this only empties them. The Chrome extension's keyword
+-- sync (extensionSync.ts's GET /sync/keywords), the dashboard's Keyword
+-- blocker section, and every /api/keywords* route all keep working
+-- exactly as before; there's simply nothing in the list to sync or
+-- show until a new keyword is added again.
+DELETE FROM pending_keyword_removals;
+DELETE FROM blocked_keywords;
