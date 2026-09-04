@@ -172,8 +172,11 @@ itself unlock defeats the entire point of this phase. Goes in:
       what's needed to regenerate/verify it, not necessarily the raw
       live secret if that's better kept in Fly's own secret store
 - [ ] The dashboard's login password (Phase 4)
-- [ ] `SANTA_SYNC_TOKEN` / `CONTENTGUARD_EXTENSION_SYNC_TOKEN` (Phase 4 /
-      this session)
+- [ ] `SANTA_SYNC_TOKEN` (Phase 4). No `CONTENTGUARD_EXTENSION_SYNC_TOKEN`
+      to seal - the Chrome extension's keyword sync (`GET /sync/keywords`)
+      is deliberately unauthenticated (2026-09-04, see
+      `worker/src/extensionSync.ts`'s own doc comment), so this token
+      doesn't exist at all any more.
 - [ ] `build/dist/key.pem`, the Chrome extension's signing key (this
       session - flagged earlier as still needing this exact step)
 - [ ] Any Cloudflare API token currently in active use (rotate first if

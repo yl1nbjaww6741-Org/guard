@@ -37,13 +37,15 @@ layers, not competing ones.
 - `content-scripts/keyword-blocker.js` - the fallback for a keyword that
   only shows up in a page's rendered text/title, not its URL. Closes the
   tab on a match; exempts the dashboard's own origin.
-- `options/options.html` + `options.js` - where the Worker URL and the
-  extension's own sync token are configured. **The token is never
-  hardcoded into this extension's source** - same discipline as every
-  other secret in this project (Santa's sync token, the daemon's sync
-  token - provisioned separately, never committed). It's entered once
-  through this page and stored only in this browser's local extension
-  storage.
+- `shared/config.js` - the one hardcoded constant, `CONTENTGUARD_PANEL_URL`,
+  shared between `background/service-worker.js` (via `importScripts`)
+  and `content-scripts/keyword-blocker.js` (loaded first, per
+  `manifest.json`'s `content_scripts` order). Replaced an options
+  page (2026-09-04) that used to ask for a Worker URL and a sync token -
+  `GET /sync/keywords` (extensionSync.ts, Worker side) is deliberately
+  unauthenticated now, same reasoning as the self-hosted update
+  endpoints below, so there's no token to configure at all: this
+  extension needs zero per-machine setup after being force-installed.
 - `background/offscreen.html` + `offscreen.js` - a `chrome.offscreen`
   document, which (unlike the service worker) doesn't get suspended when
   idle - the actual 5-second `setInterval` capture loop lives here. Does

@@ -129,23 +129,6 @@ export interface Env {
   // separate from SANTA_SYNC_TOKEN - two different sync clients, no
   // reason to share a credential.
   CONTENTGUARD_DAEMON_SYNC_TOKEN?: string;
-  // Static shared token the Chrome extension's background service worker
-  // sends (see auth.ts's requireExtensionSyncToken) to fetch the current
-  // blocked-keywords list from GET /sync/keywords (extensionSync.ts).
-  // Same reasoning as CONTENTGUARD_DAEMON_SYNC_TOKEN being separate from
-  // SANTA_SYNC_TOKEN - a third, independent sync client (the extension
-  // isn't the daemon and isn't Santa), no reason to share a credential
-  // with either. A browser extension is also a meaningfully weaker place
-  // to hold a secret than a codesigned Mac binary (its unpacked source is
-  // inspectable by anyone with the .crx/repo) - this token only guards
-  // read access to the keyword list, never anything that can widen what
-  // the extension is allowed to do server-side, so that exposure is
-  // accepted, not a hidden gap. Re-added 2026-09-04 - was deleted along
-  // with the rest of the keyword-blocking subsystem in 30a332e; needs a
-  // fresh `wrangler secret put CONTENTGUARD_EXTENSION_SYNC_TOKEN` on the
-  // real deployment (the old value was never rotated back in, so this
-  // has to be provisioned again, not just left as-is).
-  CONTENTGUARD_EXTENSION_SYNC_TOKEN?: string;
   // Signs/verifies dashboard session cookies (session.ts) - internal
   // cryptographic key, not user-facing, so it stays a static Wrangler
   // secret rather than going through the password ratchet the way the

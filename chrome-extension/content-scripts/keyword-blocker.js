@@ -26,26 +26,40 @@
 //    stores the whole trimmed/lowercased phrase as one indivisible
 //    string server-side too, so there's no point in this pipeline where
 //    a multi-word keyword ever gets decomposed into individual words.
-//  - PANEL EXEMPTION, explicit user requirement: computeExempt() below
-//    already exists specifically so this scan never runs against this
-//    project's own dashboard (panel.lukep009.download), which
-//    necessarily renders every blocked keyword as plain page text - see
-//    that function's own comment just below for the mechanism.
+//  - PANEL EXEMPTION, explicit user requirement: this scan never runs
+//    against this project's own dashboard - see the `exempt` constant
+//    just below for the mechanism.
+//
+// Simplified 2026-09-04, same day as the sync-token removal
+// (background/service-worker.js's own header comment): the panel origin
+// used to come from chrome.storage.local's workerUrl (options page,
+// same value the extension synced keywords from) - now it's the
+// hardcoded CONTENTGUARD_PANEL_URL constant (shared/config.js, loaded
+// before this file per manifest.json's content_scripts order), a plain
+// compile-time value rather than something read from storage on every
+// page load.
 
 (() => {
   let keywords = [];
   let matched = false;
-  // The dashboard (this project's own Worker, chrome.storage.local's
-  // workerUrl - same value options.js saves) necessarily renders every
+  // The dashboard (this project's own Worker) necessarily renders every
   // blocked keyword as plain page text: the Keyword blocker section's
   // whole job is showing what's on the list. Scanning that page against
   // its own list would block the one page used to manage the list the
   // moment a real keyword goes on it - not a hypothetical, this is what
   // actually happened. Real exemption, not a loophole: this only ever
-  // matches the one origin this same extension is configured to sync
-  // from, set via the options page, not something a blocked site could
-  // spoof its way into.
-  let exempt = false;
+  // matches CONTENTGUARD_PANEL_URL's own origin, a value baked into this
+  // extension's own source, not something a blocked site could spoof
+  // its way into.
+  //
+  // CONTENTGUARD_PANEL_URL's *origin* is what's compared, not a
+  // substring/prefix match - exact scheme+host+port, same precision
+  // service-worker.js's
+  // own DNR rule exemption uses (that file's PANEL_HOSTNAME), so the two
+  // enforcement paths can't drift apart on what counts as "the panel".
+  // Computed once, not per-scan - CONTENTGUARD_PANEL_URL never changes
+  // at runtime.
+  const exempt = new URL(CONTENTGUARD_PANEL_URL).origin === location.origin;
 
   function normalize(text) {
     return text.toLowerCase();
@@ -85,36 +99,16 @@
     }, 500);
   }
 
-  // workerUrl's *origin* is what's compared, not a substring/prefix
-  // match - exact scheme+host+port, same precision new URL(...).origin
-  // gives service-worker.js's own DNR rule exemption (see that file's
-  // syncKeywords), so the two enforcement paths can't drift apart on
-  // what counts as "the panel".
-  function computeExempt(workerUrl) {
-    if (!workerUrl) return false;
-    try {
-      return new URL(workerUrl).origin === location.origin;
-    } catch {
-      return false; // malformed value in storage - fail toward still scanning, never toward a silent bypass
-    }
-  }
-
-  chrome.storage.local.get(["keywords", "workerUrl"], (stored) => {
+  chrome.storage.local.get(["keywords"], (stored) => {
     keywords = Array.isArray(stored.keywords) ? stored.keywords : [];
-    exempt = computeExempt(stored.workerUrl);
     scan();
   });
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local") return;
-    if (changes.keywords) {
-      keywords = Array.isArray(changes.keywords.newValue) ? changes.keywords.newValue : [];
-      matched = false; // A newly-added keyword should be checked against
-      // content already on the page, not just future changes.
-    }
-    if (changes.workerUrl) {
-      exempt = computeExempt(changes.workerUrl.newValue);
-    }
-    if (changes.keywords || changes.workerUrl) scan();
+    if (area !== "local" || !changes.keywords) return;
+    keywords = Array.isArray(changes.keywords.newValue) ? changes.keywords.newValue : [];
+    matched = false; // A newly-added keyword should be checked against
+    // content already on the page, not just future changes.
+    scan();
   });
 
   const observer = new MutationObserver(scheduleScan);

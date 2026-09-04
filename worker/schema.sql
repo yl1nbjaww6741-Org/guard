@@ -296,8 +296,9 @@ CREATE TABLE pending_safe_app_additions (
 );
 
 -- Keyword blocklist for the Chrome extension (extensionSync.ts's GET
--- /sync/keywords, gated by CONTENTGUARD_EXTENSION_SYNC_TOKEN - see
--- types.ts's Env comment). Opposite ratchet polarity from
+-- /sync/keywords - deliberately unauthenticated, see that file's own
+-- doc comment for why: no per-machine token, the extension just works
+-- once force-installed). Opposite ratchet polarity from
 -- safe_app_bundle_ids above: ADDING a keyword makes the extension block
 -- MORE, so it's a tightening and applies immediately (keywordsApi.ts's
 -- handleAddKeyword, no password, same as Santa's handleCreateRule for a

@@ -17,7 +17,7 @@
 //    the request already carries a valid session, same as the Android
 //    sibling app's pattern this whole design is modeled on.
 
-import { hashPassword, requireDaemonSyncToken, requireExtensionSyncToken, requireSession, requireSyncToken, verifyPasswordHash } from "./auth";
+import { hashPassword, requireDaemonSyncToken, requireSession, requireSyncToken, verifyPasswordHash } from "./auth";
 import { renderDashboard, renderLoginPage } from "./dashboard";
 import {
   cancelLoosenRequest,
@@ -349,14 +349,6 @@ export default {
       return handleAppInventorySync(request, env);
     }
 
-    // --- Chrome extension's own sync (static-token-gated via a third,
-    // independent token - see auth.ts's requireExtensionSyncToken) ---
-    if (url.pathname === "/sync/keywords" && request.method === "GET") {
-      const tokenError = await requireExtensionSyncToken(request, env);
-      if (tokenError) return tokenError;
-      return handleKeywordsSync(env);
-    }
-
     // --- Login/logout (unauthenticated by nature - these ARE the auth) ---
     if (url.pathname === "/api/login" && request.method === "POST") {
       return handleLogin(request, env);
@@ -596,6 +588,14 @@ export default {
     }
     if (url.pathname === "/extension/contentguard.crx" && request.method === "GET") {
       return handleExtensionCrx(env);
+    }
+
+    // --- Chrome extension's own keyword-blocklist sync - deliberately
+    // unauthenticated, same reasoning as the two routes just above (see
+    // extensionSync.ts's own doc comment): no per-machine token to
+    // provision, the extension fetches this the moment it's installed. ---
+    if (url.pathname === "/sync/keywords" && request.method === "GET") {
+      return handleKeywordsSync(env);
     }
 
     // --- Dashboard page - renders login or the real dashboard depending

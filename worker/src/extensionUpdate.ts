@@ -8,9 +8,9 @@
 // is gated (same "some things this project's ratchet/session model just
 // can't reach" reasoning already documented for direct Fleet pushes -
 // see mac/docs/PHASE_4_DASHBOARD_SETUP.md). Accepted, not hidden: the
-// packaged .crx itself carries no secret - the extension's own sync
-// token is deliberately never baked into committed source (see
-// chrome-extension/options/options.js's doc comment), so there's
+// packaged .crx itself carries no secret - there's no sync token at all
+// any more (extensionSync.ts's GET /sync/keywords is unauthenticated by
+// the same design choice, see that file's own doc comment), so there's
 // nothing sensitive in what a public fetch of this endpoint returns.
 
 import type { Env } from "./types";

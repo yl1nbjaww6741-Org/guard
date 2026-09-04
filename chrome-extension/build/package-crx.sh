@@ -43,13 +43,14 @@ mkdir -p build/dist/src
 # -L dereferences model/nudenet_640m.onnx's symlink (see manifest's own
 # comment on why that's a symlink, not a second copy) - a CRX/ZIP package
 # needs real file content, not a link pointing outside the package.
-# content-scripts/ and options/ re-added to this list 2026-09-04 along
-# with keyword blocking itself (see git history: they were dropped from
-# here when 30a332e removed keyword blocking entirely, then the feature
-# was reintroduced) - every directory manifest.json actually references
-# needs to be listed here explicitly, this script doesn't infer it from
-# the manifest.
-cp -RL background content-scripts lib model options sandbox manifest.json build/dist/src/
+# content-scripts/ re-added 2026-09-04 along with keyword blocking
+# itself (see git history: it was dropped from here when 30a332e removed
+# keyword blocking entirely, then the feature was reintroduced).
+# options/ is gone for good, same day - replaced by shared/config.js's
+# hardcoded panel URL, no more options page to copy. Every directory
+# manifest.json actually references needs to be listed here explicitly,
+# this script doesn't infer it from the manifest.
+cp -RL background content-scripts lib model shared sandbox manifest.json build/dist/src/
 
 npx --yes crx3@2.0.0 \
   -p build/dist/key.pem \

@@ -1,9 +1,18 @@
 // MV3 background service worker. No persistent DOM/global state survives
 // between wake-ups by design (MV3 suspends this worker when idle) - the
-// only durable state is chrome.storage.local (workerUrl/syncToken from
-// the options page, and the last-synced keyword list). Every function
-// below re-reads storage rather than relying on in-memory state left
-// over from a previous wake-up.
+// only durable state is chrome.storage.local (the last-synced keyword
+// list, written by syncKeywords() below and read back by
+// content-scripts/keyword-blocker.js). Every function below re-reads
+// storage rather than relying on in-memory state left over from a
+// previous wake-up.
+//
+// importScripts, not an ES import - this service worker is a classic
+// script (manifest.json's "background" declares no "type": "module").
+// Pulls in CONTENTGUARD_PANEL_URL, the one hardcoded constant
+// shared/config.js exists for - see that file's own comment for why
+// this is hardcoded rather than configured through an options page
+// (removed 2026-09-04 along with the sync token requirement entirely).
+importScripts("../shared/config.js");
 //
 // Keyword blocking was briefly removed entirely (see git history for
 // 30a332e) after a real, self-inflicted bug - the dashboard's own
@@ -16,7 +25,13 @@
 // deliberately as it should have: a keyword only ever matches as its
 // FULL, exact phrase - see syncKeywords()'s own comment on urlFilter,
 // and content-scripts/keyword-blocker.js's matching comment for the
-// page-text half of this same guarantee.
+// page-text half of this same guarantee. Also simplified the same day,
+// same reasoning as the panel-origin exemption below: no more
+// workerUrl/syncToken configured through an options page - the panel
+// origin is hardcoded (shared/config.js) and GET /sync/keywords needs
+// no token at all (extensionSync.ts's own doc comment on the Worker
+// side), so this extension needs zero per-machine setup after being
+// force-installed.
 //
 // clearStaleDynamicRules() below (kept from the removal-and-reintroduction
 // in between) is why the "declarativeNetRequest" permission being
@@ -118,27 +133,19 @@ async function clearStaleDynamicRules() {
   console.log(`ContentGuard: cleared ${existing.length} stale declarativeNetRequest rule(s) left over from the removed keyword-blocking feature`);
 }
 
-async function getConfig() {
-  const stored = await chrome.storage.local.get(["workerUrl", "syncToken"]);
-  return { workerUrl: stored.workerUrl ?? null, syncToken: stored.syncToken ?? null };
-}
+// panelHostname is computed once from the hardcoded constant, not
+// per-sync from a fetched/stored value - CONTENTGUARD_PANEL_URL never
+// changes at runtime, so there's nothing to re-derive on every call.
+const PANEL_HOSTNAME = new URL(CONTENTGUARD_PANEL_URL).hostname;
 
 async function syncKeywords() {
-  const { workerUrl, syncToken } = await getConfig();
-  if (!workerUrl || !syncToken) {
-    // Not configured yet (options page never saved) - nothing to sync,
-    // nothing to block. Same "fails closed by doing nothing rather than
-    // guessing" reasoning as every other unconfigured-secret path in
-    // this project (see auth.ts's requireExtensionSyncToken on the
-    // Worker side, which 503s rather than accepting an empty token).
-    return;
-  }
-
   let keywords;
   try {
-    const res = await fetch(`${workerUrl}/sync/keywords`, {
-      headers: { "X-ContentGuard-Extension-Token": syncToken },
-    });
+    // No auth header - GET /sync/keywords is deliberately unauthenticated
+    // (see extensionSync.ts's own doc comment on the Worker side for
+    // why): this extension needs zero per-machine configuration, so
+    // there's no token to attach here at all, by design.
+    const res = await fetch(`${CONTENTGUARD_PANEL_URL}/sync/keywords`);
     if (!res.ok) {
       console.warn(`ContentGuard: keyword sync failed (${res.status})`);
       return;
@@ -157,31 +164,16 @@ async function syncKeywords() {
   // list in this project) so there's no meaningful cost to always doing
   // a full replace, and it can never drift out of sync with a
   // partially-applied diff.
-  // workerUrl IS the dashboard's own origin (options.js saves the exact
-  // same panel URL this fetch just hit) - excluded from every keyword
-  // rule below for the same reason keyword-blocker.js's content script
-  // exempts it from its own page-text scan (see that file's matching
-  // comment): the dashboard necessarily renders each blocked keyword as
-  // plain text (that's the whole point of the Keyword blocker section),
-  // so without this a keyword worth blocking would also block the page
-  // used to manage it. Derived from workerUrl, not hardcoded, so it
-  // tracks whichever domain is actually configured (custom domain or
-  // the *.workers.dev fallback) rather than going stale if that changes.
+  // PANEL_HOSTNAME is excluded from every keyword rule below for the
+  // same reason keyword-blocker.js's content script exempts it from its
+  // own page-text scan (see that file's matching comment): the dashboard
+  // necessarily renders each blocked keyword as plain text (that's the
+  // whole point of the Keyword blocker section), so without this a
+  // keyword worth blocking would also block the page used to manage it.
   // This is the real fix for the bug that got keyword blocking removed
   // entirely once already (see git history for 30a332e) - present here
   // from this reintroduction's very first commit, not bolted on after
   // the fact a second time.
-  let panelHostname = null;
-  try {
-    panelHostname = new URL(workerUrl).hostname;
-  } catch {
-    // Already validated by options.js's own `new URL(workerUrl)` check
-    // before this was ever saved to storage - a malformed value here
-    // would mean storage was edited outside the options page. Fails
-    // toward no exemption (every rule still gets added, just without
-    // excludedRequestDomains) rather than toward skipping the sync.
-  }
-
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
   const removeRuleIds = existing.map((r) => r.id);
   // urlFilter is set to the ENTIRE keyword string, unmodified - Chrome
@@ -201,7 +193,7 @@ async function syncKeywords() {
       resourceTypes: ["main_frame"], // Top-level navigation only - a
       // keyword incidentally present in a sub-resource URL (an ad
       // script, a tracking pixel) isn't the page the user is visiting.
-      ...(panelHostname ? { excludedRequestDomains: [panelHostname] } : {}),
+      excludedRequestDomains: [PANEL_HOSTNAME],
     },
   }));
   try {
@@ -243,13 +235,14 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(OFFSCREEN_HEALTHCHECK_ALARM_NAME, { periodInMinutes: OFFSCREEN_HEALTHCHECK_PERIOD_MINUTES });
   chrome.alarms.create(SYNC_ALARM_NAME, { periodInMinutes: SYNC_ALARM_PERIOD_MINUTES });
   ensureOffscreenDocument().catch((err) => console.error("ContentGuard: failed to create offscreen document", err));
-  // Clear first, then sync - if syncKeywords isn't configured yet
-  // (options page never saved) it returns without touching rules at
-  // all, so clearing first is what makes "not configured" actually mean
-  // "blocking nothing" instead of leaving whatever rules happened to
-  // survive from an earlier install/version. If it IS configured,
-  // syncKeywords's own full replace (removeRuleIds + addRules in one
-  // call) makes this ordering harmless either way.
+  // Clear first, then sync - if the fetch inside syncKeywords fails
+  // (network down, Worker unreachable) it returns early without
+  // touching rules at all, so clearing first is what makes "sync
+  // couldn't reach the panel" fail toward "blocking nothing" instead of
+  // leaving whatever rules happened to survive from an earlier install/
+  // version. On a successful sync, syncKeywords's own full replace
+  // (removeRuleIds + addRules in one call) makes this ordering harmless
+  // either way.
   clearStaleDynamicRules()
     .catch((err) => console.error("ContentGuard: failed to clear stale declarativeNetRequest rules", err))
     .finally(() => syncKeywords().catch((err) => console.error("ContentGuard: keyword sync failed", err)));
@@ -259,14 +252,6 @@ chrome.runtime.onStartup.addListener(() => {
   clearStaleDynamicRules()
     .catch((err) => console.error("ContentGuard: failed to clear stale declarativeNetRequest rules", err))
     .finally(() => syncKeywords().catch((err) => console.error("ContentGuard: keyword sync failed", err)));
-});
-
-// Saving the options page (workerUrl/syncToken) should take effect right
-// away, not wait up to SYNC_ALARM_PERIOD_MINUTES for the next alarm tick.
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.workerUrl || changes.syncToken)) {
-    syncKeywords().catch((err) => console.error("ContentGuard: keyword sync failed", err));
-  }
 });
 
 // Battery optimization #1, mirroring the native agent's biggest lever

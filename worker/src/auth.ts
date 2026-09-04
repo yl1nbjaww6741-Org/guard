@@ -84,23 +84,6 @@ export async function requireDaemonSyncToken(
   return null;
 }
 
-// Gates GET /sync/keywords (extensionSync.ts) - the Chrome extension's
-// own sync client, same reasoning as requireDaemonSyncToken above for a
-// genuinely separate client with a genuinely separate credential.
-export async function requireExtensionSyncToken(
-  request: Request,
-  env: { CONTENTGUARD_EXTENSION_SYNC_TOKEN?: string }
-): Promise<Response | null> {
-  if (!env.CONTENTGUARD_EXTENSION_SYNC_TOKEN) {
-    return new Response("Extension sync token not configured", { status: 503 });
-  }
-  const provided = request.headers.get("X-ContentGuard-Extension-Token") ?? "";
-  if (!timingSafeEqual(provided, env.CONTENTGUARD_EXTENSION_SYNC_TOKEN)) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-  return null;
-}
-
 export async function hashPassword(password: string): Promise<string> {
   return sha256Hex(password);
 }
