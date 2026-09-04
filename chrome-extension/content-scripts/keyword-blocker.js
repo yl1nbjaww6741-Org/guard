@@ -38,10 +38,77 @@
 // before this file per manifest.json's content_scripts order), a plain
 // compile-time value rather than something read from storage on every
 // page load.
+//
+// WORD-BOUNDARY MATCHING added 2026-09-04, explicit user requirement,
+// and deliberately ONLY here - service-worker.js's urlFilter rule
+// (the URL half of keyword blocking) is untouched, still a plain
+// substring match, per that same explicit instruction ("only make it
+// for words on the screen, not the link").
+//
+// "Full-phrase matching" (this file's header above, unchanged in
+// meaning) was never the same guarantee as word-boundary matching -
+// haystack.includes(keyword) only ever guaranteed a multi-word keyword
+// couldn't match on a PARTIAL word of itself (e.g. "reddit" alone
+// couldn't trigger "reddit media downloader"). It said nothing about
+// the keyword appearing embedded inside a longer, unrelated word - a
+// real, concrete problem for a short keyword specifically: "milf"
+// plain-substring-matched "Milford" (a common place name - Milford CT/
+// PA/DE/MA/OH, Milford Sound/Track in NZ) and "milfoil" (a real aquatic
+// plant); "pussy" matched "pussycat"/"pussyfoot"/"pussy willow". Found
+// and worked through with the user BEFORE either word was ever added
+// live, not after a real false-positive - see this file's own git
+// history for the analysis.
+//
+// buildKeywordPattern() below wraps the WHOLE stored phrase in \b
+// (word-boundary) anchors, at the start and end only - a multi-word
+// keyword's internal spaces are still matched as plain literal
+// characters, unchanged, so "reddit media downloader" still requires
+// that exact contiguous run of words ("connected", per the user's own
+// phrasing) with nothing else glued onto either end of the phrase as a
+// single word. \b itself is JS regex's own word/non-word character
+// transition, confirmed via MDN - it treats [A-Za-z0-9_] as "word"
+// characters and everything else (spaces, punctuation, start/end of
+// string) as non-word, which is exactly the boundary "milf" needs
+// against the "o" in "Milford" but "reddit media downloader"'s own
+// internal spaces never trip (a space is already non-word on both
+// sides, so \b never anchors there in the first place - only at the
+// very start of "reddit" and the very end of "downloader").
 
 (() => {
-  let keywords = [];
+  // {keyword, pattern} pairs, compiled once whenever the stored keyword
+  // list changes (not per-scan) - scan() runs on a 500ms debounce off a
+  // MutationObserver that can fire often on a busy page, so building a
+  // fresh RegExp per keyword per scan would be wasted work; the list
+  // itself only ever changes on load or storage.onChanged, both rare.
+  let keywordPatterns = [];
   let matched = false;
+
+  // Escapes every regex-special character so a keyword like "y2k?" or
+  // "c++" is matched as those literal characters, not interpreted as
+  // regex syntax - standard escaping set (confirmed against MDN's own
+  // RegExp guide), applied before wrapping in \b below.
+  function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // \b anchors the WHOLE phrase's two ends only, not each individual
+  // word inside it - a multi-word keyword's own internal spaces are
+  // still plain literal characters, matched as one contiguous run
+  // exactly as before ("connected", per the user's own requirement).
+  // See this file's own top comment for why \b matters at all: it's
+  // what stops a short keyword like "milf" from matching inside a
+  // longer, unrelated word like "Milford".
+  function buildKeywordPattern(keyword) {
+    return new RegExp(`\\b${escapeRegExp(keyword)}\\b`);
+  }
+
+  function compileKeywords(rawKeywords) {
+    return (Array.isArray(rawKeywords) ? rawKeywords : []).map((keyword) => ({
+      keyword,
+      pattern: buildKeywordPattern(keyword),
+    }));
+  }
+
   // The dashboard (this project's own Worker) necessarily renders every
   // blocked keyword as plain page text: the Keyword blocker section's
   // whole job is showing what's on the list. Scanning that page against
@@ -66,7 +133,7 @@
   }
 
   function scan() {
-    if (exempt || matched || keywords.length === 0) return;
+    if (exempt || matched || keywordPatterns.length === 0) return;
     // document.title first (cheap, always available even before body
     // finishes parsing) then body text - checking title separately
     // means a match there fires without waiting on a possibly-huge
@@ -75,8 +142,8 @@
     for (const haystack of haystacks) {
       if (!haystack) continue;
       const normalized = normalize(haystack);
-      for (const keyword of keywords) {
-        if (normalized.includes(keyword)) {
+      for (const { keyword, pattern } of keywordPatterns) {
+        if (pattern.test(normalized)) {
           matched = true;
           chrome.runtime.sendMessage({ type: "contentguard-keyword-match", keyword });
           return;
@@ -100,12 +167,12 @@
   }
 
   chrome.storage.local.get(["keywords"], (stored) => {
-    keywords = Array.isArray(stored.keywords) ? stored.keywords : [];
+    keywordPatterns = compileKeywords(stored.keywords);
     scan();
   });
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local" || !changes.keywords) return;
-    keywords = Array.isArray(changes.keywords.newValue) ? changes.keywords.newValue : [];
+    keywordPatterns = compileKeywords(changes.keywords.newValue);
     matched = false; // A newly-added keyword should be checked against
     // content already on the page, not just future changes.
     scan();

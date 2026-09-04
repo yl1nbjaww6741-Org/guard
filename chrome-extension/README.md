@@ -31,6 +31,21 @@ only ever catches what's on a hand-maintained word list (the NSFW image
 classifier below has no such ceiling) - the two are complementary
 layers, not competing ones.
 
+**Word-boundary matching, page-text/title side only, added 2026-09-04.**
+Full-phrase matching (above) never guaranteed a keyword couldn't appear
+*embedded inside* a longer, unrelated word - a real problem for a short
+keyword specifically ("milf" plain-substring-matched "Milford"/
+"milfoil"; "pussy" matched "pussycat"/"pussy willow"), found and fixed
+before either word was ever added live. `content-scripts/keyword-blocker.js`
+now wraps the whole stored phrase in `\b` boundaries at both ends only -
+a multi-word keyword's internal spaces are still plain literal
+characters, so the words still have to appear "connected" exactly as
+before. Deliberately NOT applied to the URL rule
+(`background/service-worker.js`'s `declarativeNetRequest` condition,
+still a plain substring match) - explicit user choice, and Chrome's
+`urlFilter` has no equivalent word-boundary concept to apply it to
+without switching to a different, quota-limited API (`regexFilter`).
+
 ## What's here
 
 - `manifest.json` - MV3 manifest.
