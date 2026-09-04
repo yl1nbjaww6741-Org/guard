@@ -475,8 +475,22 @@ final class CaptureManager: NSObject {
             .filter { !ownWindowNumbers.contains(Int($0.windowID)) }
 
         // The actual fix for the gap this method's header comment
-        // describes: a risky window existing at all - regardless of
-        // whether its owning app is .regular - is exactly the same signal
+        // describes - narrowed 2026-09-04 after a real regression in the
+        // first version of this check (see ContentGuardConfig.forceCaptureOnBundleIDs'
+        // own doc comment for the full story): originally checked
+        // `!currentWindows.isEmpty` (any non-safe window at all, via
+        // riskyAppWindows() above) - that's essentially never empty on a
+        // real Mac session (the Dock, Control Center, Notification
+        // Center, etc. are never owned by a safe-listed app either),
+        // which defeated the pause-for-battery optimization outright
+        // rather than closing its real, narrow blind spot. Now checks
+        // specifically for a window owned by one of
+        // ContentGuardConfig.forceCaptureOnBundleIDs - deliberately NOT
+        // derived from currentWindows above, which stays scoped to its
+        // own, separate, correctly-broad job (which windows get a
+        // dedicated per-window stream).
+        //
+        // A match is treated as exactly the same signal
         // appScopeManagerNonSafeAppIsRunning already knows how to react to
         // (clear isPausedForNoRiskyApps, rebuild every stream, fire the
         // resume delegate) - reused directly here rather than duplicating
@@ -486,15 +500,16 @@ final class CaptureManager: NSObject {
         // otherwise.
         //
         // Deliberately NOT symmetric: this only ever resumes early, never
-        // re-pauses early if the risky window closes again with nothing
-        // else risky running - evaluateCapturePauseEligibility() (driven
-        // by regular app launch/quit) still owns re-pausing, on its own
-        // schedule. Same "fail toward keeping capture on longer than
-        // strictly necessary, never toward shedding it early" bias as
-        // every other prefilter in this project - a few extra seconds of
-        // battery cost after a risky window closes is an acceptable price
-        // for never silently going blind to one while it's still open.
-        if isPausedForNoRiskyApps && !currentWindows.isEmpty {
+        // re-pauses early if the screenshot window closes again with
+        // nothing else risky running - evaluateCapturePauseEligibility()
+        // (driven by regular app launch/quit) still owns re-pausing, on
+        // its own schedule. Same "fail toward keeping capture on longer
+        // than strictly necessary, never toward shedding it early" bias
+        // as every other prefilter in this project - a few extra seconds
+        // of battery cost after the screenshot window closes is an
+        // acceptable price for never silently going blind to it while
+        // it's still open.
+        if isPausedForNoRiskyApps && appScopeManager.hasForceCaptureWindow() {
             appScopeManagerNonSafeAppIsRunning(appScopeManager)
         }
 

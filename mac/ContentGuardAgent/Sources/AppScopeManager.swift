@@ -183,6 +183,30 @@ final class AppScopeManager: NSObject {
         }
     }
 
+    /// Whether any currently on-screen window belongs to one of
+    /// ContentGuardConfig.forceCaptureOnBundleIDs - see that constant's
+    /// own doc comment for why this is a deliberately narrow, explicit
+    /// check rather than reusing riskyAppWindows() above for the same
+    /// purpose (a real regression found live: riskyAppWindows() is
+    /// correctly broad for ITS OWN job of giving every non-safe window a
+    /// dedicated stream, but that same breadth means it's essentially
+    /// never empty on a real Mac session - ordinary system chrome like
+    /// the Dock or Control Center isn't owned by a safe-listed app
+    /// either - so using it here would defeat the pause-for-battery
+    /// optimization outright, not just close its real blind spot).
+    /// No owningApplication is NOT treated as a match here, unlike
+    /// riskyAppWindows()'s own nil-owner handling - this check exists to
+    /// force capture on for one specific, named process, not to fail
+    /// toward more capture in general the way that broader method does.
+    func hasForceCaptureWindow() -> Bool {
+        guard let latestContent else { return false }
+        let forceCaptureBundleIDs = ContentGuardConfig.forceCaptureOnBundleIDs
+        return latestContent.windows.contains { window in
+            guard let owner = window.owningApplication else { return false }
+            return forceCaptureBundleIDs.contains(owner.bundleIdentifier)
+        }
+    }
+
     /// NSWorkspace posts launch/terminate notifications synchronously on the
     /// main thread, but refresh() has to be async (SCShareableContent's own
     /// API is async) - so this just kicks off a Task rather than doing the
@@ -382,11 +406,21 @@ final class AppScopeManager: NSObject {
     ///
     /// Not fixed here - this method's own narrow scope (.regular apps
     /// only) is still correct for what IT'S supposed to answer. Fixed
-    /// instead in CaptureManager.reconcileRiskyWindowStreams(), which
-    /// already looks at actual windows via riskyAppWindows() below
-    /// regardless of app type - that function now runs even while paused
-    /// for this reason specifically, so it can see past this method's own
-    /// blind spot and trigger a resume.
+    /// instead in CaptureManager.reconcileRiskyWindowStreams(), via
+    /// hasForceCaptureWindow() below - deliberately NOT riskyAppWindows()
+    /// below, despite that method also looking at windows regardless of
+    /// app type: a first attempt did exactly that and found a real
+    /// regression instead of a fix - riskyAppWindows() is correctly broad
+    /// for its own job (every non-safe window gets a dedicated stream),
+    /// but that breadth means it's essentially never empty on a real Mac
+    /// session (ordinary system chrome - the Dock, Control Center - isn't
+    /// owned by a safe-listed app either), which defeated this whole
+    /// pause optimization outright rather than closing its real, narrow
+    /// blind spot. hasForceCaptureWindow() checks a short, explicit list
+    /// (ContentGuardConfig.forceCaptureOnBundleIDs) instead - that
+    /// function now runs even while paused for this reason specifically,
+    /// so it can see past this method's own blind spot and trigger a
+    /// resume, without also catching everything else on screen.
     private func allRunningRegularAppsAreSafe() -> Bool {
         let safe = effectiveSafeAppBundleIDs
         return NSWorkspace.shared.runningApplications

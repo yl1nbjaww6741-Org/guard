@@ -86,6 +86,40 @@ enum ContentGuardConfig {
     /// not a cosmetic gap.
     static let riskyWindowPollIntervalSeconds: TimeInterval = 1.0
 
+    /// Deliberately narrow, explicit list of processes whose mere
+    /// presence (a window on screen) should force capture to resume/stay
+    /// on, regardless of AppScopeManager.allRunningRegularAppsAreSafe()'s
+    /// own .regular-app-only pause logic - see that method's own doc
+    /// comment for the real gap this exists to close (the screenshot
+    /// review panel/editor is never a .regular app, so it's invisible to
+    /// that check entirely).
+    ///
+    /// Explicit user request, 2026-09-04, and the right shape for this
+    /// check: "allow all other processes and background helpers... even
+    /// new ones that pop up... blacklist the screenshot capture process" -
+    /// default to NOT forcing capture on for anything, one short, named
+    /// exception. This replaced a real, live-found regression in the
+    /// first attempt to close the same gap: using "any non-safe window at
+    /// all" (AppScopeManager.riskyAppWindows()) as the resume trigger
+    /// instead of this short list defeated the entire pause-for-battery
+    /// optimization outright - riskyAppWindows() also (correctly, for ITS
+    /// OWN purpose of giving every risky window its own dedicated stream)
+    /// includes ordinary system chrome that's never owned by a safe-
+    /// listed app either (the Dock itself, Control Center, Notification
+    /// Center, menu bar extras) - all on screen essentially always, on
+    /// any real Mac session. Confirmed live: "no blacklisted apps open,
+    /// and the screen is being captured" - the broad check meant capture
+    /// could never actually pause at all, not that it correctly resumed
+    /// only for the screenshot window specifically.
+    ///
+    /// com.apple.screencaptureui confirmed as the real owning bundle ID
+    /// for the screenshot review panel/editor via a real diagnostic run
+    /// on the actual Mac (see git history: "frame delivered from window
+    /// <id> owner=com.apple.screencaptureui"), not guessed.
+    static let forceCaptureOnBundleIDs: Set<String> = [
+        "com.apple.screencaptureui",
+    ]
+
     /// Confidence threshold for NudeNetClassifier before triggering a
     /// blackout. A single borderline frame at ~0.6 shouldn't cost 10
     /// minutes - this is the confirmation gate, distinct from the
