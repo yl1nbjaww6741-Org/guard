@@ -254,7 +254,7 @@ export function renderDashboard(): string {
   </section>
 
   <section>
-    <h2>Software (Fleet)</h2>
+    <h2>Software</h2>
     <table id="software-table">
       <thead><tr><th>Name</th><th>Version</th><th>Platform</th><th></th></tr></thead>
       <tbody id="software-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
