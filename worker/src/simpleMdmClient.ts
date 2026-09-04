@@ -141,28 +141,50 @@ async function fetchAllPages<T>(env: Env, endpoint: string): Promise<Array<{ id:
 // buffering the whole file into a Blob/FormData first - a single
 // `outgoing.append("binary", file)` (the original shape of this
 // function, see git history) reads fine for a small file, but a real
-// .pkg upload found live (2026-09-04) that was well over 100MB
-// exposed two separate real ceilings that buffering would hit even if
-// Cloudflare's edge let the request through at all:
+// .pkg upload found live (2026-09-04) that was well over 100MB exposed
+// real ceilings buffering would hit even if Cloudflare's edge let the
+// request through at all. Two are avoidable in this Worker's own code;
+// one is NOT, and softwareApi.ts's MAX_PROXIED_UPLOAD_BYTES exists
+// specifically because of it - read that constant's own doc comment
+// for the full story before assuming this function alone makes upload
+// size unlimited:
 //   1. Cloudflare Workers' incoming-request body limit - confirmed via
 //      Cloudflare's own docs: 100MB on Free/Pro, 200MB Business, 500MB
-//      Enterprise. This is enforced at the edge, before this Worker's
-//      own code ever runs, on the *inbound* dashboard->Worker request -
-//      which is exactly why softwareApi.ts no longer sends the whole
-//      file in one request at all (see its own top comment: the
-//      dashboard now uploads in R2-multipart chunks instead). This
-//      function only ever sees the file after it's already sitting in
-//      R2, so that limit doesn't apply here.
-//   2. A Worker instance's own memory ceiling (~128MB) - confirmed via
-//      Cloudflare's own docs, separate from the request-size limit
-//      above and NOT bypassed by fixing (1). Reading the whole file
-//      into one ArrayBuffer/Blob (what `new FormData().append(name,
-//      blob)` requires) to hand to SimpleMDM would still blow past
-//      this for anything approaching that size, even once the file's
-//      already safely in R2. Streaming the multipart body - reading
-//      the R2 object's own ReadableStream and piping it straight into
-//      this outgoing fetch's body - never holds more than one chunk in
-//      memory at a time, so it's correct regardless of file size.
+//      Enterprise. Enforced at the edge, before this Worker's own code
+//      ever runs, on the *inbound* dashboard->Worker request - which is
+//      why softwareApi.ts no longer sends the whole file in one
+//      request at all (the dashboard uploads in R2-multipart chunks
+//      instead). This function only ever sees the file after it's
+//      already sitting in R2, so that limit doesn't apply here. AVOIDED.
+//   2. A Worker isolate's own memory ceiling (~128MB) on THIS function's
+//      own JS-level buffering - confirmed via Cloudflare's own docs.
+//      Reading the whole file into one ArrayBuffer/Blob (what `new
+//      FormData().append(name, blob)` requires) would blow past this.
+//      Streaming the multipart body below - a pull()-based
+//      ReadableStream reading the R2 object's own stream one chunk at a
+//      time - never holds more than one chunk in *this function's own*
+//      memory at once. AVOIDED, but see (3): this alone is NOT enough.
+//   3. Cloudflare Workers' fetch() to an external (non-Cloudflare)
+//      origin - api.simplemdm.com here - buffers the ENTIRE outgoing
+//      request body before actually transmitting it, regardless of how
+//      well-behaved the ReadableStream handed to it is. Confirmed
+//      against real reports of this exact behavior (Cloudflare Workers
+//      Community: "streaming an HTTP request body to an origin server
+//      immediately appears to result in Cloudflare buffering the entire
+//      request body") and Cloudflare's own workerd issue tracker
+//      (github.com/cloudflare/workerd#5027: full-duplex streaming
+//      request+response isn't supported - fetch's spec is half-duplex,
+//      and Workers' outbound HTTP client buffers accordingly). Found
+//      live the hard way (2026-09-04): (2)'s pull()-based rewrite
+//      landed, redeployed, and the *exact same* Cloudflare edge error
+//      ("Worker exceeded resource limits", 1102) still fired on the
+//      identical real upload - proving the isolate's memory ceiling was
+//      still being hit by workerd's OWN buffering of the outgoing
+//      request, a layer this function's own backpressure has no
+//      visibility into or control over. NOT AVOIDABLE from inside this
+//      function, or any Worker code - this is a hard platform ceiling,
+//      not a bug in this project's code. See
+//      MAX_PROXIED_UPLOAD_BYTES for the actual fix.
 function buildStreamingMultipartBody(
   fieldName: string,
   filename: string,
@@ -181,26 +203,31 @@ function buildStreamingMultipartBody(
   const epilogue = encoder.encode(`\r\n--${boundary}--\r\n`);
 
   // A `pull`-based source, not an eager start()-only loop that drains
-  // fileStream as fast as it can be read - real bug found live
-  // (2026-09-04): the first version of this function did exactly that
-  // (one big `for` loop inside `start()`, enqueuing every chunk with no
-  // backpressure check at all). R2's own read speed is far faster than
-  // the outbound upload to SimpleMDM's API can drain the outgoing
-  // stream, so for a real ~150-200MB .pkg that raced ahead and buffered
-  // nearly the whole object into this stream's internal queue before
-  // the network ever caught up - blowing well past a Worker isolate's
-  // ~128MB memory ceiling (confirmed against Cloudflare's own docs).
-  // Surfaced as Cloudflare's own edge error page, verbatim "Worker
-  // exceeded resource limits" (error 1102) - not this project's own
-  // code, since the isolate was killed before handleUploadComplete's
-  // own error handling ever ran. `pull()` fixes this by construction:
-  // the runtime only calls it again once the consumer has actually
-  // drained enough of the stream's internal queue to want more, so
-  // production is paced to match transmission speed instead of racing
-  // ahead of it - this is the whole reason streaming multipart bodies
-  // exist in the first place (see this function's own top comment for
-  // the two real ceilings it was meant to dodge; eager start()-only
-  // reading silently reintroduced the second one).
+  // fileStream as fast as it can be read - the first version of this
+  // function did exactly that (one big `for` loop inside `start()`,
+  // enqueuing every chunk with no backpressure check at all), which is
+  // real, worth keeping fixed on its own merits: it's simply correct
+  // ReadableStream construction, and it IS what keeps this function's
+  // own JS-level memory use to one chunk at a time.
+  //
+  // What this does NOT do, despite an earlier version of this comment
+  // claiming otherwise: fully solve the memory-ceiling problem end to
+  // end. Confirmed live (2026-09-04) - this exact pull()-based rewrite
+  // was deployed and the *identical* Cloudflare edge error ("Worker
+  // exceeded resource limits", 1102) still fired on the same real
+  // upload attempt. Root cause is one level further down than this
+  // function can see or control: per this file's own top comment (point
+  // 3), Workers' fetch() buffers the ENTIRE outgoing request body
+  // before transmitting it to an external origin like SimpleMDM's API,
+  // regardless of how well-paced the ReadableStream handed to it is -
+  // this stream's own backpressure never gets the chance to matter,
+  // because workerd drains it eagerly on its own. The actual fix is
+  // softwareApi.ts's MAX_PROXIED_UPLOAD_BYTES gate, which stops a file
+  // too large for that unavoidable buffering from ever reaching this
+  // function at all. This implementation is kept anyway, not reverted -
+  // correct backpressure is still the right way to write a
+  // ReadableStream, and it's cheap insurance against this function's
+  // OWN memory use for whatever files the size gate does let through.
   let phase: "preamble" | "body" | "epilogue" | "done" = "preamble";
   const reader = fileStream.getReader();
   const body = new ReadableStream<Uint8Array>({

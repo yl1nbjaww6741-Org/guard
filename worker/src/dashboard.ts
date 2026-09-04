@@ -1135,11 +1135,32 @@ document.getElementById("keywords-body").addEventListener("click", async (e) => 
 // multipart docs) with room to spare.
 const SOFTWARE_UPLOAD_CHUNK_SIZE = 20 * 1024 * 1024;
 
+// Mirrors softwareApi.ts's own MAX_PROXIED_UPLOAD_BYTES - a client-side
+// copy, not the enforcement itself (the Worker still checks for real in
+// handleUploadComplete), purely so an oversized file is rejected
+// instantly instead of after uploading the whole thing to R2 in chunks
+// first only to be told "no" at the very last step. See that constant's
+// own doc comment for why this ceiling exists at all: Cloudflare
+// Workers' fetch() fully buffers a request body before sending it to an
+// external origin (SimpleMDM's API here), a platform limit no amount of
+// chunking on this end can work around.
+const MAX_PROXIED_UPLOAD_BYTES = 80 * 1024 * 1024;
+
 document.getElementById("upload-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fileInput = e.target.querySelector("input[type=file]");
   const file = fileInput.files[0];
   if (!file) return;
+  if (file.size > MAX_PROXIED_UPLOAD_BYTES) {
+    const gotMb = (file.size / 1024 / 1024).toFixed(0);
+    const maxMb = (MAX_PROXIED_UPLOAD_BYTES / 1024 / 1024).toFixed(0);
+    setStatus(
+      "software-status",
+      \`Package is \${gotMb}MB, over this dashboard's \${maxMb}MB limit (a Cloudflare Workers platform limit, not a bug here). Upload it directly via SimpleMDM's own dashboard (a.simplemdm.com) instead.\`,
+      true
+    );
+    return;
+  }
   const submitBtn = e.target.querySelector("button[type=submit]");
 
   let key, uploadId;

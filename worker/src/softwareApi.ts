@@ -26,6 +26,30 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+// The real, hard ceiling on what this dashboard can upload to SimpleMDM
+// at all - 80MB, comfortably under both of Cloudflare's own confirmed
+// limits this whole flow runs into (see simpleMdmClient.ts's top
+// comment for the full three-point history): the ~100MB
+// incoming-request-body limit (the R2-multipart chunking below already
+// dodges this one) and, the one that actually matters here, Workers'
+// fetch() buffering the ENTIRE outgoing request body before sending it
+// to an external origin (api.simplemdm.com) - a hard platform behavior,
+// confirmed live and against Cloudflare's own workerd issue tracker,
+// that no amount of careful streaming in THIS Worker's own code can
+// avoid. A file under this ceiling can be fully buffered by workerd's
+// own outbound fetch without threatening the isolate's ~128MB memory
+// ceiling; anything over it gets a clear error from this Worker's own
+// code instead of Cloudflare's cryptic edge-level "Worker exceeded
+// resource limits" (1102) page, which is what a real .pkg upload
+// produced live (2026-09-04) before this gate existed - the isolate
+// was killed by workerd's own buffering, so nothing in this file's own
+// error handling ever got a chance to run.
+//
+// A package genuinely over this size has to go through SimpleMDM's own
+// dashboard (a.simplemdm.com) directly instead - that upload never
+// passes through this Worker at all, so none of the above applies.
+const MAX_PROXIED_UPLOAD_BYTES = 80 * 1024 * 1024;
+
 // Upload is a 3-step R2-multipart-backed flow, not a single request
 // carrying the whole file - see simpleMdmClient.ts's
 // buildStreamingMultipartBody doc comment for the two real ceilings
@@ -101,6 +125,27 @@ export async function handleUploadComplete(request: Request, env: Env): Promise<
   const bucket = requireR2(env);
   const upload = bucket.resumeMultipartUpload(body.key, body.uploadId);
   await upload.complete(body.parts);
+
+  // Gate on size BEFORE ever touching the object's body - see
+  // MAX_PROXIED_UPLOAD_BYTES's own doc comment for why this is the
+  // actual fix for the Cloudflare edge crash a real oversized upload hit
+  // live (2026-09-04), not the R2-multipart chunking above (which only
+  // ever addressed the *incoming* side of this flow). `head()` reads
+  // metadata only, not the body - checking size this way costs nothing
+  // even for a package we're about to reject.
+  const head = await bucket.head(body.key);
+  if (head && head.size > MAX_PROXIED_UPLOAD_BYTES) {
+    await bucket.delete(body.key).catch(() => undefined);
+    const gotMb = (head.size / (1024 * 1024)).toFixed(0);
+    const maxMb = (MAX_PROXIED_UPLOAD_BYTES / (1024 * 1024)).toFixed(0);
+    return jsonResponse(
+      {
+        error:
+          `Package is ${gotMb}MB, over this dashboard's ${maxMb}MB limit - Cloudflare Workers can't fully stream a request this large to SimpleMDM's API without buffering the whole thing in memory first (a platform limit, not a bug here). Upload it directly via SimpleMDM's own dashboard (a.simplemdm.com) instead.`,
+      },
+      413
+    );
+  }
 
   // `complete()`'s own return doesn't carry a readable body (it's R2
   // object metadata only, confirmed against Cloudflare's R2 multipart
