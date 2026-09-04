@@ -14,19 +14,36 @@ real Chrome testing, each time, is what actually found and confirmed
 each fix.
 
 **Keyword blocking (URL/page-text matching against a dashboard-managed
-word list) was removed** - it had a real, self-inflicted bug: the
-dashboard's Keyword blocker section necessarily rendered every blocked
-keyword as plain page text (that's the whole point of a page that lets
-you manage the list), so the extension's own filter started blocking the
-dashboard itself the moment a real keyword went on it. Combined with
-keyword matching only ever catching what's on a hand-maintained word
-list (the NSFW image classifier below has no such ceiling), the decision
-was to drop the feature outright rather than patch around the panel-
-blocking bug. NSFW detection is this extension's sole enforcement now.
+word list) was removed once already, then re-added 2026-09-04.** The
+real, self-inflicted bug that got it removed: the dashboard's Keyword
+blocker section necessarily rendered every blocked keyword as plain page
+text (that's the whole point of a page that lets you manage the list),
+so the extension's own filter started blocking the dashboard itself the
+moment a real keyword went on it. This reintroduction has that fix baked
+in from the start - both enforcement paths below (the
+`declarativeNetRequest` URL rule and the content script's page-text
+scan) explicitly exempt the dashboard's own origin - plus an explicit
+guarantee this project hadn't spelled out as deliberately before: a
+keyword only ever matches as its FULL, exact phrase, never split into
+individual words or matched on a prefix (a keyword like "reddit media
+downloader" can never trigger on "reddit" alone). Keyword matching still
+only ever catches what's on a hand-maintained word list (the NSFW image
+classifier below has no such ceiling) - the two are complementary
+layers, not competing ones.
 
 ## What's here
 
 - `manifest.json` - MV3 manifest.
+- `content-scripts/keyword-blocker.js` - the fallback for a keyword that
+  only shows up in a page's rendered text/title, not its URL. Closes the
+  tab on a match; exempts the dashboard's own origin.
+- `options/options.html` + `options.js` - where the Worker URL and the
+  extension's own sync token are configured. **The token is never
+  hardcoded into this extension's source** - same discipline as every
+  other secret in this project (Santa's sync token, the daemon's sync
+  token - provisioned separately, never committed). It's entered once
+  through this page and stored only in this browser's local extension
+  storage.
 - `background/offscreen.html` + `offscreen.js` - a `chrome.offscreen`
   document, which (unlike the service worker) doesn't get suspended when
   idle - the actual 5-second `setInterval` capture loop lives here. Does
@@ -38,13 +55,19 @@ blocking bug. NSFW detection is this extension's sole enforcement now.
   `chrome.runtime.sendMessage`, decodes what comes back to raw pixel
   data, and hands it to the sandbox below for classification. On a real
   detection, tells the service worker which tab to close.
-- `background/service-worker.js` - owns the real
+- `background/service-worker.js` - besides keyword blocking (polls the
+  Worker's `/sync/keywords` every 5 minutes, plus immediately on
+  install/startup/options-save, turning the list into
+  `declarativeNetRequest` rules that block matching URLs before they
+  load - excluding the dashboard's own hostname from every rule, see
+  that function's own comment), owns the real
   `chrome.tabs.captureVisibleTab` calls (~2 calls/second real Chrome rate
   limit, comfortably above what a 5-second cadence needs even with
   several windows open), responding to the offscreen document's capture
   requests. Also owns the offscreen document's lifecycle (creating it,
   and a periodic health-check re-creating it if Chrome ever reclaims it
-  unexpectedly) and the shared close-the-tab reaction.
+  unexpectedly) and the shared close-the-tab reaction both enforcement
+  paths (keyword or NSFW) use.
 - `sandbox/sandbox.html` + `sandbox.js` - a manifest-declared **sandbox**
   page (relaxed CSP, no `chrome.*` API access, own opaque origin) that
   actually runs the ONNX Runtime Web session and the classifier.

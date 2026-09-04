@@ -240,6 +240,20 @@ export function renderDashboard(): string {
   </section>
 
   <section>
+    <h2>Keyword blocker (Chrome extension)</h2>
+    <div class="subtitle" style="margin-bottom: 0;">Every keyword the Chrome extension blocks on top of its NSFW image classifier - a page whose URL or rendered text/title contains the FULL phrase below gets closed automatically (background/service-worker.js's declarativeNetRequest rule for the URL, content-scripts/keyword-blocker.js's page-text scan for everything else). Matching is always the whole phrase, never a partial word or prefix of it - "reddit media downloader" only matches that exact phrase, never "reddit" or "reddit media" appearing alone on some unrelated page. This panel's own origin is always exempt from every keyword below (both enforcement paths check for it explicitly) - otherwise the extension would block the very page used to manage this list the moment a real keyword goes on it, a real bug this project hit once already. Adding a keyword blocks more, so it applies immediately; removing one blocks less, so it takes the same 24h-delay-plus-re-entered-password ratchet as loosening a Santa rule.</div>
+    <table id="keywords-table">
+      <thead><tr><th>Keyword</th><th>Added</th><th></th></tr></thead>
+      <tbody id="keywords-body"><tr><td colspan="3" class="empty">Loading...</td></tr></tbody>
+    </table>
+    <form class="inline" id="add-keyword-form">
+      <input name="keyword" placeholder="Full phrase to block (e.g. reddit media downloader)" required style="flex: 1; min-width: 260px;">
+      <button type="submit">Add keyword</button>
+    </form>
+    <div class="status-msg" id="keywords-status"></div>
+  </section>
+
+  <section>
     <h2>Software (Fleet)</h2>
     <table id="software-table">
       <thead><tr><th>Name</th><th>Version</th><th>Platform</th><th></th></tr></thead>
@@ -301,20 +315,21 @@ export function renderDashboard(): string {
         <tr><td>Un-blocking a Santa rule</td><td>Santa section, Rules table, "loosen request"</td><td>Queues a rule for REMOVE - e.g. this is what unblocked Codex/ChatGPT's TEAMID</td></tr>
         <tr><td>Adding a safe app (screen-capture exemption)</td><td>ContentGuard section, Safe apps table</td><td>Queues a bundle ID to stop being scanned by ContentGuardDaemon - e.g. the com.google.Chrome addition</td></tr>
         <tr><td>Uploading or updating an MDM profile</td><td>MDM lockdown section</td><td>Queues new .mobileconfig content to push to Fleet - this is how restrictions.mobileconfig/chrome-policy.mobileconfig themselves get changed</td></tr>
+        <tr><td>Removing a blocked keyword</td><td>Keyword blocker section</td><td>Queues a keyword for deletion from blocked_keywords - the Chrome extension stops blocking it once applied</td></tr>
         <tr><td>Changing the office password itself</td><td>Change office password section</td><td>Requires the current one to set a new one - can't be reset without already having it, and the change itself still waits the same 24h delay</td></tr>
       </tbody>
     </table>
-    <div class="subtitle" style="margin-top: 0.6rem; margin-bottom: 0;">All four are loosening actions - none apply instantly even with the password: every one still waits the 24h ratchet delay before taking effect, same asymmetry as everywhere else in this project.</div>
+    <div class="subtitle" style="margin-top: 0.6rem; margin-bottom: 0;">All five are loosening actions - none apply instantly even with the password: every one still waits the 24h ratchet delay before taking effect, same asymmetry as everywhere else in this project.</div>
   </section>
 
   <section>
     <h2>What the login password unlocks</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Just one thing: <code>handleLogin</code>, index.ts - reaching this dashboard at all. From there, every tightening action (blocking a Santa rule, removing a safe-app exemption) is available immediately, no further password - only loosening actions re-check the office password above. Changing the login password itself (Change login password section) is immediate too, no 24h delay, since it doesn't loosen or tighten anything on its own.</div>
+    <div class="subtitle" style="margin-bottom: 0;">Just one thing: <code>handleLogin</code>, index.ts - reaching this dashboard at all. From there, every tightening action (blocking a Santa rule, adding a blocked keyword, removing a safe-app exemption) is available immediately, no further password - only loosening actions re-check the office password above. Changing the login password itself (Change login password section) is immediate too, no 24h delay, since it doesn't loosen or tighten anything on its own.</div>
   </section>
 
   <section>
     <h2>What needs no password at all</h2>
-    <div class="subtitle" style="margin-bottom: 0;">Tightening actions, from an ordinary logged-in session - blocking a Santa rule, removing a safe app (revoking a scan exemption). Only the direction that makes this Mac less restricted is gated behind the office password; making it more restricted never is.</div>
+    <div class="subtitle" style="margin-bottom: 0;">Tightening actions, from an ordinary logged-in session - blocking a Santa rule, adding a blocked keyword, removing a safe app (revoking a scan exemption). Only the direction that makes this Mac less restricted is gated behind the office password; making it more restricted never is.</div>
   </section>
 
   <section>
@@ -360,7 +375,7 @@ export function renderDashboard(): string {
         <tr><td>.mobileconfig profiles (profiles/)</td><td>7 files, pushed through Fleet</td><td>Restrictions (browser/torrent blocklist, AirDrop, screenshots), Chrome policy (extension force-install), DNS, PPPC (permissions), Santa config + Full Disk Access, System Extensions</td></tr>
         <tr><td>Santa</td><td>App execution control, EndpointSecurity-based, MONITOR mode (not LOCKDOWN)</td><td>Denylists specific known-bad tools by TeamID/certificate (Tor Browser, etc.) - deliberately not a full allowlist gate</td></tr>
         <tr><td>ContentGuardAgent + ContentGuardDaemon</td><td>Native Swift, launchd-managed</td><td>Agent: ScreenCaptureKit capture -> ONNX Runtime/CoreML NudeNet inference -> force-quits the frontmost app on detection. Daemon: tamper-resistant anchor - heartbeat monitoring, fails closed (locks the screen) if the agent goes quiet or gets killed repeatedly</td></tr>
-        <tr><td>Chrome extension</td><td>Force-installed via ExtensionInstallForcelist, self-hosted .crx (this Worker + R2)</td><td>The same NudeNet-style NSFW detection ported to the browser, with the same battery-optimization techniques (perceptual hash, skin-tone prefilter) as the native agent - sole enforcement since keyword blocking was removed (it could block the dashboard itself, see git history)</td></tr>
+        <tr><td>Chrome extension</td><td>Force-installed via ExtensionInstallForcelist, self-hosted .crx (this Worker + R2)</td><td>The same NudeNet-style NSFW detection ported to the browser, with the same battery-optimization techniques (perceptual hash, skin-tone prefilter) as the native agent, plus a dashboard-managed keyword blocklist (full-phrase matching only, this panel's own origin always exempt - see Keyword blocker section)</td></tr>
         <tr><td>This Worker + dashboard</td><td>Cloudflare Worker, D1 database, Cron Trigger every 15 min</td><td>Santa's sync server (preflight/ruledownload/etc.), the ratchet mechanism (tighten-instantly / loosen-after-24h-and-password), Fleet API proxy, and this control panel</td></tr>
       </tbody>
     </table>
@@ -1031,6 +1046,84 @@ document.getElementById("load-apps-form").addEventListener("submit", async (e) =
   }
 });
 
+// One list, same "static/approved plus pending" shape as ContentGuard's
+// safe-apps table above - here there's no separate "static" tier
+// (nothing pre-seeds blocked_keywords), just what's currently blocked
+// and whatever's queued to stop being blocked.
+async function loadKeywords() {
+  const [blocked, pendingRemovals] = await Promise.all([
+    api("/api/keywords"),
+    api("/api/keyword-removals"),
+  ]);
+  const pendingByKeywordId = new Map((pendingRemovals || []).map((p) => [p.keyword_id, p]));
+  renderKeywords((blocked || []).map((k) => ({ ...k, pending: pendingByKeywordId.get(k.id) })));
+}
+
+function renderKeywords(rows) {
+  const body = document.getElementById("keywords-body");
+  if (rows.length === 0) {
+    body.innerHTML = '<tr><td colspan="3" class="empty">Nothing blocked yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows
+    .map((r) => {
+      const actionCell = r.pending
+        ? \`Removal queued, applies in \${timeUntil(r.pending.applies_at)} <button data-cancel-keyword-removal="\${r.pending.id}">Cancel</button>\`
+        : \`<button class="danger" data-remove-keyword="\${r.id}">Remove</button>\`;
+      return \`<tr><td>\${escapeHtml(r.keyword)}</td><td>\${timeAgo(r.added_at)}</td><td>\${actionCell}</td></tr>\`;
+    })
+    .join("");
+}
+
+document.getElementById("add-keyword-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const keyword = new FormData(e.target).get("keyword");
+  try {
+    await api("/api/keywords", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ keyword }),
+    });
+    e.target.reset();
+    setStatus("keywords-status", "Added - blocking immediately.", false);
+    await loadKeywords();
+  } catch (err) {
+    setStatus("keywords-status", "Failed to add: " + err.message, true);
+  }
+});
+
+// Removing a keyword is a loosening - same re-entered-password-plus-24h
+// pattern as a Santa rule's loosen-request (rules-body's own click
+// listener above); cancelling a queued removal needs no password, same
+// reasoning as every other cancel-a-loosen action in this project.
+document.getElementById("keywords-body").addEventListener("click", async (e) => {
+  const removeId = e.target.getAttribute("data-remove-keyword");
+  const cancelId = e.target.getAttribute("data-cancel-keyword-removal");
+  if (removeId) {
+    const password = prompt("Password to request removing this keyword:");
+    if (!password) return;
+    try {
+      await api(\`/api/keywords/\${removeId}/removal-request\`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      setStatus("keywords-status", "Removal queued - takes effect after the 24h delay.", false);
+      await loadKeywords();
+    } catch (err) {
+      setStatus("keywords-status", "Failed to request removal: " + err.message, true);
+    }
+  } else if (cancelId) {
+    try {
+      await api(\`/api/keyword-removals/\${cancelId}/cancel\`, { method: "POST" });
+      setStatus("keywords-status", "Removal request cancelled.", false);
+      await loadKeywords();
+    } catch (err) {
+      setStatus("keywords-status", "Failed to cancel: " + err.message, true);
+    }
+  }
+});
+
 document.getElementById("upload-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = new FormData(e.target);
@@ -1136,6 +1229,7 @@ showTab(location.hash.slice(1));
 
 loadRules().catch((err) => setStatus("rules-status", "Failed to load rules: " + err.message, true));
 loadContentGuardApps().catch((err) => setStatus("safe-apps-status", "Failed to load: " + err.message, true));
+loadKeywords().catch((err) => setStatus("keywords-status", "Failed to load: " + err.message, true));
 loadSoftware().catch((err) => setStatus("software-status", "Failed to load software: " + err.message, true));
 loadPendingPasswordChange().catch(() => {});
 loadHostStatus().catch((err) => {

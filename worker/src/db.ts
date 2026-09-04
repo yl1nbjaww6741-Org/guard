@@ -847,3 +847,121 @@ export async function listAppInventory(db: D1Database): Promise<AppInventoryReco
     .all<AppInventoryRecord>();
   return result.results ?? [];
 }
+
+// --- Chrome extension keyword blocklist (schema.sql's blocked_keywords/
+// pending_keyword_removals comments explain the ratchet polarity - the
+// reverse of safe_app_bundle_ids above: adding is immediate, removing is
+// ratcheted). Re-added 2026-09-04 - storage/query shape unchanged from
+// before migrations/0009_drop_keyword_blocking.sql removed it; the real
+// fix that removal was standing in for lives in the matching logic on
+// the extension side, not here (see schema.sql's own comment on these
+// two tables). ---
+
+export interface BlockedKeywordRecord {
+  id: number;
+  keyword: string;
+  added_at: number;
+}
+
+export async function listBlockedKeywords(db: D1Database): Promise<BlockedKeywordRecord[]> {
+  const result = await db.prepare(`SELECT id, keyword, added_at FROM blocked_keywords ORDER BY added_at DESC`).all<BlockedKeywordRecord>();
+  return result.results ?? [];
+}
+
+export async function getBlockedKeywordById(db: D1Database, id: number): Promise<BlockedKeywordRecord | null> {
+  return db.prepare(`SELECT id, keyword, added_at FROM blocked_keywords WHERE id = ?1`).bind(id).first<BlockedKeywordRecord>();
+}
+
+// Tightening - applies immediately, no queue, no password re-check, same
+// as upsertRule creating a new BLOCKLIST rule. INSERT OR IGNORE since
+// re-adding an already-blocked keyword (the UNIQUE constraint) is a
+// harmless no-op, not an error - same reasoning as addSafeAppBundleId.
+export async function addBlockedKeyword(db: D1Database, keyword: string): Promise<void> {
+  await db.prepare(`INSERT OR IGNORE INTO blocked_keywords (keyword, added_at) VALUES (?1, ?2)`).bind(keyword, Date.now()).run();
+}
+
+// Called only from applyDueKeywordRemovals once a request's 24h delay has
+// elapsed - the actual DELETE, never called directly from the dashboard
+// API (that only ever queues a removal request, see requestRemoveKeyword
+// in ratchet.ts).
+export async function deleteBlockedKeywordRow(db: D1Database, id: number): Promise<void> {
+  await db.prepare(`DELETE FROM blocked_keywords WHERE id = ?1`).bind(id).run();
+}
+
+export interface PendingKeywordRemoval {
+  id: number;
+  keyword_id: number;
+  keyword: string;
+  requested_at: number;
+  applies_at: number;
+  applied_at: number | null;
+  cancelled_at: number | null;
+}
+
+const KEYWORD_REMOVAL_DELAY_MS = 24 * 60 * 60 * 1000; // Same 24h as every
+// other ratchet delay in this file - deliberately not configurable, same
+// reasoning as SAFE_APP_ADDITION_DELAY_MS.
+
+export async function hasActivePendingKeywordRemoval(db: D1Database, keywordId: number): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT id FROM pending_keyword_removals
+       WHERE keyword_id = ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(keywordId)
+    .first<{ id: number }>();
+  return row !== null;
+}
+
+export async function queueKeywordRemoval(db: D1Database, keywordId: number, keyword: string): Promise<PendingKeywordRemoval> {
+  const now = Date.now();
+  const appliesAt = now + KEYWORD_REMOVAL_DELAY_MS;
+  const result = await db
+    .prepare(
+      `INSERT INTO pending_keyword_removals (keyword_id, keyword, requested_at, applies_at)
+       VALUES (?1, ?2, ?3, ?4)
+       RETURNING id, keyword_id, keyword, requested_at, applies_at, applied_at, cancelled_at`
+    )
+    .bind(keywordId, keyword, now, appliesAt)
+    .first<PendingKeywordRemoval>();
+  if (!result) throw new Error("queueKeywordRemoval: INSERT ... RETURNING returned no row");
+  return result;
+}
+
+export async function cancelKeywordRemoval(db: D1Database, requestId: number): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE pending_keyword_removals SET cancelled_at = ?1
+       WHERE id = ?2 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now(), requestId)
+    .run();
+}
+
+export async function listActiveKeywordRemovals(db: D1Database): Promise<PendingKeywordRemoval[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, keyword_id, keyword, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_keyword_removals
+       WHERE applied_at IS NULL AND cancelled_at IS NULL
+       ORDER BY applies_at ASC`
+    )
+    .all<PendingKeywordRemoval>();
+  return result.results ?? [];
+}
+
+export async function getDueKeywordRemovals(db: D1Database): Promise<PendingKeywordRemoval[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, keyword_id, keyword, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_keyword_removals
+       WHERE applies_at <= ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now())
+    .all<PendingKeywordRemoval>();
+  return result.results ?? [];
+}
+
+export async function markKeywordRemovalApplied(db: D1Database, requestId: number): Promise<void> {
+  await db.prepare(`UPDATE pending_keyword_removals SET applied_at = ?1 WHERE id = ?2`).bind(Date.now(), requestId).run();
+}

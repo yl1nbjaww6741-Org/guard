@@ -295,16 +295,55 @@ CREATE TABLE pending_safe_app_additions (
               -- (ratchet.ts's applyDueSafeAppAdditions)
 );
 
--- blocked_keywords/pending_keyword_removals (the Chrome extension's
--- keyword blocklist) lived here until migrations/0009_drop_keyword_blocking.sql -
--- removed along with the entire keyword-blocking subsystem (real bug:
--- the dashboard itself necessarily renders every blocked keyword as
--- plain text, so the extension's own filter started blocking the
--- dashboard the moment a real keyword went on the list - and keyword
--- matching was the fragile half of this system anyway, only ever
--- catching what's on a hand-maintained word list). The NSFW image
--- classifier (background/offscreen.js's NudeNet model) is the
--- extension's sole enforcement now.
+-- Keyword blocklist for the Chrome extension (extensionSync.ts's GET
+-- /sync/keywords, gated by CONTENTGUARD_EXTENSION_SYNC_TOKEN - see
+-- types.ts's Env comment). Opposite ratchet polarity from
+-- safe_app_bundle_ids above: ADDING a keyword makes the extension block
+-- MORE, so it's a tightening and applies immediately (keywordsApi.ts's
+-- handleAddKeyword, no password, same as Santa's handleCreateRule for a
+-- new BLOCKLIST rule). REMOVING a keyword makes it block LESS, so it's a
+-- loosening and goes through the same 24h-delay-plus-re-entered-password
+-- ratchet as everything else (pending_keyword_removals below) - the
+-- inverse of safe_app_bundle_ids's own asymmetry, not a copy-paste of it.
+--
+-- Re-added by migrations/0010_blocked_keywords.sql, 2026-09-04 - briefly
+-- removed by 0009_drop_keyword_blocking.sql after a real, self-inflicted
+-- bug (the dashboard's own Keyword blocker page necessarily rendered
+-- every blocked keyword as plain page text, so the extension's own
+-- filter started blocking the dashboard itself the moment a real
+-- keyword went on the list). Storage schema is unchanged from before
+-- that removal - the fix lives entirely in the matching logic that
+-- reads this table (chrome-extension/content-scripts/keyword-blocker.js's
+-- panel-origin exemption, chrome-extension/background/service-worker.js's
+-- matching declarativeNetRequest exemption), not in what gets stored
+-- here. Also explicitly guaranteed from this reintroduction onward:
+-- a keyword is only ever matched as its FULL contiguous phrase (plain
+-- string .includes()/urlFilter substring matching on the exact stored
+-- string, never split into individual words) - see keyword-blocker.js's
+-- own comment for why that matters (a multi-word keyword like "reddit
+-- media downloader" must never trigger on "reddit" alone appearing on
+-- some unrelated page).
+CREATE TABLE blocked_keywords (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    keyword TEXT NOT NULL UNIQUE,
+    added_at INTEGER NOT NULL
+);
+
+-- Ratchet for REMOVING a blocked_keywords row - same shape as
+-- pending_safe_app_additions above, just gating the opposite direction
+-- of change (see blocked_keywords's own comment for why). keyword is
+-- captured at request time (not just keyword_id) purely for dashboard
+-- display of a pending removal without a join, same reasoning as
+-- pending_safe_app_additions.name.
+CREATE TABLE pending_keyword_removals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    keyword_id INTEGER NOT NULL REFERENCES blocked_keywords(id),
+    keyword TEXT NOT NULL,
+    requested_at INTEGER NOT NULL,
+    applies_at INTEGER NOT NULL,
+    applied_at INTEGER,
+    cancelled_at INTEGER
+);
 
 -- Real per-app code-signing inventory, daemon-reported (AppInventoryScanner.swift
 -- + POST /sync/app-inventory) - see migrations/0008_app_inventory.sql's own
