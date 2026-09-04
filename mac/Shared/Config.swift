@@ -49,43 +49,6 @@ enum ContentGuardConfig {
     /// have used, so it is not a free tuning knob for more battery.
     static let maxCaptureDimension: Int = 640
 
-    /// How often CaptureManager checks for newly-appeared/closed risky
-    /// windows (riskyAppWindows()) to give each a dedicated per-window
-    /// SCStream - see CaptureManager.startRiskyWindowPoll()'s own doc
-    /// comment. Deliberately tighter than captureIntervalSeconds, same
-    /// "active enforcement, not failure detection" reasoning as
-    /// appLockPollIntervalSeconds below: this used to just reuse
-    /// captureIntervalSeconds (5s) until a real, specific timing gap was
-    /// worked through, 2026-09-04 - the macOS screenshot floating-
-    /// thumbnail review panel (com.apple.screencaptureui) is exactly the
-    /// kind of window this mechanism exists to give dedicated attention
-    /// to (a small window that would get diluted almost to nothing on
-    /// the whole-display downscale), but it's also genuinely transient:
-    /// Apple's own support docs only say it's on screen "for a few
-    /// seconds" (not an exact number - checked directly, not assumed),
-    /// and independent sources converge on roughly 5 seconds before it
-    /// auto-dismisses. At the old 5s poll cadence, a panel that appears
-    /// right after a poll tick could be caught close to (or past) its
-    /// own dismiss time, before even accounting for the dedicated
-    /// stream's own startup + first-frame + inference latency on top -
-    /// a real, plausible miss, not a hypothetical one.
-    ///
-    /// 1.0 second: cuts worst-case new-window-detection latency from 5s
-    /// to 1s, leaving real margin against a ~5s-visible panel even after
-    /// stream startup and inference are added on top. NOT yet confirmed
-    /// live against an actual real-Mac screenshot (no hardware available
-    /// in this environment, same standing caveat as every other Swift
-    /// change here) - the actual number to watch for once tested is
-    /// whether a real screenshot of blocked-class content gets caught
-    /// and closed before the panel would have auto-dismissed on its own.
-    /// Real, named tradeoff: 5x more of AppScopeManager.refresh()'s own
-    /// SCShareableContent snapshot calls than before - a window/app
-    /// enumeration, not actual pixel capture, so cheaper per-call than
-    /// the display capture streams themselves, but not free; accepted
-    /// because a missed screenshot review is a real content-defeat path,
-    /// not a cosmetic gap.
-    static let riskyWindowPollIntervalSeconds: TimeInterval = 1.0
-
     /// Deliberately narrow, explicit list of processes whose mere
     /// presence (a window on screen) should force capture to resume/stay
     /// on, regardless of AppScopeManager.allRunningRegularAppsAreSafe()'s

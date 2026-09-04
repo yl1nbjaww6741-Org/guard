@@ -391,38 +391,36 @@ final class CaptureManager: NSObject {
     /// app-only gating exists to avoid, just for a much bigger set of
     /// apps.
     ///
-    /// Polling at ContentGuardConfig.riskyWindowPollIntervalSeconds, NOT
-    /// captureIntervalSeconds - originally reused captureIntervalSeconds
-    /// (5s, "no slower than a notification-triggered rebuild would have
-    /// been"), deliberately decoupled and tightened to 1s, 2026-09-04 -
-    /// see that constant's own doc comment for the real, specific gap
-    /// this closes: the macOS screenshot review panel is on screen for
-    /// only around 5 seconds, and detecting it up to 5s late (the old
-    /// cadence's worst case) left too little margin once dedicated-
-    /// stream startup and inference are added on top. Diffing
-    /// incrementally rather than tearing every window stream down and
-    /// rebuilding it every tick: an unchanged window's stream keeps
-    /// delivering frames continuously (cheap), only genuinely new windows
-    /// get a fresh SCStream and genuinely closed ones get torn down
-    /// (both real, one-time costs, not paid every tick for nothing) -
-    /// this incremental-diff design is exactly what makes a 5x-tighter
-    /// poll affordable: the recurring cost per tick is one cheap
-    /// SCShareableContent snapshot (appScopeManager.refresh(), inside
-    /// reconcileRiskyWindowStreams()), not a teardown/rebuild of every
-    /// already-running stream.
+    /// Polling at captureIntervalSeconds - the same cadence capture itself
+    /// already runs at, so a newly-opened risky window gets its own stream
+    /// within one capture tick, no slower than a notification-triggered
+    /// rebuild would have been. Diffing incrementally rather than tearing
+    /// every window stream down and rebuilding it every tick: an unchanged
+    /// window's stream keeps delivering frames continuously (cheap), only
+    /// genuinely new windows get a fresh SCStream and genuinely closed
+    /// ones get torn down (both real, one-time costs, not paid every tick
+    /// for nothing).
     ///
-    /// leeway also scaled down from the old 1-second value: at a 1s
-    /// repeating interval, a full 1s of coalescing leeway would let the
-    /// OS slide a tick by 100% of the interval, quietly undoing the
-    /// tightened cadence this whole change exists for. 200ms keeps
-    /// meaningful timer-coalescing headroom for the OS without eating
-    /// the margin just bought.
+    /// Briefly tightened to a dedicated 1-second constant
+    /// (riskyWindowPollIntervalSeconds), then reverted back to sharing
+    /// this one, same day (2026-09-04) - real, live back-and-forth worth
+    /// keeping the record of rather than pretending this number was
+    /// always obviously 5s: the tightening was specifically to catch the
+    /// macOS screenshot FLOATING THUMBNAIL (com.apple.screencaptureui)
+    /// before its ~5s auto-dismiss. Explicit user clarification afterward:
+    /// that fleeting thumbnail was never the actual thing worth
+    /// protecting - the click-to-expand review/editor window is, and that
+    /// one stays open indefinitely until manually closed, so it was never
+    /// racing a dismiss timer at all. Once that was clear, the 1s cadence
+    /// was paying a real, measurable recurring cost (visible in Activity
+    /// Monitor's Energy tab) for a case that had already been explicitly
+    /// deprioritized - reverted rather than kept "just in case."
     private func startRiskyWindowPoll() {
         let t = DispatchSource.makeTimerSource(queue: outputQueue)
         t.schedule(
-            deadline: .now() + ContentGuardConfig.riskyWindowPollIntervalSeconds,
-            repeating: ContentGuardConfig.riskyWindowPollIntervalSeconds,
-            leeway: .milliseconds(200)
+            deadline: .now() + ContentGuardConfig.captureIntervalSeconds,
+            repeating: ContentGuardConfig.captureIntervalSeconds,
+            leeway: .seconds(1)
         )
         t.setEventHandler { [weak self] in
             Task { await self?.reconcileRiskyWindowStreams() }
