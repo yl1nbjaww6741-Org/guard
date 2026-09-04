@@ -198,53 +198,71 @@ final class AppScopeManager: NSObject {
     }
 
     /// Whether any currently on-screen window belongs to one of
-    /// ContentGuardConfig.forceCaptureOnBundleIDs - see that constant's
-    /// own doc comment for why this is a deliberately narrow, explicit
-    /// check rather than reusing riskyAppWindows() above for the same
-    /// purpose (a real regression found live: riskyAppWindows() is
-    /// correctly broad for ITS OWN job of giving every non-safe window a
-    /// dedicated stream, but that same breadth means it's essentially
-    /// never empty on a real Mac session - ordinary system chrome like
-    /// the Dock or Control Center isn't owned by a safe-listed app
-    /// either - so using it here would defeat the pause-for-battery
-    /// optimization outright, not just close its real blind spot).
-    /// No owningApplication is NOT treated as a match here, unlike
-    /// riskyAppWindows()'s own nil-owner handling - this check exists to
-    /// force capture on for one specific, named process, not to fail
-    /// toward more capture in general the way that broader method does.
-    /// Edge-triggered, same reasoning as allRunningRegularAppsAreSafe()'s
-    /// own lastLoggedUnsafeBundleIDs - this is called on every
-    /// CaptureManager poll tick (every captureIntervalSeconds), so
-    /// logging unconditionally would mean a line every few seconds for
-    /// as long as this stays true.
+    /// ContentGuardConfig.forceCaptureOnBundleIDs AND looks like a real,
+    /// user-facing window, not com.apple.screencaptureui's own persistent
+    /// background listener.
+    ///
+    /// The title requirement is the real fix here, added 2026-09-04 after
+    /// a live, empirical finding this file's own diagnostic surfaced:
+    /// matching on bundle ID alone (the original design) was permanently
+    /// true, not just true while reviewing a screenshot - the actual
+    /// logged match was `title="" frame=(0, 0, 1920, 1243)`, essentially
+    /// the whole display, with no title at all. That's not the small
+    /// floating thumbnail or the click-to-expand review panel the whole
+    /// point of ContentGuardConfig.forceCaptureOnBundleIDs was to protect -
+    /// it's screencaptureui's own always-present, invisible listener
+    /// window, kept warm so Cmd+Shift+4/5 can render instantly. Matching
+    /// on it meant this function was permanently true whenever
+    /// screencaptureui merely EXISTS (effectively always, on any real Mac
+    /// session), not when a screenshot is actually being reviewed -
+    /// confirmed live as the actual cause of capture repeatedly resuming
+    /// seconds after correctly pausing, independent of anything in the
+    /// safe list.
+    ///
+    /// A real review panel/editor is a genuine, user-facing window - the
+    /// working assumption here (not yet independently confirmed the same
+    /// rigorous way the empty-title listener window was) is that it has
+    /// a real, non-empty title, unlike the internal listener window this
+    /// requirement is specifically designed to exclude.
+    ///
+    /// See ContentGuardConfig.forceCaptureOnBundleIDs's own doc comment
+    /// for why bundle-ID matching is still the right base filter, just
+    /// not sufficient alone - riskyAppWindows() above is deliberately not
+    /// reused here for the same reason it never was: too broad for this
+    /// specific purpose, catching ordinary system chrome that's on
+    /// screen essentially always.
     private var lastLoggedForceCaptureMatch = false
 
     func hasForceCaptureWindow() -> Bool {
         guard let latestContent else { return false }
         let forceCaptureBundleIDs = ContentGuardConfig.forceCaptureOnBundleIDs
-        let matches = latestContent.windows.filter { window in
+        let allBundleMatches = latestContent.windows.filter { window in
             guard let owner = window.owningApplication else { return false }
             return forceCaptureBundleIDs.contains(owner.bundleIdentifier)
         }
-        let result = !matches.isEmpty
+        // The actual filter: exclude anything without a real title -
+        // see this function's own doc comment for the live evidence that
+        // motivated this specifically (screencaptureui's own persistent
+        // listener window has an empty title).
+        let realMatches = allBundleMatches.filter { !($0.title ?? "").isEmpty }
+        let result = !realMatches.isEmpty
         if result != lastLoggedForceCaptureMatch {
             lastLoggedForceCaptureMatch = result
             if result {
-                // Diagnostic added 2026-09-04 to answer a real, live
-                // question this function's own doc comment couldn't:
-                // does a match here only ever happen while the actual
-                // screenshot review panel is genuinely open, or does
-                // com.apple.screencaptureui keep some other, persistent
-                // window registered that would force capture on far more
-                // often than intended? Frame size is the key detail - a
-                // real review panel is a sizeable, visible UI element;
-                // a stale/placeholder window would likely be near-zero.
-                let details = matches.map { "title=\($0.title ?? "nil") frame=\($0.frame)" }.joined(separator: "; ")
+                let details = realMatches.map { "title=\($0.title ?? "nil") frame=\($0.frame)" }.joined(separator: "; ")
                 logger.log("force-capture window match: \(details, privacy: .public)")
             } else {
                 logger.log("force-capture window match cleared")
             }
         }
+        // Titleless bundle-ID matches (the persistent listener window)
+        // are deliberately NOT logged at all, even at a lower level -
+        // they're expected to be present essentially always, so logging
+        // them would just be noise, not a diagnostic signal. If this
+        // title-based filter itself ever turns out to be wrong (e.g. the
+        // real review panel ALSO has an empty title in some case), the
+        // symptom to watch for is the original bug returning - capture
+        // never force-resuming for a real screenshot review again.
         return result
     }
 
