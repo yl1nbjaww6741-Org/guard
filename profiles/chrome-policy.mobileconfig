@@ -86,40 +86,46 @@
                                   constant do.
                                 -->
                                 <!--
-                                  Restored 2026-09-04, second time today:
-                                  briefly removed again (see git history:
-                                  67ad128/512c319 for the first cycle,
-                                  earlier this same session for the
-                                  second) to fix the exact same
-                                  stuck-extension bug recurring on a
-                                  second version bump (0.3.1 -> 0.4.0).
-                                  Confirmed live before restoring, same as
-                                  last time: the ContentGuard card
-                                  genuinely disappeared from
-                                  chrome://extensions once the policy no
-                                  longer required it. Restoring it now
-                                  should make Chrome treat this as a
-                                  brand-new forced install and pull the
-                                  current 0.4.0 build fresh, rather than
-                                  repeating the stuck "update" that never
-                                  fired on its own.
+                                  TEMPORARILY REMOVED 2026-09-04, third
+                                  cycle today: same stuck-extension-update
+                                  bug recurring on a third consecutive
+                                  version bump (0.4.0 -> 0.4.1, the
+                                  word-boundary keyword-matching fix).
+                                  Same fix pattern each time (see git
+                                  history: 67ad128/512c319 for the first
+                                  cycle, 2241a2e/9fe700b for the second) -
+                                  removing this policy makes Chrome treat
+                                  ContentGuard as no longer required, so
+                                  it can actually be uninstalled instead
+                                  of stuck mid-"update" forever; restoring
+                                  it then forces a brand-new install that
+                                  pulls the current .crx fresh.
 
-                                  This has now happened on two consecutive
-                                  version bumps (0.2.0 stuck all the way
-                                  through 0.3.1's release, then 0.3.1
-                                  stuck on 0.4.0's) - worth treating as a
-                                  structural gap in how Chrome handles
-                                  force-installed-extension updates rather
-                                  than a one-off, and expecting this same
-                                  remove/confirm/restore cycle to be
-                                  needed again on the next real version
-                                  bump, not assuming it'll "just work" by
-                                  then.
+                                  NEXT STEP (not yet done): push this
+                                  edit to the real Mac, confirm live in
+                                  chrome://extensions that the
+                                  ContentGuard card actually disappears
+                                  (same confirmation step both prior
+                                  cycles required before restoring), then
+                                  restore ExtensionInstallForcelist below
+                                  and push again.
+
+                                  This has now happened on THREE
+                                  consecutive version bumps (0.2.0 stuck
+                                  through 0.3.1, 0.3.1 stuck through
+                                  0.4.0, now 0.4.0 stuck through 0.4.1) -
+                                  confirms this is a structural gap in how
+                                  Chrome handles force-installed-extension
+                                  updates, not a one-off - expect this
+                                  same remove/confirm/restore cycle on
+                                  every future real version bump, not just
+                                  when something happens to go wrong.
+
+                                  <key>ExtensionInstallForcelist</key>
+                                  <array>
+                                      <string>pdhcmfmgdicpkanpigjpgenhhbbollpk;https://panel.lukep009.download/extension/update.xml</string>
+                                  </array>
                                 -->
-                                <key>ExtensionInstallForcelist</key>
-                                <array>
-                                    <string>pdhcmfmgdicpkanpigjpgenhhbbollpk;https://panel.lukep009.download/extension/update.xml</string>
-                                </array>
                                 <!--
                                   DeveloperToolsAvailability: back to 2
                                   (Disallowed) as of this version -
