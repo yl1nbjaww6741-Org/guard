@@ -212,13 +212,40 @@ final class AppScopeManager: NSObject {
     /// riskyAppWindows()'s own nil-owner handling - this check exists to
     /// force capture on for one specific, named process, not to fail
     /// toward more capture in general the way that broader method does.
+    /// Edge-triggered, same reasoning as allRunningRegularAppsAreSafe()'s
+    /// own lastLoggedUnsafeBundleIDs - this is called on every
+    /// CaptureManager poll tick (every captureIntervalSeconds), so
+    /// logging unconditionally would mean a line every few seconds for
+    /// as long as this stays true.
+    private var lastLoggedForceCaptureMatch = false
+
     func hasForceCaptureWindow() -> Bool {
         guard let latestContent else { return false }
         let forceCaptureBundleIDs = ContentGuardConfig.forceCaptureOnBundleIDs
-        return latestContent.windows.contains { window in
+        let matches = latestContent.windows.filter { window in
             guard let owner = window.owningApplication else { return false }
             return forceCaptureBundleIDs.contains(owner.bundleIdentifier)
         }
+        let result = !matches.isEmpty
+        if result != lastLoggedForceCaptureMatch {
+            lastLoggedForceCaptureMatch = result
+            if result {
+                // Diagnostic added 2026-09-04 to answer a real, live
+                // question this function's own doc comment couldn't:
+                // does a match here only ever happen while the actual
+                // screenshot review panel is genuinely open, or does
+                // com.apple.screencaptureui keep some other, persistent
+                // window registered that would force capture on far more
+                // often than intended? Frame size is the key detail - a
+                // real review panel is a sizeable, visible UI element;
+                // a stale/placeholder window would likely be near-zero.
+                let details = matches.map { "title=\($0.title ?? "nil") frame=\($0.frame)" }.joined(separator: "; ")
+                logger.log("force-capture window match: \(details, privacy: .public)")
+            } else {
+                logger.log("force-capture window match cleared")
+            }
+        }
+        return result
     }
 
     /// NSWorkspace posts launch/terminate notifications synchronously on the
