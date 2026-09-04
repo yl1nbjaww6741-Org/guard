@@ -77,47 +77,74 @@
                                   Re-package + re-upload whenever
                                   chrome-extension/ actually changes -
                                   see chrome-extension/build/README.md.
-                                  The extension_id below is permanent
-                                  (tied to build/dist/key.pem, which the
-                                  extension maintainer holds outside
-                                  this repo) and does NOT change on a
-                                  re-package; only the .crx content and
-                                  extensionUpdate.ts's EXTENSION_VERSION
-                                  constant do.
+                                  The extension_id below was previously
+                                  described as permanent for the life of
+                                  build/dist/key.pem - true as far as it
+                                  goes, but "permanent" turned out to mean
+                                  "until the key needs replacing," not
+                                  "never changes" - see the 2026-09-04
+                                  re-key note just below for the real
+                                  exception this hit.
                                 -->
                                 <!--
-                                  Restored 2026-09-04, third cycle today:
-                                  briefly removed again (see git history:
-                                  67ad128/512c319 for the first cycle,
-                                  2241a2e/9fe700b for the second, dddf896
-                                  for this third one's removal) to fix the
-                                  exact same stuck-extension bug recurring
-                                  on a third consecutive version bump
-                                  (0.4.0 -> 0.4.1, the word-boundary
-                                  keyword-matching fix). Confirmed live
-                                  before restoring, same as both previous
-                                  times: the ContentGuard card genuinely
-                                  disappeared from chrome://extensions
-                                  once the policy no longer required it.
-                                  Restoring it now should make Chrome
-                                  treat this as a brand-new forced install
-                                  and pull the current 0.4.1 build fresh,
-                                  rather than repeating the stuck "update"
-                                  that never fired on its own.
+                                  RE-KEYED 2026-09-04 - a genuinely
+                                  different extension ID, not another
+                                  remove/restore toggle of the same one
+                                  (compare the THREE same-ID toggle
+                                  cycles this comment used to document:
+                                  67ad128/512c319, 2241a2e/9fe700b,
+                                  dddf896/ae8ec72 - all real, all worth
+                                  keeping in git history, none of them
+                                  the actual fix this time). Root cause,
+                                  confirmed through real on-device
+                                  testing, not guessed: the ORIGINAL id
+                                  (pdhcmfmgdicpkanpigjpgenhhbbollpk) got
+                                  silently blocked by Chrome's own
+                                  built-in Safe Browsing extension
+                                  blocklist - a Google-side, client-
+                                  enforced mechanism entirely separate
+                                  from this policy (confirmed absent from
+                                  a real chrome://policy read) and from
+                                  anything wrong with the .crx itself
+                                  (confirmed correctly served, byte-exact,
+                                  right up to the point Chrome refused to
+                                  load it - navigating to
+                                  chrome-extension://<old-id>/manifest.json
+                                  showed Chrome's own native "<id> is
+                                  blocked / This page has been blocked by
+                                  Chrome" page, while the identical test
+                                  against a known-good, currently-
+                                  installed extension's ID loaded its
+                                  manifest.json fine). Worked through
+                                  0.2.0/0.3.1/0.4.0's real installs, then
+                                  stopped on the same id for 0.4.1 with no
+                                  code change of its own - most likely
+                                  explanation: this extension's real
+                                  runtime behavior (silently capturing the
+                                  screen every few seconds, auto-closing
+                                  tabs on a classifier's verdict) reads
+                                  exactly like a spyware/screen-recorder
+                                  heuristic, and it took real running time
+                                  after the 0.4.0 install for Google's own
+                                  telemetry to flag the id - not something
+                                  a version bump or re-upload could ever
+                                  have fixed, since the id itself was what
+                                  got blocked.
 
-                                  This has now happened on THREE
-                                  consecutive version bumps (0.2.0 stuck
-                                  through 0.3.1, 0.3.1 stuck through
-                                  0.4.0, 0.4.0 stuck through 0.4.1) -
-                                  confirmed structural, not a one-off:
-                                  expect this same remove/confirm/restore
-                                  cycle on every future real version bump,
-                                  not just when something happens to go
-                                  wrong.
+                                  Re-keyed by generating a fresh key.pem
+                                  (see build/README.md) - resets the
+                                  clock, not a permanent fix. The same
+                                  behavior pattern could get THIS id
+                                  flagged again eventually too - a real,
+                                  accepted risk of self-hosting a screen-
+                                  capturing extension outside the Chrome
+                                  Web Store's own review process, not
+                                  something this profile edit alone
+                                  closes off.
                                 -->
                                 <key>ExtensionInstallForcelist</key>
                                 <array>
-                                    <string>pdhcmfmgdicpkanpigjpgenhhbbollpk;https://panel.lukep009.download/extension/update.xml</string>
+                                    <string>ofcbfgalhkhmpknpkcnefgffdhecdjba;https://panel.lukep009.download/extension/update.xml</string>
                                 </array>
                                 <!--
                                   DeveloperToolsAvailability: back to 2

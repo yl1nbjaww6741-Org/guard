@@ -23,6 +23,20 @@ actually worked" below. This whole page stays here as the runbook for
 the *next* time the extension needs re-packaging (a real update, or a
 lost key needing a fresh ID).
 
+**Re-keyed 2026-09-04**: that original ID got silently blocked by
+Chrome's own built-in Safe Browsing extension blocklist - a real,
+confirmed-live finding, not a bug in this project's own code (see
+`worker/src/extensionUpdate.ts`'s own `EXTENSION_ID` comment for the
+full diagnosis). Current real ID is `ofcbfgalhkhmpknpkcnefgffdhecdjba` -
+`worker/src/extensionUpdate.ts` and `profiles/chrome-policy.mobileconfig`
+both carry it. This is an accepted, real, ongoing risk of self-hosting a
+screen-capturing extension outside the Chrome Web Store's own review
+process - the same behavior pattern could get *this* ID flagged again
+eventually too, and re-keying (see "Every time you package/re-package
+the extension" below, specifically moving `key.pem` aside first) is the
+only available fix when it happens, not a one-time event to forget
+about.
+
 ## One-time setup
 
 1. **Create the R2 bucket** the built `.crx` gets uploaded to (from

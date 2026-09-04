@@ -27,16 +27,37 @@ import type { Env } from "./types";
 // means Chrome silently never re-checks for the new .crx at all.
 const EXTENSION_VERSION = "0.4.1";
 
-// Real, permanent extension ID - reported back after build/package-crx.sh
-// was actually run (in the extension maintainer's own Codespace, not
-// here - see that script's own header comment for why), the .crx
-// uploaded to R2 with --remote (a first upload attempt without it
-// silently wrote to the local Miniflare simulator instead, still
-// printing "Upload complete" - real gotcha, now also fixed in
-// build/README.md), and verified end-to-end with a real HTTPS GET
-// against the live endpoint (200, content-type: application/x-chrome-
-// extension, content-length byte-exact against the local file: 93339510).
-const EXTENSION_ID = "pdhcmfmgdicpkanpigjpgenhhbbollpk";
+// Real, permanent extension ID - re-keyed 2026-09-04. The ORIGINAL ID
+// (pdhcmfmgdicpkanpigjpgenhhbbollpk, live since 2026-08-25) got silently
+// blocked by Chrome's own built-in Safe Browsing extension blocklist -
+// NOT this project's own MDM policy (confirmed absent from a real
+// chrome://policy read), NOT a bug in this Worker or the .crx itself
+// (the file was confirmed correctly served, byte-exact, right up to the
+// point Chrome refused to load it: chrome-extension://<old-id>/manifest.json
+// returned Chrome's own native "<id> is blocked / This page has been
+// blocked by Chrome" page, while the identical test against a known-good,
+// currently-installed extension's ID loaded its manifest.json fine -
+// isolating the block to specifically the old ID, not a general Chrome
+// behavior). Worked fine through 0.2.0/0.3.1/0.4.0's real installs, then
+// stopped working on this same ID for 0.4.1 with no code change of its
+// own - most likely explanation: the extension's own real runtime
+// behavior (silently capturing the screen every few seconds, auto-
+// closing tabs on a classifier's verdict) reads exactly like a spyware/
+// screen-recorder heuristic, and it took some real running time after
+// the 0.4.0 install for Google's own telemetry to flag the ID - not
+// something a version bump or a re-upload could ever have fixed, since
+// the ID itself was the thing blocked.
+//
+// Re-keyed by generating a fresh key.pem (build/package-crx.sh reuses
+// key.pem if present, so getting a new ID means moving the old one
+// aside first - see build/README.md) - same re-verification steps as
+// the original: .crx uploaded to R2 with --remote, confirmed via a real
+// HTTPS GET against the live endpoint. This resets the clock, not a
+// permanent fix - the same behavior pattern could get THIS id flagged
+// again eventually too, a real, accepted risk of self-hosting a
+// screen-capturing extension outside the Chrome Web Store's own review
+// process.
+const EXTENSION_ID = "ofcbfgalhkhmpknpkcnefgffdhecdjba";
 
 function updateManifestXml(origin: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
