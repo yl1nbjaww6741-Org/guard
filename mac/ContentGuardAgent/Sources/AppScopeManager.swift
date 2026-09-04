@@ -17,7 +17,21 @@
 // filter mechanisms.
 
 import AppKit
+import os
 import ScreenCaptureKit
+
+/// os.Logger with explicit `privacy: .public`, not NSLog - same reasoning
+/// as CaptureManager.swift's own logger (see that file's header comment):
+/// NSLog's output for this process comes back fully redacted
+/// ("(Foundation) <private>") under `log show`/`log stream`, even for a
+/// message with no dynamic content. Added 2026-09-04 specifically to
+/// answer a real, live "why does capture keep resuming" question that
+/// the existing appScopeManagerNonSafeAppIsRunning log line (CaptureManager.swift,
+/// "non-whitelisted app now running - resuming capture") couldn't answer
+/// on its own - it says THAT something wasn't safe, never WHICH bundle
+/// ID, so diagnosing a real report of rapid pause/resume cycling meant
+/// guessing instead of reading a log line.
+private let logger = Logger(subsystem: "com.contentguard.agent", category: "AppScopeManager")
 
 protocol AppScopeManagerDelegate: AnyObject {
     /// Called whenever the set of excluded applications changes (an app in
@@ -421,13 +435,39 @@ final class AppScopeManager: NSObject {
     /// function now runs even while paused for this reason specifically,
     /// so it can see past this method's own blind spot and trigger a
     /// resume, without also catching everything else on screen.
+    /// Logs the actual offending bundle ID(s) whenever the unsafe set
+    /// CHANGES from the last time this logged - not on every call. This
+    /// runs on every evaluateCapturePauseEligibility() invocation (both
+    /// app launch/quit and, since 2026-09-04, CaptureManager's own poll),
+    /// so logging unconditionally here would mean a line every few
+    /// seconds for as long as anything legitimately non-safe stays
+    /// running - the common case, not the exceptional one. Only the
+    /// transition is diagnostically interesting: "a new/different set of
+    /// apps just became the reason capture is on."
+    private var lastLoggedUnsafeBundleIDs: Set<String> = []
+
     private func allRunningRegularAppsAreSafe() -> Bool {
         let safe = effectiveSafeAppBundleIDs
-        return NSWorkspace.shared.runningApplications
-            .filter { $0.activationPolicy == .regular }
-            .allSatisfy { app in
-                guard let bundleID = app.bundleIdentifier else { return false }
-                return safe.contains(bundleID)
+        let unsafeBundleIDs = Set(
+            NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular }
+                // nil bundleIdentifier fails closed (treated as unsafe) -
+                // represented here as the literal string "(no bundle ID)"
+                // so it still shows up in the logged set rather than
+                // silently disappearing from it.
+                .compactMap { app -> String? in
+                    let bundleID = app.bundleIdentifier ?? "(no bundle ID)"
+                    return safe.contains(bundleID) ? nil : bundleID
+                }
+        )
+        if unsafeBundleIDs != lastLoggedUnsafeBundleIDs {
+            lastLoggedUnsafeBundleIDs = unsafeBundleIDs
+            if unsafeBundleIDs.isEmpty {
+                logger.log("all running regular apps are now safe-listed")
+            } else {
+                logger.log("non-safe-listed regular app(s) running: \(unsafeBundleIDs.sorted().joined(separator: ", "), privacy: .public)")
             }
+        }
+        return unsafeBundleIDs.isEmpty
     }
 }
