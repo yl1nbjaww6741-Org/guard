@@ -366,6 +366,27 @@ final class AppScopeManager: NSObject {
     /// A nil bundleIdentifier fails closed (treated as non-safe) - the
     /// same "when in doubt, don't shed" policy as every other prefilter in
     /// this project.
+    ///
+    /// Real gap found live, 2026-09-04, worth flagging directly on this
+    /// method since it's the actual root cause: "regardless of whether it
+    /// currently has any window open" above is true for .regular apps,
+    /// but says nothing about a NON-regular process's window - and a
+    /// non-regular process can absolutely have a window worth protecting.
+    /// The macOS screenshot review panel/editor is exactly that case: it
+    /// never gets a Dock icon (not .regular), so it's invisible to this
+    /// method entirely - "nothing risky running" can stay true with that
+    /// window fully open, if every actual .regular app happens to be
+    /// safe-listed. Confirmed live: no purple screen-recording indicator
+    /// appeared at all with the review window open and only Terminal
+    /// (safe-listed) also running - capture was genuinely paused.
+    ///
+    /// Not fixed here - this method's own narrow scope (.regular apps
+    /// only) is still correct for what IT'S supposed to answer. Fixed
+    /// instead in CaptureManager.reconcileRiskyWindowStreams(), which
+    /// already looks at actual windows via riskyAppWindows() below
+    /// regardless of app type - that function now runs even while paused
+    /// for this reason specifically, so it can see past this method's own
+    /// blind spot and trigger a resume.
     private func allRunningRegularAppsAreSafe() -> Bool {
         let safe = effectiveSafeAppBundleIDs
         return NSWorkspace.shared.runningApplications

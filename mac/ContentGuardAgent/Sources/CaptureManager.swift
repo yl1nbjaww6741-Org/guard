@@ -432,10 +432,33 @@ final class CaptureManager: NSObject {
     }
 
     private func reconcileRiskyWindowStreams() async {
-        // A deliberate pause (either reason - see isPaused's own doc
-        // comment) means nothing should be capturing anything right now,
-        // the same guard checkStreamHealth() applies for the same reason.
-        guard !isPaused else { return }
+        // Only a hard guard against isPausedForDisplaySleep, NOT the full
+        // isPaused (which also includes isPausedForNoRiskyApps) - real gap
+        // found live, 2026-09-04, confirmed via a real screenshot test: no
+        // purple screen-recording indicator appeared at all while the
+        // screenshot review window was open with only Terminal (already
+        // safe-listed) also running.
+        //
+        // Root cause: isPausedForNoRiskyApps is driven entirely by
+        // AppScopeManager.allRunningRegularAppsAreSafe() - deliberately
+        // scoped to NSRunningApplication.activationPolicy == .regular (see
+        // that method's own doc comment for why). The macOS screenshot
+        // review panel/editor is NOT a .regular app - it never gets a Dock
+        // icon - so it can be fully open and visible while every actual
+        // .regular app running is safe-listed, "nothing risky running"
+        // stays true, and capture stays paused. This function is the ONLY
+        // place that looks at actual windows regardless of app type
+        // (riskyAppWindows() below) - gating it entirely behind isPaused
+        // meant the one mechanism that could ever notice "actually,
+        // there's a risky window on screen" was itself disabled by the
+        // exact pause condition it would need to see past. A closed loop
+        // with no way out: paused, so this never runs, so it can never
+        // find a reason to un-pause.
+        //
+        // Display sleep is a different, harder stop - nothing meaningful
+        // to enumerate while the screen itself is off, so that guard
+        // stays absolute.
+        guard !isPausedForDisplaySleep else { return }
 
         do {
             try await appScopeManager.refresh()
@@ -450,6 +473,37 @@ final class CaptureManager: NSObject {
         let ownWindowNumbers = overlayManager.ownWindowNumbers
         let currentWindows = appScopeManager.riskyAppWindows()
             .filter { !ownWindowNumbers.contains(Int($0.windowID)) }
+
+        // The actual fix for the gap this method's header comment
+        // describes: a risky window existing at all - regardless of
+        // whether its owning app is .regular - is exactly the same signal
+        // appScopeManagerNonSafeAppIsRunning already knows how to react to
+        // (clear isPausedForNoRiskyApps, rebuild every stream, fire the
+        // resume delegate) - reused directly here rather than duplicating
+        // that logic, so there's exactly one place that ever flips this
+        // flag off. Only relevant if isPausedForNoRiskyApps is the reason
+        // we're paused at all; that method's own guard already no-ops
+        // otherwise.
+        //
+        // Deliberately NOT symmetric: this only ever resumes early, never
+        // re-pauses early if the risky window closes again with nothing
+        // else risky running - evaluateCapturePauseEligibility() (driven
+        // by regular app launch/quit) still owns re-pausing, on its own
+        // schedule. Same "fail toward keeping capture on longer than
+        // strictly necessary, never toward shedding it early" bias as
+        // every other prefilter in this project - a few extra seconds of
+        // battery cost after a risky window closes is an acceptable price
+        // for never silently going blind to one while it's still open.
+        if isPausedForNoRiskyApps && !currentWindows.isEmpty {
+            appScopeManagerNonSafeAppIsRunning(appScopeManager)
+        }
+
+        // Still paused - either isPausedForDisplaySleep started between
+        // this function's own guard above and now, or the resume attempt
+        // above didn't apply (no risky window found, or already resumed
+        // for a different reason) - either way, nothing below should run.
+        guard !isPaused else { return }
+
         let currentByID = Dictionary(uniqueKeysWithValues: currentWindows.map { ($0.windowID, $0) })
 
         // Stop streams for windows that closed, or whose app just became
@@ -470,8 +524,13 @@ final class CaptureManager: NSObject {
         // 1003) for a window that was gone by the very next reconcile tick
         // and never reappeared - consistent with a short-lived system UI
         // element (e.g. part of the screenshot-taking flow itself, not the
-        // review panel, which captures fine - see riskyAppWindows()'s own
-        // doc comment) closing in the gap between SCShareableContent
+        // review panel - ScreenCaptureKit itself has no trouble delivering
+        // frames for that window once this function actually reaches it,
+        // see riskyAppWindows()'s own doc comment; the separate pause-
+        // interaction gap this function's own header comment now covers
+        // was about whether this code path ever got to run at all, not
+        // whether SCStream could capture the window once it did) closing
+        // in the gap between SCShareableContent
         // enumerating it and this actually calling startCapture(). No
         // retry-loop risk from this: a window this transient stops being
         // enumerated by riskyAppWindows() on its own by the next tick, so
