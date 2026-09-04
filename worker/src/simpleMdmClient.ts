@@ -180,21 +180,53 @@ function buildStreamingMultipartBody(
   );
   const epilogue = encoder.encode(`\r\n--${boundary}--\r\n`);
 
+  // A `pull`-based source, not an eager start()-only loop that drains
+  // fileStream as fast as it can be read - real bug found live
+  // (2026-09-04): the first version of this function did exactly that
+  // (one big `for` loop inside `start()`, enqueuing every chunk with no
+  // backpressure check at all). R2's own read speed is far faster than
+  // the outbound upload to SimpleMDM's API can drain the outgoing
+  // stream, so for a real ~150-200MB .pkg that raced ahead and buffered
+  // nearly the whole object into this stream's internal queue before
+  // the network ever caught up - blowing well past a Worker isolate's
+  // ~128MB memory ceiling (confirmed against Cloudflare's own docs).
+  // Surfaced as Cloudflare's own edge error page, verbatim "Worker
+  // exceeded resource limits" (error 1102) - not this project's own
+  // code, since the isolate was killed before handleUploadComplete's
+  // own error handling ever ran. `pull()` fixes this by construction:
+  // the runtime only calls it again once the consumer has actually
+  // drained enough of the stream's internal queue to want more, so
+  // production is paced to match transmission speed instead of racing
+  // ahead of it - this is the whole reason streaming multipart bodies
+  // exist in the first place (see this function's own top comment for
+  // the two real ceilings it was meant to dodge; eager start()-only
+  // reading silently reintroduced the second one).
+  let phase: "preamble" | "body" | "epilogue" | "done" = "preamble";
+  const reader = fileStream.getReader();
   const body = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      controller.enqueue(preamble);
-      const reader = fileStream.getReader();
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          controller.enqueue(value);
-        }
-      } finally {
-        reader.releaseLock();
+    async pull(controller) {
+      if (phase === "preamble") {
+        controller.enqueue(preamble);
+        phase = "body";
+        return;
       }
-      controller.enqueue(epilogue);
-      controller.close();
+      if (phase === "body") {
+        const { done, value } = await reader.read();
+        if (done) {
+          phase = "epilogue";
+          return;
+        }
+        controller.enqueue(value);
+        return;
+      }
+      if (phase === "epilogue") {
+        controller.enqueue(epilogue);
+        phase = "done";
+        controller.close();
+      }
+    },
+    cancel(reason) {
+      reader.cancel(reason).catch(() => undefined);
     },
   });
 
