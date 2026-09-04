@@ -154,6 +154,15 @@ export function renderDashboard(): string {
   details.profile-details ul { margin: 0.5rem 0 0.6rem 1.2rem; font-size: 0.8rem; color: #c3c6cc; }
   details.profile-details li { margin-bottom: 0.2rem; }
   details.profile-details form.inline { margin-top: 0.4rem; }
+  /* Section-level collapse for an already-decided list (Santa's own
+     enforced rules, ContentGuard's already-whitelisted apps) - kept
+     collapsed by default (no "open" attribute) to cut page length,
+     distinct from details.profile-details above (a per-row expando
+     inside a live list, not a whole group of rows). */
+  details.collapsible-group { margin-top: 1.25rem; }
+  details.collapsible-group summary { cursor: pointer; font-size: 0.85rem; color: #8b8f98; padding: 0.4rem 0; }
+  details.collapsible-group summary:hover { color: #e8e8ea; }
+  details.collapsible-group table { margin-top: 0.5rem; }
 </style>
 </head>
 <body>
@@ -197,7 +206,7 @@ export function renderDashboard(): string {
 
   <section>
     <h2>Santa (app execution control)</h2>
-    <div class="subtitle" style="margin-bottom: 0;">One list: Santa's actual enforced block/allow rules (static profile entries plus everything added dynamically) - the source of truth for what runs on this Mac - plus every app found on this Mac with a real Team ID (AppInventoryScanner.swift, daemon-side, synced every 15 minutes) that doesn't have a rule yet, with Allow/Block right there instead of typing an identifier by hand. LOCKDOWN mode is default-deny, so every app someone actually uses needs a real ALLOWLIST Team ID rule - that's what those un-ruled rows, and the Allow all button below, are for. An app with no Team ID (unsigned, ad-hoc signed, or one of Apple's own platform binaries) never shows up needing one - see the Architecture tab's Santa row for why that's fine for Apple's own binaries specifically.</div>
+    <div class="subtitle" style="margin-bottom: 0;">Every app found on this Mac with a real Team ID (AppInventoryScanner.swift, daemon-side, synced every 15 minutes) that doesn't have a rule yet, with Allow/Block right there instead of typing an identifier by hand. LOCKDOWN mode is default-deny, so every app someone actually uses needs a real ALLOWLIST Team ID rule - that's what this table, and the Allow all button below, are for. An app with no Team ID (unsigned, ad-hoc signed, or one of Apple's own platform binaries) never shows up needing one - see the Architecture tab's Santa row for why that's fine for Apple's own binaries specifically. Santa's own already-enforced rules (static profile entries plus everything added dynamically - the actual source of truth for what runs on this Mac) are collapsed below by default, split by direction - expand either to review or act on one.</div>
     <table id="rules-table">
       <thead><tr><th>Name</th><th>Identifier</th><th>Type</th><th>Policy</th><th>Scope</th><th></th></tr></thead>
       <tbody id="rules-body"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
@@ -223,11 +232,26 @@ export function renderDashboard(): string {
       <button type="submit">Add rule</button>
     </form>
     <div class="status-msg" id="rules-status"></div>
+
+    <details class="collapsible-group">
+      <summary>Blocklist rules (<span id="rules-blocklist-count">0</span>)</summary>
+      <table>
+        <thead><tr><th>Name</th><th>Identifier</th><th>Type</th><th>Policy</th><th>Scope</th><th></th></tr></thead>
+        <tbody id="rules-blocklist-body"></tbody>
+      </table>
+    </details>
+    <details class="collapsible-group">
+      <summary>Allowlist rules (<span id="rules-allowlist-count">0</span>)</summary>
+      <table>
+        <thead><tr><th>Name</th><th>Identifier</th><th>Type</th><th>Policy</th><th>Scope</th><th></th></tr></thead>
+        <tbody id="rules-allowlist-body"></tbody>
+      </table>
+    </details>
   </section>
 
   <section>
     <h2>ContentGuard (screen-capture scanning)</h2>
-    <div class="subtitle" style="margin-bottom: 0;">One list: every bundle ID ContentGuardDaemon already excludes from screen-capture monitoring (a blind spot, kept short and deliberate - static compiled baseline plus everything added dynamically), plus every other app SimpleMDM's inventory (or the hand-kept list of built-in Apple apps, see knownApps.ts) knows about, with a Whitelist button right there instead of typing a bundle ID by hand. Adding one takes effect after a 24h delay and a re-entered password, same ratchet as loosening a Santa rule; removing or cancelling one is immediate. Anything still carrying an unrecognized com.apple.* bundle ID (background helpers, framework-hosted components) is filtered out entirely, not shown - nobody's realistically whitelisting those, and SimpleMDM's inventory reports far more of them than Fleet's own scoped query ever surfaced.</div>
+    <div class="subtitle" style="margin-bottom: 0;">Every app SimpleMDM's inventory (or the hand-kept list of built-in Apple apps, see knownApps.ts) knows about that ContentGuardDaemon does NOT already exclude from screen-capture monitoring, with a Whitelist button right there instead of typing a bundle ID by hand. Adding one takes effect after a 24h delay and a re-entered password, same ratchet as loosening a Santa rule; removing or cancelling one is immediate. Anything still carrying an unrecognized com.apple.* bundle ID (background helpers, framework-hosted components) is filtered out entirely, not shown - nobody's realistically whitelisting those, and SimpleMDM's inventory reports far more of them than Fleet's own scoped query ever surfaced. Everything already excluded (a blind spot, kept short and deliberate - static compiled baseline plus everything dashboard-approved) is collapsed below by default.</div>
     <table id="safe-apps-table">
       <thead><tr><th>App</th><th>Bundle ID</th><th>Status</th><th></th></tr></thead>
       <tbody id="safe-apps-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
@@ -237,6 +261,14 @@ export function renderDashboard(): string {
       <button type="submit">Load</button>
     </form>
     <div class="status-msg" id="safe-apps-status"></div>
+
+    <details class="collapsible-group">
+      <summary>Whitelisted apps (<span id="safe-apps-whitelisted-count">0</span>)</summary>
+      <table>
+        <thead><tr><th>App</th><th>Bundle ID</th><th>Status</th><th></th></tr></thead>
+        <tbody id="safe-apps-whitelisted-body"></tbody>
+      </table>
+    </details>
   </section>
 
   <section>
@@ -619,6 +651,16 @@ function renderMdmLockdown(data, profileDetails, pendingProfileChanges) {
 // below uses - clicking one is genuinely just adding a rule, same as
 // typing an identifier by hand, just without having to find the Team ID
 // in Terminal first.
+// Rules is split into 3 tbodies now, not one flat list - explicit user
+// request (2026-09-04): the un-ruled/actionable suggestions (below)
+// stay visible by default, since those are the whole reason this
+// section exists to be looked at; Santa's own already-enforced rules
+// (both static and dynamic) are collapsed into two <details> groups by
+// direction (Block/Allow) so a long-settled rule list doesn't push the
+// actionable part off-screen. Purely a client-side rendering split -
+// same three API calls, same rule data, same click-handler contract as
+// before (see handleRulesTableClick below, now attached to all three
+// tbodies).
 async function loadRules() {
   const [staticRules, rules, pending, appInventory] = await Promise.all([
     api("/api/static-rules"),
@@ -627,24 +669,24 @@ async function loadRules() {
     api("/api/app-inventory"),
   ]);
   const pendingByRuleId = Object.fromEntries(pending.map((p) => [p.rule_id, p]));
-  const body = document.getElementById("rules-body");
+  const isAllowlistPolicy = (policy) => policy === "ALLOWLIST" || policy === "ALLOWLIST_COMPILER";
 
   // StaticRules from santa-config.mobileconfig - permanent, tamper-
   // resistant, not editable from here at all (see staticRules.ts).
-  // Shown first and visually dimmed so it's clear at a glance these
-  // aren't dashboard-managed, but still shown - an empty-looking table
-  // here previously made it look like Santa was enforcing nothing, when
-  // e.g. Tor Browser's block was working the whole time.
-  const staticRowsHtml = staticRules.map((r) => \`<tr class="static-rule">
+  // Visually dimmed so it's clear at a glance these aren't
+  // dashboard-managed, but still shown - an empty-looking table here
+  // previously made it look like Santa was enforcing nothing, when e.g.
+  // Tor Browser's block was working the whole time.
+  const staticRowHtml = (r) => \`<tr class="static-rule">
     <td>\${escapeHtml(r.name)}</td>
     <td>\${escapeHtml(r.identifier)}</td>
     <td>\${r.rule_type}</td>
     <td class="policy-\${r.policy}">\${r.policy}</td>
     <td>profile (static)</td>
     <td><span class="pending-note" style="color:#6b6f78;">edit santa-config.mobileconfig</span></td>
-  </tr>\`).join("");
+  </tr>\`;
 
-  const dynamicRowsHtml = rules.map((r) => {
+  const dynamicRowHtml = (r) => {
     const p = pendingByRuleId[r.id];
     const canLoosen = r.policy !== "REMOVE" && !p;
     let actionCell;
@@ -663,7 +705,26 @@ async function loadRules() {
       <td>\${r.device_id ?? "all devices"}</td>
       <td>\${actionCell}</td>
     </tr>\`;
-  }).join("");
+  };
+
+  // REMOVE-policy dynamic rules (an un-blocked BLOCKLIST rule - see
+  // ratchet.ts's own comment: loosening is always BLOCKLIST -> REMOVE,
+  // there's no ALLOWLIST equivalent) are grouped with Blocklist rules,
+  // not Allowlist - a REMOVE row is still fundamentally about a block
+  // that used to exist, just dimmed to show it no longer applies.
+  const staticBlocklist = staticRules.filter((r) => !isAllowlistPolicy(r.policy));
+  const staticAllowlist = staticRules.filter((r) => isAllowlistPolicy(r.policy));
+  const dynamicBlocklist = rules.filter((r) => !isAllowlistPolicy(r.policy));
+  const dynamicAllowlist = rules.filter((r) => isAllowlistPolicy(r.policy));
+
+  document.getElementById("rules-blocklist-body").innerHTML =
+    [...staticBlocklist.map(staticRowHtml), ...dynamicBlocklist.map(dynamicRowHtml)].join("")
+    || '<tr><td colspan="6" class="empty">No blocklist rules.</td></tr>';
+  document.getElementById("rules-allowlist-body").innerHTML =
+    [...staticAllowlist.map(staticRowHtml), ...dynamicAllowlist.map(dynamicRowHtml)].join("")
+    || '<tr><td colspan="6" class="empty">No allowlist rules.</td></tr>';
+  document.getElementById("rules-blocklist-count").textContent = staticBlocklist.length + dynamicBlocklist.length;
+  document.getElementById("rules-allowlist-count").textContent = staticAllowlist.length + dynamicAllowlist.length;
 
   // Only TEAMID rules count as "already ruled" here - a suggestion row
   // only ever proposes a TEAMID rule (that's what a Team ID actually
@@ -688,8 +749,8 @@ async function loadRules() {
       <td><button data-block-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Block</button> <button data-allow-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Allow</button></td>
     </tr>\`).join("");
 
-  body.innerHTML = staticRowsHtml + dynamicRowsHtml + suggestedRowsHtml
-    || '<tr><td colspan="6" class="empty">No rules and nothing scanned yet.</td></tr>';
+  document.getElementById("rules-body").innerHTML =
+    suggestedRowsHtml || '<tr><td colspan="6" class="empty">Nothing scanned yet, or every scanned Team ID already has a rule.</td></tr>';
 }
 
 // ContentGuard's scanning exclusions - now ONE list, not two: every
@@ -763,13 +824,14 @@ async function loadContentGuardApps(host) {
   renderContentGuardApps([...rows.values()]);
 }
 
+// Split into 2 tbodies, not one flat list - explicit user request
+// (2026-09-04): already-whitelisted apps ("static"/"approved" kind) are
+// collapsed into a <details> group by default, since nothing needs
+// doing about them; "pending" (queued, has a Cancel button - still an
+// in-flight action) and "available" (not whitelisted yet, has a
+// Whitelist button - the actionable case) stay in the visible table.
 function renderContentGuardApps(rows) {
-  const body = document.getElementById("safe-apps-body");
-  if (rows.length === 0) {
-    body.innerHTML = '<tr><td colspan="4" class="empty">Nothing whitelisted and no installed apps returned.</td></tr>';
-    return;
-  }
-  body.innerHTML = rows.map((r) => {
+  const rowHtml = (r) => {
     let statusCell, actionCell;
     if (r.kind === "static") {
       statusCell = '<span class="pending-note" style="color:#6b6f78;">compiled baseline</span>';
@@ -793,7 +855,16 @@ function renderContentGuardApps(rows) {
       <td>\${statusCell}</td>
       <td>\${actionCell}</td>
     </tr>\`;
-  }).join("");
+  };
+
+  const whitelisted = rows.filter((r) => r.kind === "static" || r.kind === "approved");
+  const actionable = rows.filter((r) => r.kind === "pending" || r.kind === "available");
+
+  document.getElementById("safe-apps-body").innerHTML =
+    actionable.length ? actionable.map(rowHtml).join("") : '<tr><td colspan="4" class="empty">Nothing to whitelist - no installed apps returned, or every one is already covered.</td></tr>';
+  document.getElementById("safe-apps-whitelisted-body").innerHTML =
+    whitelisted.length ? whitelisted.map(rowHtml).join("") : '<tr><td colspan="4" class="empty">Nothing whitelisted yet.</td></tr>';
+  document.getElementById("safe-apps-whitelisted-count").textContent = whitelisted.length;
 }
 
 async function loadSoftware() {
@@ -894,11 +965,15 @@ document.getElementById("add-rule-form").addEventListener("submit", async (e) =>
 });
 
 // Handles Rules' own loosen/cancel actions AND a suggested row's
-// Block/Allow (adding a brand-new TEAMID rule) - both now land in the
-// same tbody, since Rules is one list, not two. See loadRules()'s own
-// comment for why a suggested row's buttons just post straight to
-// /api/rules, same as the manual Add rule form below.
-document.getElementById("rules-body").addEventListener("click", async (e) => {
+// Block/Allow (adding a brand-new TEAMID rule). Attached to all three
+// tbodies below (the visible suggestions table plus both collapsed
+// Blocklist/Allowlist groups) rather than duplicated per-tbody, since
+// it's the exact same set of possible buttons and actions regardless of
+// which table a click actually came from - loadRules()'s split into 3
+// tbodies is a rendering change only, not a second mechanism. See that
+// function's own comment for why a suggested row's buttons just post
+// straight to /api/rules, same as the manual Add rule form below.
+async function handleRulesTableClick(e) {
   const loosenId = e.target.getAttribute("data-loosen");
   const cancelId = e.target.getAttribute("data-cancel");
   const blockTeamId = e.target.getAttribute("data-block-team-id");
@@ -941,6 +1016,9 @@ document.getElementById("rules-body").addEventListener("click", async (e) => {
       setStatus("rules-status", "Failed to add rule: " + err.message, true);
     }
   }
+}
+["rules-body", "rules-blocklist-body", "rules-allowlist-body"].forEach((id) => {
+  document.getElementById(id).addEventListener("click", handleRulesTableClick);
 });
 
 // Bulk allowlisting - the actual point of the suggested rows (see
@@ -994,9 +1072,12 @@ document.getElementById("allow-all-app-inventory").addEventListener("click", asy
 });
 
 // Handles Safe apps' Remove, a pending addition's Cancel, and Whitelist
-// (queuing a brand-new one) - all three now land in the same tbody,
-// since this is one list, not two.
-document.getElementById("safe-apps-body").addEventListener("click", async (e) => {
+// (queuing a brand-new one). Attached to both tbodies below (the
+// visible actionable table plus the collapsed Whitelisted group,
+// since Remove lives on a whitelisted row - see
+// renderContentGuardApps's own comment) rather than duplicated per
+// tbody, same reasoning as handleRulesTableClick above.
+async function handleSafeAppsTableClick(e) {
   const removeId = e.target.getAttribute("data-remove-safe-app");
   const cancelId = e.target.getAttribute("data-cancel-safe-app-addition");
   const whitelistId = e.target.getAttribute("data-whitelist");
@@ -1032,6 +1113,9 @@ document.getElementById("safe-apps-body").addEventListener("click", async (e) =>
       setStatus("safe-apps-status", "Failed to queue whitelist: " + err.message, true);
     }
   }
+}
+["safe-apps-body", "safe-apps-whitelisted-body"].forEach((id) => {
+  document.getElementById(id).addEventListener("click", handleSafeAppsTableClick);
 });
 
 document.getElementById("load-apps-form").addEventListener("submit", async (e) => {
