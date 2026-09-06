@@ -351,7 +351,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // content, not the URL itself). tabId comes from sender.tab since
   // this message genuinely originates from that tab's own content
   // script context.
+  //
+  // Logged here, not in keyword-blocker.js itself (2026-09-05, real gap
+  // found live: a keyword-triggered close previously left zero trace
+  // anywhere - closeTab() only ever logged a *failure* to close, never
+  // the match itself, unlike the NSFW detection path's own "ContentGuard:
+  // DETECTED - class=... confidence=..." console.log). The tab's own
+  // DevTools console (and anything keyword-blocker.js logged to it)
+  // disappears the instant chrome.tabs.remove() below closes it - this
+  // service worker's console is the one place that survives the close,
+  // so that's where the record has to live for it to be checkable
+  // afterward via chrome://extensions' "service worker" inspect link.
   if (message?.type === "contentguard-keyword-match" && sender.tab?.id != null) {
+    console.log(`ContentGuard: keyword match "${message.keyword}" on ${sender.tab.url}`);
     closeTab(sender.tab.id);
     return;
   }
