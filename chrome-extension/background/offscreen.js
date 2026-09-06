@@ -282,7 +282,18 @@ async function classifyCapture({ tabId, dataUrl }) {
 
   if (result.detected) {
     console.log(`ContentGuard: DETECTED - class=${result.detectionClass} confidence=${result.confidence} tab=${tabId}`);
-    chrome.runtime.sendMessage({ type: "contentguard-nsfw-detection", tabId });
+    // class/confidence passed through so service-worker.js's closeTab()
+    // can log the full "why" in one line alongside the tab's URL (which
+    // this offscreen document doesn't have access to itself - no
+    // chrome.tabs here, see this file's own header comment) - otherwise
+    // this console.log and closeTab()'s would be two separate lines an
+    // engineer has to correlate by timestamp after the fact.
+    chrome.runtime.sendMessage({
+      type: "contentguard-nsfw-detection",
+      tabId,
+      detectionClass: result.detectionClass,
+      confidence: result.confidence,
+    });
   }
 }
 

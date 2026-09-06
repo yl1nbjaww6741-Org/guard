@@ -335,7 +335,35 @@ async function captureAllWindows() {
 // native Mac agent's own disguise-over-blackout reasoning
 // (main.swift's quitFrontmostApp doc comment) as closely as a browser
 // extension can.
-function closeTab(tabId) {
+// Every enforcement path (keyword match, NSFW detection, whatever gets
+// added next) closes a tab through here, and ONLY here - so "why did
+// this tab close" always has exactly one place to log it, instead of
+// depending on each call site remembering to (real gap found live
+// 2026-09-05: the keyword path used to close a tab with zero trace
+// anywhere at all - closeTab() only ever logged a *failure* to close).
+// Looks the tab's own URL up itself via chrome.tabs.get rather than
+// trusting a caller to supply one - offscreen.js's NSFW detection path
+// only ever has a tabId, no chrome.tabs access of its own (see that
+// file's own header comment on why), so this is the only place both
+// enforcement paths can reliably get a URL to log against. Logged here,
+// not in the callers - the closed tab's own DevTools console
+// disappears the instant chrome.tabs.remove() below runs, so this
+// service worker's console (which survives, reachable afterward via
+// chrome://extensions' "service worker" inspect link) is the only place
+// the record can actually live to be checked after the fact.
+function closeTab(tabId, reason) {
+  chrome.tabs.get(tabId, (tab) => {
+    // chrome.tabs.get reports a callback-style failure (tab already
+    // gone by the time this runs) via chrome.runtime.lastError, not by
+    // throwing - standard pattern for this API, confirmed against
+    // Chrome's own chrome.tabs docs. Must be read here, synchronously
+    // inside the callback, or Chrome logs its own "Unchecked
+    // runtime.lastError" warning even though this code has no need to
+    // otherwise handle it - it's already falling back to "tab already
+    // gone" via the ternary below regardless of why.
+    const url = chrome.runtime.lastError ? "(tab already gone)" : tab?.url;
+    console.log(`ContentGuard: closing tab ${tabId} (${url}) - ${reason}`);
+  });
   chrome.tabs.remove(tabId).catch((err) => {
     // Tab may have already been closed/navigated away in the gap
     // between the match/detection and this message arriving - not an
@@ -351,20 +379,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // content, not the URL itself). tabId comes from sender.tab since
   // this message genuinely originates from that tab's own content
   // script context.
-  //
-  // Logged here, not in keyword-blocker.js itself (2026-09-05, real gap
-  // found live: a keyword-triggered close previously left zero trace
-  // anywhere - closeTab() only ever logged a *failure* to close, never
-  // the match itself, unlike the NSFW detection path's own "ContentGuard:
-  // DETECTED - class=... confidence=..." console.log). The tab's own
-  // DevTools console (and anything keyword-blocker.js logged to it)
-  // disappears the instant chrome.tabs.remove() below closes it - this
-  // service worker's console is the one place that survives the close,
-  // so that's where the record has to live for it to be checkable
-  // afterward via chrome://extensions' "service worker" inspect link.
   if (message?.type === "contentguard-keyword-match" && sender.tab?.id != null) {
-    console.log(`ContentGuard: keyword match "${message.keyword}" on ${sender.tab.url}`);
-    closeTab(sender.tab.id);
+    closeTab(sender.tab.id, `keyword match "${message.keyword}"`);
     return;
   }
   // background/offscreen.js's NSFW classification loop - fires on a
@@ -373,9 +389,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // payload here, not read from sender.tab - this message originates
   // from the offscreen document (which captured a screenshot of some
   // OTHER tab), not from the detected tab's own content-script context,
-  // so sender.tab would be wrong (or absent) here.
+  // so sender.tab would be wrong (or absent) here. detectionClass/
+  // confidence ride along too (offscreen.js's own console.log already
+  // has them - see that file's own comment on why they're passed
+  // through here as well) so closeTab()'s log line has the full "why"
+  // in one place rather than two lines to correlate by timestamp.
   if (message?.type === "contentguard-nsfw-detection" && typeof message.tabId === "number") {
-    closeTab(message.tabId);
+    closeTab(message.tabId, `NSFW detection - class=${message.detectionClass} confidence=${message.confidence}`);
     return;
   }
   // background/offscreen.js's capture loop asking THIS context (which

@@ -25,7 +25,7 @@ import type { Env } from "./types";
 // BUMP THIS, and re-run build/package-crx.sh + re-upload to R2, every
 // time chrome-extension/ actually changes - an unbumped version here
 // means Chrome silently never re-checks for the new .crx at all.
-const EXTENSION_VERSION = "0.4.2";
+const EXTENSION_VERSION = "0.4.3";
 
 // Real, permanent extension ID - re-keyed 2026-09-04. The ORIGINAL ID
 // (pdhcmfmgdicpkanpigjpgenhhbbollpk, live since 2026-08-25) got silently
