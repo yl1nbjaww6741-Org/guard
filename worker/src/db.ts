@@ -56,6 +56,95 @@ export async function getDeviceClientMode(db: D1Database, machineId: string): Pr
   return row?.client_mode ?? "MONITOR";
 }
 
+// Real gap found live (2026-09-09): until this function existed, there
+// was NO code path anywhere that ever changed an existing device's
+// client_mode - upsertDevice above hardcodes 'MONITOR' on INSERT and
+// deliberately excludes client_mode from its ON CONFLICT update (so
+// routine sync telemetry can't clobber a real mode change), but nothing
+// ever wrote a different value in the first place. santa-config.mobileconfig's
+// ClientMode key was switched to LOCKDOWN back in d144e99, but Santa's
+// sync protocol lets THIS Worker's reported client_mode (santaSync.ts,
+// via getDeviceClientMode above) override the profile's static default -
+// so the device stayed reporting 'MONITOR' forever, regardless of what
+// the profile said. This is the actual fix: a real UPDATE.
+//
+// MONITOR -> LOCKDOWN is a tightening and this is called directly, no
+// ratchet - see ratchet.ts's requestSetClientMode/applyDueClientModeChanges
+// for the LOCKDOWN -> MONITOR loosening direction, which does go through
+// pending_client_mode_changes.
+export async function setDeviceClientMode(db: D1Database, machineId: string, mode: ClientMode): Promise<void> {
+  await db.prepare(`UPDATE devices SET client_mode = ?1 WHERE machine_id = ?2`).bind(mode, machineId).run();
+}
+
+// --- Ratchet: pending client_mode changes (LOCKDOWN -> MONITOR only -
+// see pending_client_mode_changes's own schema.sql comment) ---
+
+export interface PendingClientModeChange {
+  id: number;
+  machine_id: string;
+  requested_at: number;
+  applies_at: number;
+  applied_at: number | null;
+  cancelled_at: number | null;
+}
+
+const CLIENT_MODE_CHANGE_DELAY_MS = 24 * 60 * 60 * 1000; // Same 24h as every other ratchet delay in this file.
+
+export async function hasActivePendingClientModeChange(db: D1Database, machineId: string): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT id FROM pending_client_mode_changes WHERE machine_id = ?1 AND applied_at IS NULL AND cancelled_at IS NULL`)
+    .bind(machineId)
+    .first<{ id: number }>();
+  return row !== null;
+}
+
+export async function queueClientModeChange(db: D1Database, machineId: string): Promise<PendingClientModeChange> {
+  const now = Date.now();
+  const appliesAt = now + CLIENT_MODE_CHANGE_DELAY_MS;
+  const result = await db
+    .prepare(
+      `INSERT INTO pending_client_mode_changes (machine_id, requested_at, applies_at)
+       VALUES (?1, ?2, ?3)
+       RETURNING id, machine_id, requested_at, applies_at, applied_at, cancelled_at`
+    )
+    .bind(machineId, now, appliesAt)
+    .first<PendingClientModeChange>();
+  if (!result) throw new Error("queueClientModeChange: INSERT ... RETURNING returned no row");
+  return result;
+}
+
+export async function cancelClientModeChange(db: D1Database, requestId: number): Promise<void> {
+  await db
+    .prepare(`UPDATE pending_client_mode_changes SET cancelled_at = ?1 WHERE id = ?2 AND applied_at IS NULL AND cancelled_at IS NULL`)
+    .bind(Date.now(), requestId)
+    .run();
+}
+
+export async function listActiveClientModeChanges(db: D1Database): Promise<PendingClientModeChange[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, machine_id, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_client_mode_changes WHERE applied_at IS NULL AND cancelled_at IS NULL ORDER BY applies_at ASC`
+    )
+    .all<PendingClientModeChange>();
+  return result.results ?? [];
+}
+
+export async function getDueClientModeChanges(db: D1Database): Promise<PendingClientModeChange[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, machine_id, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_client_mode_changes WHERE applies_at <= ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now())
+    .all<PendingClientModeChange>();
+  return result.results ?? [];
+}
+
+export async function markClientModeChangeApplied(db: D1Database, requestId: number): Promise<void> {
+  await db.prepare(`UPDATE pending_client_mode_changes SET applied_at = ?1 WHERE id = ?2`).bind(Date.now(), requestId).run();
+}
+
 export async function markPostflight(db: D1Database, machineId: string): Promise<void> {
   await db
     .prepare(`UPDATE devices SET last_postflight_at = ?1 WHERE machine_id = ?2`)
@@ -204,6 +293,103 @@ export async function upsertRule(
     .first<{ id: number }>();
   if (!result) throw new Error("upsertRule: INSERT ... RETURNING id returned no row");
   return result.id;
+}
+
+// --- Ratchet: pending ALLOWLIST rule additions - see
+// pending_allowlist_rule_additions's own schema.sql comment for the real
+// gap this closes (index.ts's handleCreateRule rejects ALLOWLIST/
+// ALLOWLIST_COMPILER outright now; this is where they go instead) ---
+
+export interface PendingAllowlistRuleAddition {
+  id: number;
+  identifier: string;
+  rule_type: RuleType;
+  custom_msg: string | null;
+  custom_url: string | null;
+  notification_app_name: string | null;
+  requested_at: number;
+  applies_at: number;
+  applied_at: number | null;
+  cancelled_at: number | null;
+}
+
+const ALLOWLIST_ADDITION_DELAY_MS = 24 * 60 * 60 * 1000; // Same 24h as every other ratchet delay in this file.
+
+// Dedupe key is (identifier, rule_type) - same pair upsertRule itself
+// treats as identifying a rule, since rules has no unique constraint of
+// its own to check against directly.
+export async function hasActivePendingAllowlistRuleAddition(db: D1Database, identifier: string, ruleType: RuleType): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT id FROM pending_allowlist_rule_additions
+       WHERE identifier = ?1 AND rule_type = ?2 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(identifier, ruleType)
+    .first<{ id: number }>();
+  return row !== null;
+}
+
+// Whether an ALLOWLIST rule for this identifier already exists (any
+// device_id, including static profile rules aren't checked here - those
+// aren't in this table at all, see staticRules.ts) - same "already
+// approved" check shape as isSafeAppBundleIdApproved.
+export async function hasExistingAllowlistRule(db: D1Database, identifier: string, ruleType: RuleType): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT id FROM rules WHERE identifier = ?1 AND rule_type = ?2 AND policy IN ('ALLOWLIST', 'ALLOWLIST_COMPILER')`)
+    .bind(identifier, ruleType)
+    .first<{ id: number }>();
+  return row !== null;
+}
+
+export async function queueAllowlistRuleAddition(
+  db: D1Database,
+  fields: { identifier: string; ruleType: RuleType; customMsg: string | null; customUrl: string | null; notificationAppName: string | null }
+): Promise<PendingAllowlistRuleAddition> {
+  const now = Date.now();
+  const appliesAt = now + ALLOWLIST_ADDITION_DELAY_MS;
+  const result = await db
+    .prepare(
+      `INSERT INTO pending_allowlist_rule_additions
+         (identifier, rule_type, custom_msg, custom_url, notification_app_name, requested_at, applies_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+       RETURNING id, identifier, rule_type, custom_msg, custom_url, notification_app_name, requested_at, applies_at, applied_at, cancelled_at`
+    )
+    .bind(fields.identifier, fields.ruleType, fields.customMsg, fields.customUrl, fields.notificationAppName, now, appliesAt)
+    .first<PendingAllowlistRuleAddition>();
+  if (!result) throw new Error("queueAllowlistRuleAddition: INSERT ... RETURNING returned no row");
+  return result;
+}
+
+export async function cancelAllowlistRuleAddition(db: D1Database, requestId: number): Promise<void> {
+  await db
+    .prepare(`UPDATE pending_allowlist_rule_additions SET cancelled_at = ?1 WHERE id = ?2 AND applied_at IS NULL AND cancelled_at IS NULL`)
+    .bind(Date.now(), requestId)
+    .run();
+}
+
+export async function listActiveAllowlistRuleAdditions(db: D1Database): Promise<PendingAllowlistRuleAddition[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, identifier, rule_type, custom_msg, custom_url, notification_app_name, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_allowlist_rule_additions WHERE applied_at IS NULL AND cancelled_at IS NULL ORDER BY applies_at ASC`
+    )
+    .all<PendingAllowlistRuleAddition>();
+  return result.results ?? [];
+}
+
+export async function getDueAllowlistRuleAdditions(db: D1Database): Promise<PendingAllowlistRuleAddition[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, identifier, rule_type, custom_msg, custom_url, notification_app_name, requested_at, applies_at, applied_at, cancelled_at
+       FROM pending_allowlist_rule_additions WHERE applies_at <= ?1 AND applied_at IS NULL AND cancelled_at IS NULL`
+    )
+    .bind(Date.now())
+    .all<PendingAllowlistRuleAddition>();
+  return result.results ?? [];
+}
+
+export async function markAllowlistRuleAdditionApplied(db: D1Database, requestId: number): Promise<void> {
+  await db.prepare(`UPDATE pending_allowlist_rule_additions SET applied_at = ?1 WHERE id = ?2`).bind(Date.now(), requestId).run();
 }
 
 export async function getRuleById(db: D1Database, ruleId: number): Promise<RuleRecord | null> {

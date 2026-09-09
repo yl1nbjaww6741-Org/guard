@@ -11,31 +11,44 @@ import {
   applyLoosen,
   deleteBlockedKeywordRow,
   getBlockedKeywordById,
+  getDueAllowlistRuleAdditions,
+  getDueClientModeChanges,
   getDueKeywordRemovals,
   getDueLoosenRequests,
   getDuePasswordChanges,
   getDueProfileChanges,
   getDueSafeAppAdditions,
+  hasActivePendingAllowlistRuleAddition,
+  hasActivePendingClientModeChange,
   hasActivePendingKeywordRemoval,
   hasActivePendingLoosen,
   hasActivePendingPasswordChange,
   hasActivePendingProfileChange,
   hasActivePendingSafeAppAddition,
+  hasExistingAllowlistRule,
   isSafeAppBundleIdApproved,
+  markAllowlistRuleAdditionApplied,
+  markClientModeChangeApplied,
   markKeywordRemovalApplied,
   markLoosenRequestApplied,
   markPasswordChangeApplied,
   markProfileChangeApplied,
   markProfileChangeFailed,
   markSafeAppAdditionApplied,
+  queueAllowlistRuleAddition,
+  queueClientModeChange,
   queueKeywordRemoval,
   queueLoosenRequest,
   queuePasswordChange,
   queueProfileChange,
   queueSafeAppAddition,
   setDashboardPasswordHash,
+  setDeviceClientMode,
+  upsertRule,
 } from "./db";
 import type {
+  PendingAllowlistRuleAddition,
+  PendingClientModeChange,
   PendingKeywordRemoval,
   PendingLoosenRequest,
   PendingPasswordChange,
@@ -44,7 +57,7 @@ import type {
   ProfileChangeAction,
 } from "./db";
 import { createConfigurationProfile, updateConfigurationProfile } from "./simpleMdmClient";
-import type { Env } from "./types";
+import type { ClientMode, Env, RuleType } from "./types";
 
 export class LoosenAlreadyPendingError extends Error {
   constructor(ruleId: number) {
@@ -85,6 +98,30 @@ export class KeywordNotFoundError extends Error {
 export class KeywordRemovalAlreadyPendingError extends Error {
   constructor(keyword: string) {
     super(`"${keyword}" already has an active pending removal request`);
+  }
+}
+
+export class ClientModeAlreadyLooseError extends Error {
+  constructor(machineId: string) {
+    super(`device ${machineId} is not in LOCKDOWN - nothing to loosen`);
+  }
+}
+
+export class ClientModeChangeAlreadyPendingError extends Error {
+  constructor(machineId: string) {
+    super(`device ${machineId} already has an active pending client_mode change`);
+  }
+}
+
+export class AllowlistRuleAlreadyApprovedError extends Error {
+  constructor(identifier: string) {
+    super(`${identifier} already has an active ALLOWLIST rule`);
+  }
+}
+
+export class AllowlistAdditionAlreadyPendingError extends Error {
+  constructor(identifier: string) {
+    super(`${identifier} already has an active pending ALLOWLIST addition request`);
   }
 }
 
@@ -238,6 +275,72 @@ export async function applyDueKeywordRemovals(db: D1Database): Promise<number> {
   for (const request of due) {
     await deleteBlockedKeywordRow(db, request.keyword_id);
     await markKeywordRemovalApplied(db, request.id);
+  }
+  return due.length;
+}
+
+// LOCKDOWN -> MONITOR only - the loosening direction. The reverse
+// (MONITOR -> LOCKDOWN) is a tightening and index.ts calls
+// db.ts's setDeviceClientMode directly, never through here - see
+// pending_client_mode_changes's own schema.sql comment for the real gap
+// this closes. Rejects "already MONITOR" up front the same shape as
+// requestAddSafeApp's "already approved" check - mode is a two-value
+// enum here in practice (STANDALONE isn't used by this project), so
+// "not currently LOCKDOWN" and "already loose" are the same condition.
+export async function requestSetClientModeToMonitor(db: D1Database, machineId: string, currentMode: ClientMode): Promise<PendingClientModeChange> {
+  if (currentMode !== "LOCKDOWN") {
+    throw new ClientModeAlreadyLooseError(machineId);
+  }
+  if (await hasActivePendingClientModeChange(db, machineId)) {
+    throw new ClientModeChangeAlreadyPendingError(machineId);
+  }
+  return queueClientModeChange(db, machineId);
+}
+
+export async function applyDueClientModeChanges(db: D1Database): Promise<number> {
+  const due = await getDueClientModeChanges(db);
+  for (const request of due) {
+    await setDeviceClientMode(db, request.machine_id, "MONITOR");
+    await markClientModeChangeApplied(db, request.id);
+  }
+  return due.length;
+}
+
+// Creating a brand-new ALLOWLIST rule - see pending_allowlist_rule_additions's
+// own schema.sql comment for the real gap this closes (index.ts's
+// handleCreateRule now rejects ALLOWLIST/ALLOWLIST_COMPILER outright,
+// same shape as its existing REMOVE rejection, and routes here instead).
+// Deliberately unconditional on the device's current client_mode - see
+// that same comment for why trusting a live-read mode value to decide
+// "is this actually a loosening right now" is exactly the assumption
+// that broke once already. Rejects both "already has an ALLOWLIST rule"
+// and "already queued" up front, same shape as requestAddSafeApp.
+export async function requestCreateAllowlistRule(
+  db: D1Database,
+  fields: { identifier: string; ruleType: RuleType; customMsg: string | null; customUrl: string | null; notificationAppName: string | null }
+): Promise<PendingAllowlistRuleAddition> {
+  if (await hasExistingAllowlistRule(db, fields.identifier, fields.ruleType)) {
+    throw new AllowlistRuleAlreadyApprovedError(fields.identifier);
+  }
+  if (await hasActivePendingAllowlistRuleAddition(db, fields.identifier, fields.ruleType)) {
+    throw new AllowlistAdditionAlreadyPendingError(fields.identifier);
+  }
+  return queueAllowlistRuleAddition(db, fields);
+}
+
+export async function applyDueAllowlistRuleCreations(db: D1Database): Promise<number> {
+  const due = await getDueAllowlistRuleAdditions(db);
+  for (const request of due) {
+    await upsertRule(db, {
+      deviceId: null,
+      identifier: request.identifier,
+      policy: "ALLOWLIST",
+      ruleType: request.rule_type,
+      customMsg: request.custom_msg ?? undefined,
+      customUrl: request.custom_url ?? undefined,
+      notificationAppName: request.notification_app_name ?? undefined,
+    });
+    await markAllowlistRuleAdditionApplied(db, request.id);
   }
   return due.length;
 }

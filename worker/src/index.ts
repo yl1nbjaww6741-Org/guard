@@ -20,30 +20,44 @@
 import { hashPassword, requireDaemonSyncToken, requireSession, requireSyncToken, verifyPasswordHash } from "./auth";
 import { renderDashboard, renderLoginPage } from "./dashboard";
 import {
+  cancelAllowlistRuleAddition,
+  cancelClientModeChange,
   cancelLoosenRequest,
   cancelPasswordChange,
   clearFailedLoginAttempts,
   getActivePendingPasswordChange,
   getDashboardPasswordHash,
+  getDeviceClientMode,
   getLoginPasswordHash,
   getRuleById,
   isLoginLockedOut,
+  listActiveAllowlistRuleAdditions,
+  listActiveClientModeChanges,
   listActiveLoosenRequests,
   listRules,
   recordFailedLoginAttempt,
+  setDeviceClientMode,
   setLoginPasswordHash,
   upsertRule,
 } from "./db";
 import {
+  AllowlistAdditionAlreadyPendingError,
+  AllowlistRuleAlreadyApprovedError,
+  ClientModeAlreadyLooseError,
+  ClientModeChangeAlreadyPendingError,
   LoosenAlreadyPendingError,
   PasswordChangeAlreadyPendingError,
+  applyDueAllowlistRuleCreations,
+  applyDueClientModeChanges,
   applyDueKeywordRemovals,
   applyDueLoosenRequests,
   applyDuePasswordChanges,
   applyDueProfileChanges,
   applyDueSafeAppAdditions,
+  requestCreateAllowlistRule,
   requestLoosen,
   requestPasswordChange,
+  requestSetClientModeToMonitor,
 } from "./ratchet";
 import { clearSessionCookie, createSessionCookie, hasValidSession } from "./session";
 import { KNOWN_APPLE_APPS } from "./knownApps";
@@ -85,7 +99,7 @@ import {
   handleUploadInit,
   handleUploadPart,
 } from "./softwareApi";
-import type { Env, Policy, RuleType } from "./types";
+import type { ClientMode, Env, Policy, RuleType } from "./types";
 
 const SYNC_ROUTES: Record<
   string,
@@ -108,6 +122,23 @@ function jsonResponse(body: unknown, status = 200, headers?: Record<string, stri
 // doesn't try to detect whether an edit counts as "more restrictive".
 // The caller (a human via the dashboard) is asserting that by using this
 // endpoint at all rather than the loosen-request one.
+//
+// ALLOWLIST/ALLOWLIST_COMPILER rejected here too, as of 2026-09-09 - a
+// real gap found live, not a hypothetical: this endpoint (and the
+// reasoning above) was written back when this project ran Santa in
+// MONITOR mode, where creating an ALLOWLIST rule is a redundant no-op
+// (MONITOR already default-allows everything), never a loosening. That
+// stopped being true the moment Santa switched to LOCKDOWN
+// (default-deny, d144e99) - under LOCKDOWN a new ALLOWLIST rule
+// genuinely allows something that couldn't run before, which is exactly
+// a loosening, but this endpoint was never revisited and kept applying
+// it immediately, no password, no delay. The user hit this directly via
+// the dashboard's "Allow all" bulk action. Same shape as the REMOVE
+// rejection just below: ALLOWLIST/ALLOWLIST_COMPILER must go through
+// requestCreateAllowlistRule (POST /api/rules/allowlist-request)
+// instead - see pending_allowlist_rule_additions's own schema.sql
+// comment for why this is unconditional, not gated on the device's
+// current client_mode.
 async function handleCreateRule(request: Request, env: Env): Promise<Response> {
   const body = await request.json<{
     device_id?: string | null;
@@ -125,6 +156,12 @@ async function handleCreateRule(request: Request, env: Env): Promise<Response> {
     // this explicitly rather than silently allowing it closes the
     // obvious way someone could bypass the ratchet entirely.
     return jsonResponse({ error: "REMOVE rules can only be created via the loosen-request endpoint" }, 400);
+  }
+  if (body.policy === "ALLOWLIST" || body.policy === "ALLOWLIST_COMPILER") {
+    return jsonResponse(
+      { error: "ALLOWLIST rules can only be created via the allowlist-request endpoint (POST /api/rules/allowlist-request)" },
+      400
+    );
   }
 
   const id = await upsertRule(env.DB, {
@@ -187,6 +224,105 @@ async function handleLoosenRequest(ruleId: number, request: Request, env: Env): 
     }
     throw error;
   }
+}
+
+// Same password-re-check shape as handleLoosenRequest - see
+// pending_allowlist_rule_additions's own schema.sql comment for why this
+// endpoint exists at all (the real gap handleCreateRule's own comment
+// now documents).
+async function handleRequestCreateAllowlistRule(request: Request, env: Env): Promise<Response> {
+  const body = await request.json<{
+    identifier?: string;
+    rule_type?: RuleType;
+    custom_msg?: string;
+    custom_url?: string;
+    notification_app_name?: string;
+    password?: string;
+  }>();
+  const identifier = body.identifier?.trim();
+  if (!identifier || !body.rule_type) {
+    return jsonResponse({ error: "missing identifier or rule_type" }, 400);
+  }
+
+  const storedHash = await getDashboardPasswordHash(env.DB);
+  if (!body.password || !storedHash || !(await verifyPasswordHash(body.password, storedHash))) {
+    return jsonResponse({ error: "incorrect or missing password" }, 403);
+  }
+
+  try {
+    const pending = await requestCreateAllowlistRule(env.DB, {
+      identifier,
+      ruleType: body.rule_type,
+      customMsg: body.custom_msg?.trim() || null,
+      customUrl: body.custom_url?.trim() || null,
+      notificationAppName: body.notification_app_name?.trim() || null,
+    });
+    return jsonResponse(pending, 202);
+  } catch (error) {
+    if (error instanceof AllowlistRuleAlreadyApprovedError || error instanceof AllowlistAdditionAlreadyPendingError) {
+      return jsonResponse({ error: error.message }, 409);
+    }
+    throw error;
+  }
+}
+
+async function handleListPendingAllowlistRuleAdditions(env: Env): Promise<Response> {
+  return jsonResponse(await listActiveAllowlistRuleAdditions(env.DB));
+}
+
+// No password required to cancel - same reasoning as every other
+// cancel-a-loosen endpoint in this project.
+async function handleCancelAllowlistRuleAddition(requestId: number, env: Env): Promise<Response> {
+  await cancelAllowlistRuleAddition(env.DB, requestId);
+  return jsonResponse({ cancelled: true });
+}
+
+// MONITOR -> LOCKDOWN is a tightening (stricter, default-deny) and
+// applies immediately, session only, same asymmetry as every other
+// tightening in this project - no password body needed for that
+// direction. LOCKDOWN -> MONITOR is the loosening direction and
+// requires the password re-check, same shape as handleLoosenRequest,
+// then queues through the ratchet instead of applying directly - see
+// pending_client_mode_changes's own schema.sql comment for the real gap
+// this whole endpoint exists to close (there was previously no code
+// path that could ever change an existing device's client_mode at all).
+async function handleSetClientMode(machineId: string, request: Request, env: Env): Promise<Response> {
+  const body = await request.json<{ mode?: ClientMode; password?: string }>();
+  if (body.mode !== "MONITOR" && body.mode !== "LOCKDOWN") {
+    return jsonResponse({ error: "mode must be MONITOR or LOCKDOWN" }, 400);
+  }
+
+  if (body.mode === "LOCKDOWN") {
+    await setDeviceClientMode(env.DB, machineId, "LOCKDOWN");
+    return jsonResponse({ mode: "LOCKDOWN" }, 200);
+  }
+
+  const storedHash = await getDashboardPasswordHash(env.DB);
+  if (!body.password || !storedHash || !(await verifyPasswordHash(body.password, storedHash))) {
+    return jsonResponse({ error: "incorrect or missing password" }, 403);
+  }
+
+  const currentMode = await getDeviceClientMode(env.DB, machineId);
+  try {
+    const pending = await requestSetClientModeToMonitor(env.DB, machineId, currentMode);
+    return jsonResponse(pending, 202);
+  } catch (error) {
+    if (error instanceof ClientModeAlreadyLooseError || error instanceof ClientModeChangeAlreadyPendingError) {
+      return jsonResponse({ error: error.message }, 409);
+    }
+    throw error;
+  }
+}
+
+async function handleListPendingClientModeChanges(env: Env): Promise<Response> {
+  return jsonResponse(await listActiveClientModeChanges(env.DB));
+}
+
+// No password required to cancel - same reasoning as every other
+// cancel-a-loosen endpoint in this project.
+async function handleCancelClientModeChange(requestId: number, env: Env): Promise<Response> {
+  await cancelClientModeChange(env.DB, requestId);
+  return jsonResponse({ cancelled: true });
 }
 
 // Checks the lockout window first (db.ts's isLoginLockedOut) - a locked-
@@ -361,12 +497,17 @@ export default {
     }
 
     // --- Rule-management API (session-gated, see auth.ts's requireSession) ---
+    // allowlist-request/allowlist-rule-additions routes added 2026-09-09 -
+    // see handleCreateRule's own comment for the real gap they close.
     const isRulesApiRoute =
       url.pathname === "/api/rules" ||
       url.pathname === "/api/static-rules" ||
       url.pathname === "/api/loosen-requests" ||
+      url.pathname === "/api/rules/allowlist-request" ||
+      url.pathname === "/api/allowlist-rule-additions" ||
       url.pathname.match(/^\/api\/rules\/\d+\/loosen-request$/) ||
-      url.pathname.match(/^\/api\/loosen-requests\/\d+\/cancel$/);
+      url.pathname.match(/^\/api\/loosen-requests\/\d+\/cancel$/) ||
+      url.pathname.match(/^\/api\/allowlist-rule-additions\/\d+\/cancel$/);
     if (isRulesApiRoute) {
       const authError = await requireSession(request, env);
       if (authError) return authError;
@@ -394,6 +535,48 @@ export default {
         // needs no extra friction; only reducing a restriction does.
         await cancelLoosenRequest(env.DB, Number(cancelMatch[1]));
         return jsonResponse({ cancelled: true });
+      }
+      if (url.pathname === "/api/rules/allowlist-request" && request.method === "POST") {
+        return handleRequestCreateAllowlistRule(request, env);
+      }
+      if (url.pathname === "/api/allowlist-rule-additions" && request.method === "GET") {
+        return handleListPendingAllowlistRuleAdditions(env);
+      }
+      const cancelAllowlistMatch = url.pathname.match(/^\/api\/allowlist-rule-additions\/(\d+)\/cancel$/);
+      if (cancelAllowlistMatch && request.method === "POST") {
+        return handleCancelAllowlistRuleAddition(Number(cancelAllowlistMatch[1]), env);
+      }
+      return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    // --- Santa client_mode API (session-gated) - see
+    // pending_client_mode_changes's own schema.sql comment for the real
+    // gap this closes (there was previously no way to ever change an
+    // existing device's client_mode at all, so the profile's ClientMode
+    // key and what Santa's sync server actually reported could - and
+    // did - permanently drift apart). machineId comes from devices'
+    // own machine_id (Santa's own identifier, distinct from SimpleMDM's
+    // device id - see hostStatus.ts's own comment on why these are two
+    // separate signals), not the SimpleMDM `host` param the rest of
+    // this file uses. ---
+    const isClientModeApiRoute =
+      url.pathname.match(/^\/api\/devices\/[^/]+\/client-mode$/) ||
+      url.pathname === "/api/client-mode-changes" ||
+      url.pathname.match(/^\/api\/client-mode-changes\/\d+\/cancel$/);
+    if (isClientModeApiRoute) {
+      const authError = await requireSession(request, env);
+      if (authError) return authError;
+
+      const setModeMatch = url.pathname.match(/^\/api\/devices\/([^/]+)\/client-mode$/);
+      if (setModeMatch && request.method === "POST") {
+        return handleSetClientMode(decodeURIComponent(setModeMatch[1]!), request, env);
+      }
+      if (url.pathname === "/api/client-mode-changes" && request.method === "GET") {
+        return handleListPendingClientModeChanges(env);
+      }
+      const cancelModeMatch = url.pathname.match(/^\/api\/client-mode-changes\/(\d+)\/cancel$/);
+      if (cancelModeMatch && request.method === "POST") {
+        return handleCancelClientModeChange(Number(cancelModeMatch[1]), env);
       }
       return new Response("Method Not Allowed", { status: 405 });
     }
@@ -666,6 +849,14 @@ export default {
     const appliedKeywordRemovals = await applyDueKeywordRemovals(env.DB);
     if (appliedKeywordRemovals > 0) {
       console.log(`applied ${appliedKeywordRemovals} due keyword removal(s)`);
+    }
+    const appliedAllowlistAdditions = await applyDueAllowlistRuleCreations(env.DB);
+    if (appliedAllowlistAdditions > 0) {
+      console.log(`applied ${appliedAllowlistAdditions} due ALLOWLIST rule addition(s)`);
+    }
+    const appliedClientModeChanges = await applyDueClientModeChanges(env.DB);
+    if (appliedClientModeChanges > 0) {
+      console.log(`applied ${appliedClientModeChanges} due client_mode change(s)`);
     }
   },
 };

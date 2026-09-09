@@ -477,12 +477,13 @@ async function loadConfigProfileDetails() {
 }
 
 async function loadHostStatus() {
-  const [data, profileDetails, pendingProfileChanges] = await Promise.all([
+  const [data, profileDetails, pendingProfileChanges, pendingModeChanges] = await Promise.all([
     api("/api/host-status"),
     loadConfigProfileDetails().catch(() => []),
     api("/api/pending-profile-changes").catch(() => []),
+    api("/api/client-mode-changes").catch(() => []),
   ]);
-  renderSyncHealth(data);
+  renderSyncHealth(data, pendingModeChanges);
   renderMdmLockdown(data, profileDetails, pendingProfileChanges);
   renderPendingProfileChanges(pendingProfileChanges);
 }
@@ -529,9 +530,19 @@ const SANTA_STALE_MS = 30 * 60 * 1000;
 // while" threshold for MDM check-ins specifically.
 const MDM_STALE_MS = 6 * 60 * 60 * 1000;
 
-function renderSyncHealth(data) {
+// client_mode switch controls, added 2026-09-09 alongside
+// db.ts's setDeviceClientMode - see pending_client_mode_changes's own
+// schema.sql comment for the real gap this closes (this is the first
+// UI that can ever change an existing device's client_mode at all).
+// MONITOR -> LOCKDOWN is a tightening, one click, no password.
+// LOCKDOWN -> MONITOR is a loosening: password-prompted, then queued -
+// a pending change shows a "queued, applies in ~Xh" note instead of the
+// switch button, same shape as every other pending-ratchet row on this
+// dashboard.
+function renderSyncHealth(data, pendingModeChanges) {
   const el = document.getElementById("sync-health-body");
   const rows = [];
+  const pendingByMachineId = Object.fromEntries((pendingModeChanges || []).map((p) => [p.machine_id, p]));
 
   if (data.fleet) {
     const seenAt = data.fleet.seen_time ? new Date(data.fleet.seen_time).getTime() : NaN;
@@ -547,7 +558,16 @@ function renderSyncHealth(data) {
     data.devices.forEach((d) => {
       const stale = !d.last_preflight_at || (Date.now() - d.last_preflight_at) > SANTA_STALE_MS;
       const lastSync = d.last_preflight_at ? timeAgo(d.last_preflight_at) : "never";
-      rows.push(\`<div class="status-row\${stale ? " error" : ""}"><span class="status-dot" style="background:\${stale ? "#ff6b6b" : "#51cf66"}"></span><strong>Santa</strong>&nbsp;(\${escapeHtml(d.hostname ?? d.machine_id)}) - \${d.client_mode}, last synced \${lastSync}</div>\`);
+      const p = pendingByMachineId[d.machine_id];
+      let modeControl;
+      if (p) {
+        modeControl = \` <span class="pending-note">MONITOR queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel-mode-change="\${p.id}">Cancel</button>\`;
+      } else if (d.client_mode === "LOCKDOWN") {
+        modeControl = \` <button data-request-monitor="\${escapeHtml(d.machine_id)}">Request MONITOR (24h)</button>\`;
+      } else {
+        modeControl = \` <button data-set-lockdown="\${escapeHtml(d.machine_id)}">Switch to LOCKDOWN</button>\`;
+      }
+      rows.push(\`<div class="status-row\${stale ? " error" : ""}"><span class="status-dot" style="background:\${stale ? "#ff6b6b" : "#51cf66"}"></span><strong>Santa</strong>&nbsp;(\${escapeHtml(d.hostname ?? d.machine_id)}) - \${d.client_mode}, last synced \${lastSync}\${modeControl}</div>\`);
     });
   }
 
@@ -662,13 +682,20 @@ function renderMdmLockdown(data, profileDetails, pendingProfileChanges) {
 // before (see handleRulesTableClick below, now attached to all three
 // tbodies).
 async function loadRules() {
-  const [staticRules, rules, pending, appInventory] = await Promise.all([
+  const [staticRules, rules, pending, appInventory, pendingAllowlistAdditions] = await Promise.all([
     api("/api/static-rules"),
     api("/api/rules"),
     api("/api/loosen-requests"),
     api("/api/app-inventory"),
+    api("/api/allowlist-rule-additions"),
   ]);
   const pendingByRuleId = Object.fromEntries(pending.map((p) => [p.rule_id, p]));
+  // Keyed by "identifier|rule_type" - same dedupe key
+  // hasActivePendingAllowlistRuleAddition uses server-side, since
+  // identifier alone isn't unique across rule types.
+  const pendingAllowlistByKey = Object.fromEntries(
+    (pendingAllowlistAdditions || []).map((p) => [\`\${p.identifier}|\${p.rule_type}\`, p])
+  );
   const isAllowlistPolicy = (policy) => policy === "ALLOWLIST" || policy === "ALLOWLIST_COMPILER";
 
   // StaticRules from santa-config.mobileconfig - permanent, tamper-
@@ -740,14 +767,27 @@ async function loadRules() {
       seenSuggested.add(a.team_id);
       return true;
     })
-    .map((a) => \`<tr>
+    .map((a) => {
+      // ALLOWLIST creation is a real loosening under LOCKDOWN, queued
+      // through the ratchet (POST /api/rules/allowlist-request) - see
+      // handleCreateRule's own comment for the gap this closes. A
+      // pending addition shows the same "queued, applies in ~Xh /
+      // Cancel" shape as every other pending-ratchet row instead of the
+      // Allow button. Block stays immediate (BLOCKLIST is a tightening
+      // either way) - only Allow changed.
+      const p = pendingAllowlistByKey[\`\${a.team_id}|TEAMID\`];
+      const actionCell = p
+        ? \`<span class="pending-note">ALLOWLIST queued, applies in \${timeUntil(p.applies_at)}</span> <button data-cancel-allowlist-addition="\${p.id}">Cancel</button>\`
+        : \`<button data-block-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Block</button> <button data-allow-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Allow</button>\`;
+      return \`<tr>
       <td>\${escapeHtml(a.name || a.bundle_id)}</td>
       <td>\${escapeHtml(a.team_id)}</td>
       <td>TEAMID</td>
       <td><span class="pending-note" style="color:#6b6f78;">not ruled</span></td>
       <td>scanned app</td>
-      <td><button data-block-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Block</button> <button data-allow-team-id="\${escapeHtml(a.team_id)}" data-app-name="\${escapeHtml(a.name || a.bundle_id)}">Allow</button></td>
-    </tr>\`).join("");
+      <td>\${actionCell}</td>
+    </tr>\`;
+    }).join("");
 
   document.getElementById("rules-body").innerHTML =
     suggestedRowsHtml || '<tr><td colspan="6" class="empty">Nothing scanned yet, or every scanned Team ID already has a rule.</td></tr>';
@@ -909,6 +949,52 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
   location.reload();
 });
 
+// Static, attached once here - #sync-health-body's own innerHTML is
+// fully replaced by every renderSyncHealth() call (including the one
+// this handler itself triggers via loadHostStatus() on success), same
+// "listener would vanish/double up" reasoning as add-rule-form/
+// upload-profile-form below, so this is delegated at the container
+// level rather than attached per-button inside renderSyncHealth.
+document.getElementById("sync-health-body").addEventListener("click", async (e) => {
+  const lockdownMachineId = e.target.getAttribute("data-set-lockdown");
+  const monitorMachineId = e.target.getAttribute("data-request-monitor");
+  const cancelId = e.target.getAttribute("data-cancel-mode-change");
+  if (lockdownMachineId) {
+    // Tightening - no password needed, same asymmetry as every other
+    // tightening on this dashboard.
+    try {
+      await api(\`/api/devices/\${encodeURIComponent(lockdownMachineId)}/client-mode\`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "LOCKDOWN" }),
+      });
+      await loadHostStatus();
+    } catch (err) {
+      alert("Failed to switch to LOCKDOWN: " + err.message);
+    }
+  } else if (monitorMachineId) {
+    const password = prompt("Password to request switching this device back to MONITOR (applies in 24h):");
+    if (!password) return;
+    try {
+      await api(\`/api/devices/\${encodeURIComponent(monitorMachineId)}/client-mode\`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "MONITOR", password }),
+      });
+      await loadHostStatus();
+    } catch (err) {
+      alert("Failed to request MONITOR: " + err.message);
+    }
+  } else if (cancelId) {
+    try {
+      await api(\`/api/client-mode-changes/\${cancelId}/cancel\`, { method: "POST" });
+      await loadHostStatus();
+    } catch (err) {
+      alert("Failed to cancel: " + err.message);
+    }
+  }
+});
+
 // Static, lives outside #mdm-lockdown-body on purpose (see the section's
 // markup) - that container gets fully rebuilt by every loadHostStatus()
 // call, including the one this handler itself triggers on success, so a
@@ -942,22 +1028,45 @@ document.getElementById("profile-changes-pending").addEventListener("click", asy
   }
 });
 
+// ALLOWLIST/ALLOWLIST_COMPILER branch to /api/rules/allowlist-request
+// (password-prompted, 24h ratchet) since 2026-09-09 - see
+// handleCreateRule's own comment for the real gap this closes. BLOCKLIST
+// (and any other non-allowlist policy) stays on the original immediate
+// /api/rules POST - creating one is a tightening either way.
 document.getElementById("add-rule-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = new FormData(e.target);
+  const policy = form.get("policy");
+  const isAllowlist = policy === "ALLOWLIST" || policy === "ALLOWLIST_COMPILER";
   try {
-    await api("/api/rules", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        identifier: form.get("identifier"),
-        rule_type: form.get("rule_type"),
-        policy: form.get("policy"),
-        notification_app_name: form.get("app_name") || undefined,
-      }),
-    });
+    if (isAllowlist) {
+      const password = prompt("Password to queue this ALLOWLIST rule (applies in 24h):");
+      if (!password) return;
+      await api("/api/rules/allowlist-request", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          identifier: form.get("identifier"),
+          rule_type: form.get("rule_type"),
+          notification_app_name: form.get("app_name") || undefined,
+          password,
+        }),
+      });
+      setStatus("rules-status", "ALLOWLIST rule queued - takes effect after the 24h delay.", false);
+    } else {
+      await api("/api/rules", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          identifier: form.get("identifier"),
+          rule_type: form.get("rule_type"),
+          policy,
+          notification_app_name: form.get("app_name") || undefined,
+        }),
+      });
+      setStatus("rules-status", "Rule added.", false);
+    }
     e.target.reset();
-    setStatus("rules-status", "Rule added.", false);
     await loadRules();
   } catch (err) {
     setStatus("rules-status", "Failed to add rule: " + err.message, true);
@@ -978,7 +1087,16 @@ async function handleRulesTableClick(e) {
   const cancelId = e.target.getAttribute("data-cancel");
   const blockTeamId = e.target.getAttribute("data-block-team-id");
   const allowTeamId = e.target.getAttribute("data-allow-team-id");
-  if (loosenId) {
+  const cancelAllowlistId = e.target.getAttribute("data-cancel-allowlist-addition");
+  if (cancelAllowlistId) {
+    try {
+      await api(\`/api/allowlist-rule-additions/\${cancelAllowlistId}/cancel\`, { method: "POST" });
+      setStatus("rules-status", "ALLOWLIST request cancelled.", false);
+      await loadRules();
+    } catch (err) {
+      setStatus("rules-status", "Failed to cancel: " + err.message, true);
+    }
+  } else if (loosenId) {
     const password = prompt("Password to request loosening this rule:");
     if (!password) return;
     try {
@@ -1000,20 +1118,38 @@ async function handleRulesTableClick(e) {
     } catch (err) {
       setStatus("rules-status", "Failed to cancel: " + err.message, true);
     }
-  } else if (blockTeamId || allowTeamId) {
-    const teamId = blockTeamId || allowTeamId;
+  } else if (blockTeamId) {
     const appName = e.target.getAttribute("data-app-name");
-    const policy = blockTeamId ? "BLOCKLIST" : "ALLOWLIST";
     try {
       await api("/api/rules", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ identifier: teamId, rule_type: "TEAMID", policy, notification_app_name: appName || undefined }),
+        body: JSON.stringify({ identifier: blockTeamId, rule_type: "TEAMID", policy: "BLOCKLIST", notification_app_name: appName || undefined }),
       });
-      setStatus("rules-status", (blockTeamId ? "Blocked " : "Allowed ") + appName + ".", false);
+      setStatus("rules-status", "Blocked " + appName + ".", false);
       await loadRules();
     } catch (err) {
       setStatus("rules-status", "Failed to add rule: " + err.message, true);
+    }
+  } else if (allowTeamId) {
+    // A real loosening under LOCKDOWN - password-prompted, queued
+    // through the ratchet (POST /api/rules/allowlist-request), same as
+    // the manual Add rule form's ALLOWLIST branch - see
+    // handleCreateRule's own comment for why. Block above is unchanged:
+    // BLOCKLIST stays an immediate tightening either way.
+    const appName = e.target.getAttribute("data-app-name");
+    const password = prompt(\`Password to queue an ALLOWLIST rule for \${appName} (applies in 24h):\`);
+    if (!password) return;
+    try {
+      await api("/api/rules/allowlist-request", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ identifier: allowTeamId, rule_type: "TEAMID", notification_app_name: appName || undefined, password }),
+      });
+      setStatus("rules-status", "Queued ALLOWLIST for " + appName + " - applies in 24h.", false);
+      await loadRules();
+    } catch (err) {
+      setStatus("rules-status", "Failed to queue ALLOWLIST: " + err.message, true);
     }
   }
 }
@@ -1024,46 +1160,59 @@ async function handleRulesTableClick(e) {
 // Bulk allowlisting - the actual point of the suggested rows (see
 // loadRules()'s own comment): getting from "no allowlist at all" to
 // "every app already on this Mac has a real ALLOWLIST Team ID rule" one
-// click at a time would be tedious enough to defeat the purpose. Plain
-// sequential client-side loop over /api/rules, same endpoint the
-// single-row buttons above already use - no new bulk endpoint on the
-// Worker side, same "minimal moving parts" reasoning as everywhere else
-// in this project. Skips anything with no Team ID or already ruled
-// (either policy) - this button only ever adds, never overrides an
-// existing BLOCKLIST someone deliberately set.
+// click at a time would be tedious enough to defeat the purpose.
+//
+// Real gap found live (2026-09-09), fixed here: this used to loop over
+// the plain immediate /api/rules POST, same as the single-row Allow
+// button did before its own fix - meaning this one button could queue
+// an unbounded number of real LOCKDOWN loosenings with zero password
+// and zero delay in one click. Now takes ONE password up front (not
+// once per app - that would defeat the point of a bulk action) and
+// loops over /api/rules/allowlist-request instead, so every app it
+// queues goes through the same 24h ratchet the single-row button uses.
+// Still skips anything with no Team ID, already ruled (either policy),
+// or already has a pending ALLOWLIST request - this button only ever
+// adds, never overrides an existing BLOCKLIST someone deliberately set
+// or double-queues a request already in flight.
 document.getElementById("allow-all-app-inventory").addEventListener("click", async () => {
-  if (!confirm("Queue an ALLOWLIST Team ID rule for every app below that doesn't have one yet?")) return;
+  if (!confirm("Queue an ALLOWLIST Team ID rule (24h delay each) for every app below that doesn't have one yet?")) return;
+  const password = prompt("Password to queue these ALLOWLIST rules:");
+  if (!password) return;
   setStatus("rules-status", "Loading current state...", false);
   try {
-    const [apps, staticRules, rules] = await Promise.all([
+    const [apps, staticRules, rules, pendingAllowlistAdditions] = await Promise.all([
       api("/api/app-inventory"),
       api("/api/static-rules"),
       api("/api/rules"),
+      api("/api/allowlist-rule-additions"),
     ]);
     const ruledTeamIds = new Set(
       [...(staticRules || []), ...(rules || [])].filter((r) => r.rule_type === "TEAMID").map((r) => r.identifier)
     );
+    const pendingTeamIds = new Set(
+      (pendingAllowlistAdditions || []).filter((p) => p.rule_type === "TEAMID").map((p) => p.identifier)
+    );
     const seen = new Set();
     const targets = (apps || []).filter((a) => {
-      if (!a.team_id || ruledTeamIds.has(a.team_id) || seen.has(a.team_id)) return false;
+      if (!a.team_id || ruledTeamIds.has(a.team_id) || pendingTeamIds.has(a.team_id) || seen.has(a.team_id)) return false;
       seen.add(a.team_id);
       return true;
     });
     if (targets.length === 0) {
-      setStatus("rules-status", "Nothing to do - every scanned Team ID already has a rule.", false);
+      setStatus("rules-status", "Nothing to do - every scanned Team ID already has a rule or a pending request.", false);
       return;
     }
     let done = 0;
     for (const a of targets) {
-      setStatus("rules-status", \`Allowing \${a.name || a.bundle_id} (\${done + 1}/\${targets.length})...\`, false);
-      await api("/api/rules", {
+      setStatus("rules-status", \`Queuing \${a.name || a.bundle_id} (\${done + 1}/\${targets.length})...\`, false);
+      await api("/api/rules/allowlist-request", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ identifier: a.team_id, rule_type: "TEAMID", policy: "ALLOWLIST", notification_app_name: a.name || undefined }),
+        body: JSON.stringify({ identifier: a.team_id, rule_type: "TEAMID", notification_app_name: a.name || undefined, password }),
       });
       done++;
     }
-    setStatus("rules-status", \`Allowed \${done} app(s).\`, false);
+    setStatus("rules-status", \`Queued \${done} app(s) - each applies after its own 24h delay.\`, false);
     await loadRules();
   } catch (err) {
     setStatus("rules-status", "Failed partway through: " + err.message, true);
