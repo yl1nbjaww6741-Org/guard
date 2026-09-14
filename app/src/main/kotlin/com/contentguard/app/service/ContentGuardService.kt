@@ -1074,13 +1074,26 @@ class ContentGuardService : AccessibilityService() {
             if (secureCheck.looksSecureBlocked) {
                 val pixels = "avgLuma=${"%.1f".format(secureCheck.avgLuma)} stdDev=${"%.1f".format(secureCheck.stdDev)}"
                 val suspiciousFrames = secureWindows.markSuspiciousFrame(pkg)
-                // UNKNOWN means the platform declined to answer for this window
-                // (rate limit, stale window id, the app's own UI thread not
-                // responding) - not "not secure," so it must not be read as a
-                // clear. It's the one case where a probe-capable device still
-                // has to fall back to pixels.
-                val platformCanConfirm = ScreenCapturer.canProbeWindowSecurity() &&
-                    windowVerdict != SecureWindowTracker.Verdict.UNKNOWN
+                // A fresh NOT_SECURE is the *only* answer that justifies
+                // waiting for the next probe instead of judging by pixels now.
+                // Everything else means no usable answer exists for this frame
+                // and pixels are all there is:
+                //
+                // - UNKNOWN: the platform declined (rate limit, stale window
+                //   id, the app's UI thread not responding). Not a clear.
+                // - null: the window couldn't be judged at all - API < 34, or
+                //   secureWindowVerdict() skipped a non-application window.
+                //
+                // That null case was a real hole, found in a real-device log:
+                // whenever something other than the app's own window held
+                // "active window" (rootInActiveWindow reported windowId=0
+                // between blocks; an open IME does the same), the probe
+                // correctly declined to judge it - and the old condition here
+                // then read that silence as "the platform has this covered,"
+                // so nothing blocked. A secure app with the keyboard up would
+                // have sat there unblocked indefinitely, which is precisely
+                // the bypass this gate exists to close.
+                val platformCanConfirm = windowVerdict == SecureWindowTracker.Verdict.NOT_SECURE
                 if (platformCanConfirm) {
                     if (prefs.verboseLogging) {
                         val line = "[$pkg] SECURE_CONTENT_SUSPECTED $pixels awaitingProbe=true windowId=$windowId"

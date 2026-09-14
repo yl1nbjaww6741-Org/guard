@@ -137,6 +137,15 @@ object IncognitoDetector {
         // checks may have little or nothing to match; gate 5b's structural
         // FLAG_SECURE detection is what actually protects this one.
         "com.androidbull.incognito.browser", // Incognito Browser (AndroidBull)
+
+        // Confirmed missing from the dynamic registry on a real device (a
+        // GATE5B_SECURE_WINDOW_CONFIRMED line named it `browser=false` while
+        // it was the foreground app), which is what prompted the broader
+        // [refreshInstalledBrowsers] queries above. Listed here as well as
+        // fixing that query, for the same reason this floor exists at all:
+        // whatever the discovery query does or doesn't match on a given OEM
+        // build, this one is known to be a browser.
+        "eu.weblibre.gecko", // WebLibre - Gecko/Fenix-derived
     )
 
     // Dynamically-discovered browsers, on top of the hand-maintained list
@@ -167,17 +176,57 @@ object IncognitoDetector {
      * per new app install via a registered ACTION_PACKAGE_ADDED receiver
      * (updates of already-installed apps are ignored - see that receiver) -
      * not on a periodic timer, since a browser can only enter the set when
-     * an app is installed for the first time. Queries both http and https,
-     * since a browser only strictly needs to declare one of the two.
+     * an app is installed for the first time.
+     *
+     * Asks four ways and unions the answers, because one way demonstrably
+     * wasn't enough. Real-device evidence: WebLibre (`eu.weblibre.gecko`, a
+     * Gecko/Fenix-derived browser) was missing from this set entirely - a
+     * GATE5B_SECURE_WINDOW_CONFIRMED line in the Debug log named it
+     * `browser=false` while the user was sitting in it - so gate 4's
+     * incognito title/content checks never applied to it at all, which is
+     * exactly the "private browsing isn't blocked in this browser" report
+     * that led here.
+     *
+     * The original probe was a bare `$scheme://` URI with MATCH_DEFAULT_ONLY.
+     * That carries no host and no category, so it only matches an activity
+     * whose data spec is scheme-only and which declares CATEGORY_DEFAULT - a
+     * browser whose filter also pins a host (`android:host="*"` is common) or
+     * that only declares CATEGORY_BROWSABLE falls straight through it. The
+     * three added probes are the ones Android's own link handling uses:
+     * a real hostname plus CATEGORY_BROWSABLE (the canonical "who can open a
+     * web link" question), the same without MATCH_DEFAULT_ONLY for a filter
+     * that omits CATEGORY_DEFAULT, and CATEGORY_APP_BROWSER, which is how an
+     * app declares "I am a browser" to the launcher.
+     *
+     * Breadth is the right trade here, and it's the trade this set was
+     * already built on: an extra package in this list is a no-op unless it
+     * also renders incognito-specific wording, while a missing one silently
+     * disables a whole gate for that app. A real host (rather than a bare
+     * scheme) is what keeps ordinary deep-link handlers - a shopping app
+     * that claims its own domain - from matching. The full resulting list is
+     * logged below for audit.
      */
     fun refreshInstalledBrowsers(packageManager: PackageManager) {
         val discovered = mutableSetOf<String>()
-        for (scheme in arrayOf("http", "https")) {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("$scheme://"))
+
+        fun collect(intent: Intent, flags: Int) {
             @Suppress("DEPRECATION")
-            val resolved = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            val resolved = runCatching { packageManager.queryIntentActivities(intent, flags) }.getOrNull().orEmpty()
             resolved.forEach { discovered.add(it.activityInfo.packageName) }
         }
+
+        // Both schemes, since a browser only strictly needs to declare one.
+        for (scheme in arrayOf("http", "https")) {
+            collect(Intent(Intent.ACTION_VIEW, Uri.parse("$scheme://")), PackageManager.MATCH_DEFAULT_ONLY)
+
+            val webLink = Intent(Intent.ACTION_VIEW, Uri.parse("$scheme://www.example.com"))
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+            collect(webLink, PackageManager.MATCH_DEFAULT_ONLY)
+            collect(webLink, 0)
+        }
+
+        collect(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_BROWSER), 0)
+
         dynamicBrowserPackages = discovered
 
         // Logged unconditionally (not behind verbose logging) - this only

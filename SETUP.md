@@ -830,7 +830,26 @@ closes this by querying `PackageManager` for every app that registers to
 handle a plain `http`/`https` `ACTION_VIEW` intent - the same mechanism
 Android's own "Open with" chooser and default-browser picker use to
 decide what counts as a browser - and unions the result with
-`BROWSER_PACKAGES`. `isBrowserPackage()` checks both sets, so a brand new
+`BROWSER_PACKAGES`.
+
+**That query was itself too narrow, found on a real device.** WebLibre
+(`eu.weblibre.gecko`) never appeared in the registry, so every browser-scoped
+check silently skipped it - caught only because gate 5b's block line prints
+`browser=...` (see its "Confirmed on device" section below). The original
+probe used a bare `$scheme://` URI with `MATCH_DEFAULT_ONLY`: no host, no
+category, so it only matches an activity whose data spec is scheme-only *and*
+which declares `CATEGORY_DEFAULT`. A browser whose filter pins a host
+(`android:host="*"`) or declares only `CATEGORY_BROWSABLE` falls through it.
+Three more probes now run alongside it and the results are unioned: a real
+hostname plus `CATEGORY_BROWSABLE` (the canonical "who can open a web link"
+question), the same without `MATCH_DEFAULT_ONLY`, and `CATEGORY_APP_BROWSER`
+(how an app declares itself a browser to the launcher). Breadth is the right
+trade here - an extra package in the set is a no-op unless it also renders
+incognito-specific wording, while a missing one disables a whole gate for
+that app - and using a real host rather than a bare scheme is what keeps
+ordinary deep-link handlers from matching. `BROWSER_REGISTRY_REFRESHED
+count=... packages=[...]` logs the full resulting list unconditionally, which
+is how to check whether a given browser made it in. `isBrowserPackage()` checks both sets, so a brand new
 or niche browser is covered automatically once installed, not after being
 individually reported. This app already holds `QUERY_ALL_PACKAGES` (see
 `AndroidManifest.xml` - sideloaded-only distribution, so the Play Store
@@ -1110,6 +1129,47 @@ only decide *when to ask*, not *whether to block*. If
 is demonstrably on, check for `WINDOW_SECURITY_PROBE verdict=UNKNOWN` first
 (the platform declining to answer), then whether the app is monitored at all
 (`GATE1_WHITELIST`).
+
+#### Confirmed on device - and the three things that log taught us
+
+First real-device run, in WebLibre (`eu.weblibre.gecko`) with its own
+"Screenshot protection" setting on. The gate works end to end:
+
+```
+WINDOW_SECURITY_PROBE verdict=SECURE windowId=362
+exit@GATE5B_SECURE_WINDOW_CONFIRMED windowId=362 browser=false
+```
+
+Three findings from the same log, all worth keeping:
+
+1. **An app's screenshot toggle may need an app restart to take effect.**
+   Before relaunching WebLibre the probe reported `verdict=NOT_SECURE` *and*
+   the pixel check reported live content (`avgLuma=43.7 stdDev=39.6`, with
+   NudeNet scoring a real 560x247 region) - two independent signals agreeing
+   the flag genuinely wasn't set yet, despite the setting reading as on.
+   Gecko/Fenix-derived browsers apply `FLAG_SECURE` at activity creation. So
+   "I turned the toggle on and nothing blocked" is expected until the app is
+   relaunched, and is *correct* behavior: nothing is hidden yet, and the
+   cascade can still see and score the screen normally.
+2. **`browser=false` for a browser.** WebLibre was missing from
+   `refreshInstalledBrowsers()`'s dynamic registry entirely, so gate 4's
+   incognito title/content checks never applied to it - the actual cause of
+   the original "private browsing isn't blocked here" report, and invisible
+   until this log line printed the flag. Fixed by widening that query (see
+   gate 4's `BROWSER_PACKAGES` section) and adding the package to the floor
+   list. Worth noting the gate-5b block fired anyway, because it no longer
+   depends on browser recognition - which is the point of making it
+   app-agnostic.
+3. **A non-application active window made this gate inert.** The log shows
+   cycles with `windowId=0` interleaved with the app's own `362`, where
+   `rootInActiveWindow` reported a window that isn't the monitored app's.
+   `secureWindowVerdict()` correctly declines to judge those - but the pixel
+   fallback's condition then read that *absence* of a verdict as "the
+   platform has this covered" and waited forever, so nothing blocked while
+   such a window held focus. An open IME does the same thing, which made this
+   a live bypass: secure app + keyboard up = never blocked. The fallback now
+   engages on anything that isn't a fresh `NOT_SECURE`, so an unjudgeable
+   window drops to the two-consecutive-black-frames rule instead of stalling.
 
 ## 4. The TFLite backend (removed)
 
