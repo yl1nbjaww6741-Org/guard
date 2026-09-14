@@ -58,6 +58,7 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
     var lockoutDurationMinutes by remember { mutableStateOf(prefs.lockoutDurationMinutes) }
     var strikesToLockout by remember { mutableStateOf(prefs.strikesToLockout) }
     var activeLockouts by remember { mutableStateOf(prefs.getActiveLockouts()) }
+    var blockSecureWindowsEverywhere by remember { mutableStateOf(prefs.blockSecureWindowsEverywhere) }
     var frameDiffEnabled by remember { mutableStateOf(prefs.frameDiffGateEnabled) }
     var frameDiffHamming by remember { mutableStateOf(prefs.frameDiffHammingThreshold) }
     var frameDiffMaxSkipCount by remember { mutableStateOf(prefs.frameDiffMaxSkipCount) }
@@ -164,6 +165,44 @@ fun RulesTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     EndLabel("Faster detection")
                     EndLabel("Better battery")
+                }
+            }
+        }
+
+        item {
+            CGCard {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            CGLabel("Block hidden screens")
+                            CGGateChip("turning off")
+                        }
+                        CGHint(
+                            "Apps can switch off screenshots and screen recording for themselves, which also " +
+                                "blinds ContentGuard - nothing on that screen can be checked. With this on, any " +
+                                "monitored app doing that is blocked, not just a browser's private tab. Allow an " +
+                                "app that legitimately needs it (banking, payments, a password manager) from the " +
+                                "Apps tab instead of turning this off.",
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    CGToggle(
+                        checked = blockSecureWindowsEverywhere,
+                        onCheckedChange = { newValue ->
+                            blockSecureWindowsEverywhere = newValue
+                            // Off = stop blocking apps that hide their screen,
+                            // i.e. the weakening direction. Turning it back on
+                            // is free, same asymmetry as every other control here.
+                            applyOrChallenge(
+                                !newValue,
+                                { blockSecureWindowsEverywhere = !newValue },
+                                PrefsRepository.PendingWeakenAction.SetBlockSecureWindowsEverywhere(newValue),
+                            ) {
+                                prefs.blockSecureWindowsEverywhere = newValue
+                            }
+                        },
+                    )
                 }
             }
         }

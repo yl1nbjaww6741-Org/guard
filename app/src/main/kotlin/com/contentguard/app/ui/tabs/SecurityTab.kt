@@ -273,6 +273,8 @@ private fun PrefsRepository.PendingWeakenAction.describeForPendingCard(): String
         if (enabled) "Turn on delay before unlock" else "Turn off delay before unlock"
     is PrefsRepository.PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "Delay before unlock → ${minutes}m"
     is PrefsRepository.PendingWeakenAction.SetServiceProtected -> "Stop persisting $component"
+    is PrefsRepository.PendingWeakenAction.SetBlockSecureWindowsEverywhere ->
+        if (enabled) "Block hidden screens everywhere" else "Stop blocking hidden screens"
 }
 
 private fun formatRemaining(ms: Long): String {

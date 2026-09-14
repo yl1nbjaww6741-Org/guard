@@ -939,7 +939,7 @@ threshold to 1.0 already can for gates 6/7 - kept editable anyway because
 a fixed, unreviewable list can't be tuned for false positives/negatives
 actually observed on a real device.
 
-### Gate 5b: structural FLAG_SECURE detection, browser-agnostic without keywords
+### Gate 5b: FLAG_SECURE detection - asked of the platform, in every monitored app
 
 Explicit user request: gate 4/4b's keyword matching only ever catches a
 private/incognito tab if that browser's own UI happens to use wording one
@@ -953,32 +953,163 @@ private tabs for exactly this reason, so detecting the black-out itself
 doesn't need to know anything about a given browser's incognito wording,
 or even that the browser exists yet.
 
-Runs in `processFrame()` right after gate 5's capture succeeds, scoped to
-the same `IncognitoDetector.BROWSER_PACKAGES` set gates 4/4b already use -
-deliberately *not* extended to every app, since banking, payment,
-streaming (DRM), and password-manager apps all use the identical flag
-legitimately and aren't private browsing. Gate 3 already confirmed the
-accessibility tree sees real image-shaped content on screen
-(`scan.hasImages`); a captured frame that's uniformly black despite that is
-the mismatch this exists to catch.
-
 Requires both very low average brightness *and* very low variance
 (`SecureContentDetector.MAX_AVG_LUMA` / `MAX_STD_DEV`), not just "dark" -
 deliberately conservative, since an ordinary dark-themed page still has
 real text/icon/border variation a true `FLAG_SECURE` cutout doesn't have
-at all (nothing real was ever rendered into it). Logs
-`GATE5B_SECURE_CONTENT_DETECTED avgLuma=... stdDev=...` and blocks with the
-same overlay as a real `GATE8_BLOCK`. `SECURE_CONTENT_CHECK avgLuma=...
-stdDev=...` also logs every evaluation (gated behind verbose logging) so a
-missed detection or an unexpected false positive on real dark-mode content
-is a direct threshold-tuning lookup, not another blind guess - the same
-diagnose-from-logs discipline every gate in this file already follows.
+at all (nothing real was ever rendered into it).
 
-Not yet confirmed against a real device (no access to one while writing
-this) - the thresholds are a reasoned starting point, not a tuned one. If
-`GATE5B_SECURE_CONTENT_DETECTED` never fires on a real incognito tab, or
-fires on ordinary dark browsing, the logged `avgLuma`/`stdDev` values are
-the next lead.
+#### The bypass that rewrote this gate
+
+Real-world report: *"on my Android phone, some apps you can toggle turn off
+screenshots and screen capture - if there's a toggle on the app, it lets me
+view things without an incognito block."*
+
+Correct, and it was a complete bypass of gates 5-7 for any app that isn't a
+browser. The original gate above ran under `if (IncognitoDetector
+.isBrowserPackage(pkg))`, because the only case it was built for was a
+private/incognito tab. But `FLAG_SECURE` is not a browser feature - it's one
+line any app can set, and a long list of them expose it as their own
+user-facing switch ("block screenshots", "hide from recents and screen
+recording", view-once/secret-chat modes, third-party gallery and vault apps,
+and browsers' own settings in *both* directions - Firefox for Android even has
+an "allow screenshots in private browsing" toggle that turns the flag off).
+
+Flip such a switch in any monitored non-browser app and the entire cascade
+walked off a cliff, quietly and with no log line to show it:
+
+1. Gate 3 sees real image nodes in the accessibility tree - `FLAG_SECURE`
+   doesn't hide the semantic tree, only pixels.
+2. Gate 5's capture **succeeds** and returns a frame that is entirely flat
+   black (see the "Correction" under gate 4 above - the display-scoped
+   `takeScreenshot()` doesn't fail on a secure window, it just renders it
+   black).
+3. Gate 5b didn't look, because the package isn't a browser.
+4. Gate 6's skin-tone prefilter finds no skin in an all-black frame, and the
+   cascade exits at `GATE6_NO_SKIN_TONE` - the single most routine,
+   least-suspicious exit there is.
+
+So the app reported itself healthy, the Debug log looked normal, and the
+screen was never examined at all. Worth naming plainly: this is the
+fail-*open* direction, and it was reachable from a toggle inside the app
+being monitored, needing no password, no root, and no ADB.
+
+#### What it does now
+
+**Ask the platform, don't infer from pixels.** `AccessibilityService
+.takeScreenshotOfWindow(windowId, ...)` (API 34+) returns
+`ERROR_TAKE_SCREENSHOT_SECURE_WINDOW` for exactly one reason, checked against
+AOSP rather than assumed: `AccessibilityInteractionController
+.takeScreenshotOfWindowUiThread()` tests `mViewRootImpl.getWindowFlags() &
+FLAG_SECURE` and refuses. That is the same bit the app set when its toggle was
+switched on - a direct answer, not a threshold. `ScreenCapturer
+.probeWindowSecure()` wraps it and returns `Secure` / `NotSecure` /
+`Unknown(errorCode)`; the success path's full-window `HardwareBuffer` is closed
+immediately, since only the outcome matters.
+
+Two AOSP details this depends on, both verified in
+`AbstractAccessibilityServiceConnection`:
+
+- The 333ms request interval is tracked **separately** for the two APIs, and
+  per window id for this one (`mRequestTakeScreenshotOfWindowTimestampMs` vs
+  `mRequestTakeScreenshotTimestampMs`). A probe therefore can't consume the
+  display capture's budget, so no settle delay is needed between them and a
+  probe can never cause a `GATE5_CAPTURE_FAILED errorCode=3` in the same cycle.
+- A DRM *surface* inside a non-secure window (streaming video) does **not**
+  trigger the secure-window error - only the window flag does. That's the
+  behavior we want: Netflix renders black to a display capture but isn't an app
+  hiding its whole UI from the guard.
+
+**Runs before gate 3 and before any capture.** An app blocking capture has
+hidden everything gates 5/6/7 could have scored, whether or not its tree
+exposes image-shaped nodes this frame - so "no image nodes" is no longer a hole
+to fall through (it was: the pixel half of this gate can only run when gate 3
+passes *and* a capture succeeds, which left any app rendering into a
+canvas/surface, or just not labelling its views, invisible).
+
+**Applies in every monitored app**, not just browsers -
+`ContentGuardService.secureWindowChecksApply()`:
+
+- Browsers: always, as before.
+- Every other monitored app: when `PrefsRepository.blockSecureWindowsEverywhere`
+  is on (**default on** - fail closed) *and* the platform can confirm
+  `FLAG_SECURE` directly. On API 30-33, where `takeScreenshotOfWindow` doesn't
+  exist, this deliberately stays browser-only rather than blocking an entire
+  device's apps on a pixel heuristic. The one real device this runs on
+  (ColorOS 16 / Android 16, see `docs/COLOROS.md`) is well past that floor.
+
+**The pixel heuristic is now evidence, not a verdict.** `SecureContentDetector`
+still runs on every captured frame in scope, but a flat-black frame no longer
+blocks on its own where the platform can be asked. Instead it marks the window
+for an immediate re-probe (`SecureWindowTracker` drops `NOT_SECURE`'s re-probe
+interval from 10s to 3s on suspicion), so a `FLAG_SECURE` raised *mid-window* -
+a secret chat opened, a private tab switched to - is confirmed and blocked on
+the next cycle (~one capture interval) rather than blocked on a guess now.
+Nothing is lost by waiting: a flat-black frame has no content for gates 6/7 to
+read anyway. Where no definitive answer is available (API < 34, or a probe that
+came back `UNKNOWN`), pixels are all there is and this does block on them - but
+only after `MIN_UNCONFIRMED_SUSPICIOUS_FRAMES` (2) in a row, which is what
+separates a real hidden screen from a splash screen, an app-transition frame,
+or a pure-black AMOLED theme. A confirmed `NOT_SECURE` retires any run of black
+frames that preceded it, so an accumulated count can't be spent later on the
+first `UNKNOWN`.
+
+Probes are paced, not per-frame: a verdict is cached per (package, window) and
+only *acted on* while it's inside its own re-probe interval, so
+`shouldProbe() == false` is itself the statement "this cached verdict is still
+current". Acting on the cache matters as much as probing does - without it,
+dismissing the block overlay on a secure window would leave that app unblocked
+until the next probe came due. For the common case (an ordinary, capturable
+window) the cost is one window screenshot per 10s per app, against a display
+capture every 1.8s.
+
+Only the app's own window is ever judged: `secureWindowVerdict()` skips
+anything `isApplicationWindow()` rejects, so a secure IME or overlay window
+sitting on top of the foreground app can't get that app blocked - the same
+class of false positive this codebase already hit with Gboard (see
+`IncognitoDetector`'s doc comment).
+
+#### Escape hatch, and why it's shaped this way
+
+Blocking every app that hides its screen is the *right* default for this app's
+purpose but it will occasionally land on something legitimate - banking,
+payments, a password manager, a work profile app. Two ways out, both
+password-gated, both the existing machinery rather than a new one:
+
+1. **Whitelist the individual app** (Apps tab). Preferred: it's narrow, and an
+   app you'd exempt from screen-capture blocking is usually one you don't want
+   scanned at all.
+2. **Turn "Block hidden screens" off** (Rules tab). This is the blunt
+   instrument - it restores the old browser-only behavior device-wide. Turning
+   it *off* is a weakening move, so it takes the password and is deferred by
+   delay-before-unlock like every other weakening move
+   (`PendingWeakenAction.SetBlockSecureWindowsEverywhere`); turning it back on
+   is free and instant, the same asymmetry as every other control.
+
+Deliberately **not** a separate "these apps may hide their screen" exemption
+list. It would be a third scope list to maintain alongside the whitelist and
+the monitored set, for a case the whitelist already covers, and per this
+class's own history (`BROWSER_PACKAGES`) a hand-maintained package list is
+whack-a-mole that a built-in seed would only make look finished.
+
+#### Diagnostics
+
+| Log line | Means |
+| --- | --- |
+| `exit@GATE5B_SECURE_WINDOW_CONFIRMED windowId=... browser=...` | The platform confirmed `FLAG_SECURE` on this window. The block path that closes the reported bypass. |
+| `exit@GATE5B_SECURE_CONTENT_DETECTED ... frames=N unconfirmed` | Blocked on pixels alone after N consecutive flat-black frames - API < 34, or repeated `UNKNOWN` probes. |
+| `WINDOW_SECURITY_PROBE verdict=UNKNOWN windowId=... errorCode=...` | Logged **unconditionally**: this window can't be checked definitively, which silently drops the gate back to pixels. A sustained run of it is the signal that something (an OEM restriction, a wedged app UI thread) is degrading this gate - same reasoning as `GATE5_CAPTURE_FAILED`. `errorCode=-1` is the lost-callback sentinel. |
+| `WINDOW_SECURITY_PROBE verdict=SECURE\|NOT_SECURE ...` | Verbose-only. Every probe that got a real answer. |
+| `SECURE_CONTENT_CHECK avgLuma=... stdDev=...` | Verbose-only. Every pixel evaluation, so a missed detection or an unexpected hit on real dark-mode content is a threshold lookup rather than a guess. |
+| `SECURE_CONTENT_SUSPECTED ... awaitingProbe=true` | Verbose-only. A black frame that's waiting for the platform's answer instead of blocking. |
+
+The `SecureContentDetector` thresholds have still never been tuned on a real
+device - but they now matter far less than they did, since on Android 14+ they
+only decide *when to ask*, not *whether to block*. If
+`GATE5B_SECURE_WINDOW_CONFIRMED` never fires on an app whose screenshot toggle
+is demonstrably on, check for `WINDOW_SECURITY_PROBE verdict=UNKNOWN` first
+(the platform declining to answer), then whether the app is monitored at all
+(`GATE1_WHITELIST`).
 
 ## 4. The TFLite backend (removed)
 

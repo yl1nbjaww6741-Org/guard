@@ -106,6 +106,39 @@ class PrefsRepository(context: Context) {
         }
 
     /**
+     * Whether gate 5b blocks an app that has turned off screenshots/screen
+     * capture for its own window (FLAG_SECURE), in *every* monitored app rather
+     * than only in browsers. On by default - fail closed.
+     *
+     * The bypass this exists to close: gate 5b was browser-scoped, so any app
+     * with its own "block screenshots" setting could turn it on and become
+     * invisible to gates 5/6/7 while nothing looked for the blackout - the
+     * capture succeeds, comes back flat black, the skin prefilter finds no
+     * skin, and the cascade exits clean. Private browsing was covered; the
+     * identical move in any other app was not.
+     *
+     * Turning this *off* is a weakening move (see
+     * [PendingWeakenAction.SetBlockSecureWindowsEverywhere]) - password-gated,
+     * and deferred like any other when delay-before-unlock is on. It exists at
+     * all because the false-positive direction here is real and lands on apps
+     * the user may genuinely need: banking, payment and password-manager apps
+     * set the same flag legitimately. The narrower fix for those is to
+     * whitelist the individual app (Apps tab), which is also why this isn't
+     * left as a free toggle.
+     *
+     * Has no effect on API 30-33, where the platform can't be asked to confirm
+     * FLAG_SECURE directly (takeScreenshotOfWindow is API 34+) - see
+     * ContentGuardService.secureWindowChecksApply for why the app-wide
+     * extension is tied to that confirmation rather than running on the pixel
+     * heuristic alone.
+     */
+    var blockSecureWindowsEverywhere: Boolean
+        get() = prefs.getBoolean(KEY_BLOCK_SECURE_WINDOWS_EVERYWHERE, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_BLOCK_SECURE_WINDOWS_EVERYWHERE, value).apply()
+        }
+
+    /**
      * FrameDiffGate's own on/off switch - off by default, preserving
      * today's "gate 7 always runs" behavior until explicitly opted into.
      * See FrameDiffGate's class doc for the asymmetric skip design.
@@ -600,6 +633,13 @@ class PrefsRepository(context: Context) {
         // OFF removes that protection, so it's the weakening move here,
         // same asymmetry as SetWhitelisted/SetMonitored.
         data class SetServiceProtected(val component: String, val protected: Boolean) : PendingWeakenAction()
+
+        // Turning gate 5b's app-wide reach OFF stops blocking apps that hide
+        // their own screen from the cascade, which is the exact bypass that
+        // setting exists to close - so it's the weakening direction here.
+        // Turning it back on is free/instant, same asymmetry as everything
+        // above. See [blockSecureWindowsEverywhere].
+        data class SetBlockSecureWindowsEverywhere(val enabled: Boolean) : PendingWeakenAction()
     }
 
     /** A pending unlock as actually persisted: the action plus when it becomes eligible. */
@@ -688,6 +728,7 @@ class PrefsRepository(context: Context) {
             is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> delayBeforeUnlockEnabled = action.enabled
             is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> delayBeforeUnlockMinutes = action.minutes
             is PendingWeakenAction.SetServiceProtected -> setServiceProtected(action.component, action.protected)
+            is PendingWeakenAction.SetBlockSecureWindowsEverywhere -> blockSecureWindowsEverywhere = action.enabled
         }
     }
 
@@ -713,6 +754,7 @@ class PrefsRepository(context: Context) {
         is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> "SetDelayBeforeUnlockEnabled"
         is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "SetDelayBeforeUnlockMinutes"
         is PendingWeakenAction.SetServiceProtected -> "SetServiceProtected:$component"
+        is PendingWeakenAction.SetBlockSecureWindowsEverywhere -> "SetBlockSecureWindowsEverywhere"
     }
 
     private fun pendingTypeKey(index: Int) = "pending_action_type_$index"
@@ -776,6 +818,7 @@ class PrefsRepository(context: Context) {
         is PendingWeakenAction.SetDelayBeforeUnlockEnabled -> "SetDelayBeforeUnlockEnabled"
         is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "SetDelayBeforeUnlockMinutes"
         is PendingWeakenAction.SetServiceProtected -> "SetServiceProtected"
+        is PendingWeakenAction.SetBlockSecureWindowsEverywhere -> "SetBlockSecureWindowsEverywhere"
     }
 
     // Encodes each action's params as a single delimited string - deliberately
@@ -805,6 +848,7 @@ class PrefsRepository(context: Context) {
         // name characters are letters, digits, '.', '_', '/'), so this is
         // safe with no escaping - same reasoning as SetWhitelisted above.
         is PendingWeakenAction.SetServiceProtected -> "$component|$protected"
+        is PendingWeakenAction.SetBlockSecureWindowsEverywhere -> enabled.toString()
     }
 
     private fun decodePendingAction(type: String, param: String): PendingWeakenAction? = runCatching {
@@ -840,6 +884,7 @@ class PrefsRepository(context: Context) {
                 val (component, flag) = param.split("|", limit = 2)
                 PendingWeakenAction.SetServiceProtected(component, flag.toBoolean())
             }
+            "SetBlockSecureWindowsEverywhere" -> PendingWeakenAction.SetBlockSecureWindowsEverywhere(param.toBoolean())
             else -> null
         }
     }.getOrNull()
@@ -897,6 +942,7 @@ class PrefsRepository(context: Context) {
         private const val KEY_TEXT_SCAN_INTERVAL_MS = "text_scan_interval_ms"
         private const val KEY_VERBOSE_LOGGING = "verbose_logging"
         private const val KEY_LAST_HEARTBEAT_AT = "service_last_heartbeat_at_millis"
+        private const val KEY_BLOCK_SECURE_WINDOWS_EVERYWHERE = "block_secure_windows_everywhere"
         private const val KEY_FRAME_DIFF_ENABLED = "frame_diff_gate_enabled"
         private const val KEY_FRAME_DIFF_HAMMING = "frame_diff_hamming_threshold"
         private const val KEY_FRAME_DIFF_MAX_SKIP_COUNT = "frame_diff_max_skip_count"

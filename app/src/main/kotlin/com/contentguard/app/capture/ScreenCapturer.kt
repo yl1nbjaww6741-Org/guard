@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityService.ScreenshotResult
 import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.Display
@@ -121,6 +122,104 @@ class ScreenCapturer(
      */
     fun wouldThrottle(): Boolean = SystemClock.elapsedRealtime() - lastCaptureAt < prefs.captureThrottleMs
 
+    /**
+     * What the platform says about one window's own FLAG_SECURE state - see
+     * [probeWindowSecure].
+     */
+    sealed interface WindowSecurity {
+        /**
+         * The window has WindowManager.LayoutParams.FLAG_SECURE set, straight
+         * from the platform. Not a guess from pixels: the app's own ViewRootImpl
+         * checks its window flags and refuses the screenshot outright
+         * (AccessibilityInteractionController.takeScreenshotOfWindowUiThread ->
+         * ERROR_TAKE_SCREENSHOT_SECURE_WINDOW), so this is the same bit the app
+         * set when it turned "block screenshots and screen recording" on.
+         */
+        object Secure : WindowSecurity
+
+        /** The window is capturable - FLAG_SECURE is not set on it. */
+        object NotSecure : WindowSecurity
+
+        /**
+         * The platform couldn't answer (rate limit, invalid/stale window id, the
+         * target app's UI thread not responding, or the callback never firing).
+         * Says nothing either way, so callers must not read it as "not secure" -
+         * see ContentGuardService's gate 5b, which falls back to the pixel
+         * heuristic on this rather than treating it as a clear.
+         */
+        class Unknown(val errorCode: Int?) : WindowSecurity
+    }
+
+    /**
+     * Asks the platform directly whether [windowId]'s window is FLAG_SECURE,
+     * rather than inferring it from a black frame.
+     *
+     * Why this exists alongside SecureContentDetector's pixel heuristic: the
+     * *display*-scoped takeScreenshot() this class otherwise uses succeeds on a
+     * secure window and simply renders it flat black (see SETUP.md's gate 5b
+     * correction), so the only signal it leaves is "these pixels look black,"
+     * which an ordinary pure-black dark-mode page, a splash screen, or an
+     * app-transition frame can imitate. The *window*-scoped call fails with a
+     * dedicated error code instead, which is unambiguous - that's what makes it
+     * safe to act on the same signal in every monitored app, not just browsers
+     * whose incognito wording we already recognise.
+     *
+     * Two platform details this relies on, both confirmed against AOSP rather
+     * than assumed:
+     *
+     * 1. The 333ms request interval is tracked *separately* per API and, for
+     *    this one, per window id (AbstractAccessibilityServiceConnection's
+     *    mRequestTakeScreenshotOfWindowTimestampMs vs
+     *    mRequestTakeScreenshotTimestampMs), so a probe never eats the display
+     *    capture's budget - no settle delay is needed between the two, and a
+     *    probe can't cause a GATE5_CAPTURE_FAILED errorCode=3 in the same cycle.
+     * 2. ERROR_TAKE_SCREENSHOT_SECURE_WINDOW is returned for exactly one reason:
+     *    the window's own FLAG_SECURE. A DRM *surface* inside a non-secure
+     *    window (streaming video) does not trigger it, which is the behavior we
+     *    want - that renders black to the display capture but isn't an app
+     *    hiding its whole UI from us.
+     *
+     * API 34+ only (takeScreenshotOfWindow was added in Android 14); callers
+     * must check [canProbeWindowSecurity] first, since minSdk here is 30.
+     *
+     * A success carries a full-window HardwareBuffer we have no use for - only
+     * the outcome matters - so it's closed immediately and never handed out,
+     * which is also why this has none of captureDownscaled's
+     * late-callback/ownership handling.
+     */
+    @RequiresApi(34)
+    suspend fun probeWindowSecure(windowId: Int): WindowSecurity {
+        val verdict = withTimeoutOrNull(SCREENSHOT_CALLBACK_TIMEOUT_MS) {
+            // Explicit type parameter: the three resume() calls below pass three
+            // different subtypes, and spelling out the sealed supertype here is
+            // clearer than relying on the inferred common supertype.
+            suspendCancellableCoroutine<WindowSecurity> { cont ->
+                service.takeScreenshotOfWindow(
+                    windowId,
+                    callbackExecutor,
+                    object : TakeScreenshotCallback {
+                        override fun onSuccess(result: ScreenshotResult) {
+                            result.hardwareBuffer.close()
+                            if (cont.isActive) cont.resume(WindowSecurity.NotSecure, onCancellation = null)
+                        }
+
+                        override fun onFailure(errorCode: Int) {
+                            val outcome = if (errorCode == AccessibilityService.ERROR_TAKE_SCREENSHOT_SECURE_WINDOW) {
+                                WindowSecurity.Secure
+                            } else {
+                                WindowSecurity.Unknown(errorCode)
+                            }
+                            if (cont.isActive) cont.resume(outcome, onCancellation = null)
+                        }
+                    },
+                )
+            }
+        }
+        if (verdict != null) return verdict
+        Log.w(TAG, "takeScreenshotOfWindow callback never fired within ${SCREENSHOT_CALLBACK_TIMEOUT_MS}ms - verdict unknown")
+        return WindowSecurity.Unknown(ERROR_TAKESCREENSHOT_CALLBACK_TIMEOUT)
+    }
+
     /** Carries the platform's error code out of the callback, which a plain nullable result discarded. */
     private sealed interface ScreenshotAttempt {
         class Ok(val result: ScreenshotResult) : ScreenshotAttempt
@@ -235,6 +334,15 @@ class ScreenCapturer(
 
     companion object {
         private const val TAG = "ScreenCapturer"
+
+        /**
+         * Whether [probeWindowSecure] can run at all on this device.
+         * takeScreenshotOfWindow() landed in Android 14 (API 34) and minSdk
+         * here is 30, so the pixel heuristic remains the only FLAG_SECURE
+         * signal on a 30-33 device - see SETUP.md's gate 5b section for what
+         * that costs there.
+         */
+        fun canProbeWindowSecurity(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
 
         // Was a hardcoded constant here - history: 900ms (near platform
         // floor) -> 1500ms (battery) -> 900ms (explicit "fast as possible"

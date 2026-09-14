@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Build
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
@@ -22,6 +23,7 @@ import com.contentguard.app.detect.NodeInspector
 import com.contentguard.app.detect.NsfwClassifier
 import com.contentguard.app.detect.NsfwClassifierFactory
 import com.contentguard.app.detect.SecureContentDetector
+import com.contentguard.app.detect.SecureWindowTracker
 import com.contentguard.app.detect.SkinTonePrefilter
 import com.contentguard.app.overlay.BlurOverlayController
 import com.contentguard.app.overlay.PasswordGuardOverlayController
@@ -60,6 +62,10 @@ class ContentGuardService : AccessibilityService() {
     private lateinit var overlay: BlurOverlayController
     private lateinit var passwordGuardOverlay: PasswordGuardOverlayController
     private val frameDiffGate = FrameDiffGate()
+
+    // Gate 5b's probe pacing and per-window verdict cache. Touched only from
+    // processFrame (the single consumeFrames consumer), same as frameDiffGate.
+    private val secureWindows = SecureWindowTracker()
 
     // Recreated by initializeOnce, not a val: onDestroy cancels this scope,
     // and a cancelled scope can never run another coroutine - launch() on it
@@ -881,6 +887,10 @@ class ContentGuardService : AccessibilityService() {
             exitSafe(pkg, "GATE_NO_ROOT")
             return
         }
+        // Read before the recycle below - gate 5b's window-security probe needs
+        // the window's own id (AccessibilityWindowInfo.getId()'s space), and a
+        // recycled node can't be asked for it afterwards.
+        val windowId = root.windowId
         val scan = try {
             NodeInspector.scan(root)
         } finally {
@@ -965,6 +975,27 @@ class ContentGuardService : AccessibilityService() {
             return
         }
 
+        // Gate 5b, first half: ask the platform outright whether this window
+        // has FLAG_SECURE set, instead of waiting to infer it from a black
+        // frame. See secureWindowVerdict() and ScreenCapturer.probeWindowSecure.
+        //
+        // Deliberately checked *before* GATE3's image-node check and before any
+        // capture: an app that blocks screen capture has hidden everything gates
+        // 5/6/7 could have scored, whether or not its accessibility tree happens
+        // to expose image-shaped nodes this frame. The pixel-based half of this
+        // gate can only ever run when gate 3 passes and a capture succeeds,
+        // which left "no image nodes in the tree" as a hole an app that renders
+        // into a canvas/surface (or just doesn't label its views) fell straight
+        // through.
+        val windowVerdict = secureWindowVerdict(pkg, windowId)
+        if (windowVerdict == SecureWindowTracker.Verdict.SECURE) {
+            blockSecureWindow(
+                pkg,
+                "GATE5B_SECURE_WINDOW_CONFIRMED windowId=$windowId browser=${IncognitoDetector.isBrowserPackage(pkg)}",
+            )
+            return
+        }
+
         if (!scan.hasImages) {
             exitSafe(pkg, "GATE3_NO_IMAGE_NODES")
             return
@@ -1009,25 +1040,31 @@ class ContentGuardService : AccessibilityService() {
         }
         prefs.recordScreenshot()
 
-        // Structural complement to gate 4/4b's keyword matching, scoped to
-        // the same browser package list - not a replacement, and
-        // deliberately not extended to every app (banking, streaming, and
-        // password-manager apps legitimately use the identical mechanism
-        // and aren't private browsing). Android renders any FLAG_SECURE
-        // window as flat black to every capture path, platform-wide,
-        // regardless of what that window's own UI text says - so this
-        // catches a private/incognito tab in literally any browser,
-        // including ones whose wording IncognitoDetector's keyword lists
-        // don't recognize or that aren't a Chromium/Firefox fork at all,
-        // without needing to know anything about that browser in advance.
-        // Gate 3 already confirmed the accessibility tree sees real
-        // image-shaped content here (scan.hasImages) - a captured frame
-        // that's uniformly black despite that is the mismatch this exists
-        // to catch. Requires both very low brightness AND very low
-        // variance, not just "dark," since an ordinary dark-themed page
-        // still has real text/icon/border variation that a true
-        // FLAG_SECURE cutout doesn't.
-        if (IncognitoDetector.isBrowserPackage(pkg)) {
+        // Gate 5b, second half: the pixel side of the same question the probe
+        // above answers definitively. Android renders any FLAG_SECURE window as
+        // flat black to every capture path, platform-wide, regardless of what
+        // that window's own UI text says, so a uniformly black frame is
+        // evidence the screen is being hidden from us - but only evidence: a
+        // pure-black dark-mode page, a splash screen, and an app-transition
+        // frame all look the same to a luma/variance test. That ambiguity is
+        // exactly why this half now defers to the platform wherever it can:
+        //
+        // - Probe available: a black frame doesn't block on its own. It marks
+        //   the window for an immediate re-probe (SecureWindowTracker drops
+        //   NOT_SECURE's re-probe interval to REPROBE_MS on suspicion), so a
+        //   FLAG_SECURE raised mid-window - a secret chat opened, a private tab
+        //   switched to - is confirmed and blocked on the next cycle instead of
+        //   blocking on a guess now. Nothing is lost by waiting: a flat-black
+        //   frame has no content for gates 6/7 to score anyway.
+        // - No probe (API < 34) or the probe came back UNKNOWN: pixels are all
+        //   there is, so this blocks on them - but only after
+        //   MIN_UNCONFIRMED_SUSPICIOUS_FRAMES in a row, which is what rules out
+        //   the transient black frames above.
+        //
+        // Scope: browsers always (a private tab is what the original gate was
+        // built for), plus every other monitored app when
+        // prefs.blockSecureWindowsEverywhere is on - see secureWindowChecksApply.
+        if (secureWindowChecksApply(pkg)) {
             val secureCheck = SecureContentDetector.analyze(bitmap)
             if (prefs.verboseLogging) {
                 val line = "[$pkg] SECURE_CONTENT_CHECK avgLuma=${"%.1f".format(secureCheck.avgLuma)} stdDev=${"%.1f".format(secureCheck.stdDev)}"
@@ -1035,15 +1072,34 @@ class ContentGuardService : AccessibilityService() {
                 DebugLogBuffer.add(TAG, line)
             }
             if (secureCheck.looksSecureBlocked) {
-                if (!overlay.isVisible()) {
-                    val line = "[$pkg] exit@GATE5B_SECURE_CONTENT_DETECTED avgLuma=${"%.1f".format(secureCheck.avgLuma)} stdDev=${"%.1f".format(secureCheck.stdDev)}"
-                    Log.i(TAG, line)
+                val pixels = "avgLuma=${"%.1f".format(secureCheck.avgLuma)} stdDev=${"%.1f".format(secureCheck.stdDev)}"
+                val suspiciousFrames = secureWindows.markSuspiciousFrame(pkg)
+                // UNKNOWN means the platform declined to answer for this window
+                // (rate limit, stale window id, the app's own UI thread not
+                // responding) - not "not secure," so it must not be read as a
+                // clear. It's the one case where a probe-capable device still
+                // has to fall back to pixels.
+                val platformCanConfirm = ScreenCapturer.canProbeWindowSecurity() &&
+                    windowVerdict != SecureWindowTracker.Verdict.UNKNOWN
+                if (platformCanConfirm) {
+                    if (prefs.verboseLogging) {
+                        val line = "[$pkg] SECURE_CONTENT_SUSPECTED $pixels awaitingProbe=true windowId=$windowId"
+                        Log.d(TAG, line)
+                        DebugLogBuffer.add(TAG, line)
+                    }
+                } else if (suspiciousFrames >= SecureWindowTracker.MIN_UNCONFIRMED_SUSPICIOUS_FRAMES) {
+                    blockSecureWindow(pkg, "GATE5B_SECURE_CONTENT_DETECTED $pixels frames=$suspiciousFrames unconfirmed")
+                } else if (prefs.verboseLogging) {
+                    val line = "[$pkg] SECURE_CONTENT_SUSPECTED $pixels frames=$suspiciousFrames unconfirmed"
+                    Log.d(TAG, line)
                     DebugLogBuffer.add(TAG, line)
-                    withContext(Dispatchers.Main) { overlay.show(pkg) }
                 }
+                // Either way this frame is done: it's flat black, so there is
+                // nothing in it for the skin prefilter or the classifier to read.
                 bitmap.recycle()
                 return
             }
+            secureWindows.markCleanFrame(pkg)
         }
 
         val skinAnalysis = SkinTonePrefilter.analyze(bitmap)
@@ -1117,6 +1173,127 @@ class ContentGuardService : AccessibilityService() {
             if (analysisBitmap !== bitmap) analysisBitmap.recycle()
             bitmap.recycle()
         }
+    }
+
+    /**
+     * Whether gate 5b's "this app is hiding its screen from us" checks apply to
+     * [pkg] at all.
+     *
+     * Browsers unconditionally: catching a private/incognito tab structurally,
+     * without depending on IncognitoDetector recognising that browser's wording,
+     * is what gate 5b was originally built for, and browsers were its entire
+     * scope.
+     *
+     * Every other monitored app when [PrefsRepository.blockSecureWindowsEverywhere]
+     * is on (the default) *and* the platform can confirm FLAG_SECURE directly.
+     * Both halves of that matter:
+     *
+     * - Restricting this to browsers was a real bypass, not a theoretical one:
+     *   plenty of apps have their own "block screenshots / screen capture"
+     *   setting, and turning it on made the app invisible to gates 5/6/7 while
+     *   gate 5b - browser-scoped - never looked. The capture succeeds, comes
+     *   back flat black, the skin prefilter finds no skin, and the cascade exits
+     *   clean at GATE6_NO_SKIN_TONE. That is the hole this closes.
+     * - But the *pixel* heuristic alone is not a sound basis for blocking in
+     *   every app on the device: banking, payment, DRM-video and password
+     *   manager apps legitimately produce unreadable frames, and a pure-black
+     *   dark-mode screen can imitate one anywhere. So the app-wide extension is
+     *   deliberately tied to ScreenCapturer.canProbeWindowSecurity() - on API
+     *   30-33, where the platform can't be asked outright, this stays
+     *   browser-only exactly as before rather than blocking on a guess.
+     *
+     * An app that genuinely needs to hide its screen (a banking app) is still
+     * meant to be allowed: whitelist it (Apps tab) - the same password-gated,
+     * delay-gated escape hatch every other "don't block this" decision uses -
+     * or turn the setting off, which is itself a weakening move and gated the
+     * same way. See SETUP.md's gate 5b section.
+     */
+    private fun secureWindowChecksApply(pkg: String): Boolean =
+        IncognitoDetector.isBrowserPackage(pkg) ||
+            (prefs.blockSecureWindowsEverywhere && ScreenCapturer.canProbeWindowSecurity())
+
+    /**
+     * Gate 5b's platform-confirmed half: the current FLAG_SECURE verdict for
+     * [windowId], probed or cached (see SecureWindowTracker for the pacing, and
+     * ScreenCapturer.probeWindowSecure for why the answer is definitive rather
+     * than a heuristic). Null when the check doesn't apply to this package, or
+     * on a device too old to ask.
+     *
+     * A cached verdict is returned as-is when the tracker says no re-probe is
+     * due - by construction that means it's still inside its own re-probe
+     * interval. Acting on the cache matters as much as probing does: without
+     * it, dismissing the block overlay on a secure window would leave the app
+     * unblocked until the next probe came due.
+     */
+    private suspend fun secureWindowVerdict(pkg: String, windowId: Int): SecureWindowTracker.Verdict? {
+        if (!secureWindowChecksApply(pkg)) return null
+        // Spelled out inline rather than via ScreenCapturer.canProbeWindowSecurity()
+        // (which is the same check) so lint's NewApi detector can see the guard
+        // for the @RequiresApi(34) probeWindowSecure call below - NewApi is a
+        // fatal check, so an unprovable guard fails lintVitalRelease, not just
+        // a warning.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
+
+        val now = SystemClock.elapsedRealtime()
+        if (!secureWindows.shouldProbe(pkg, windowId, now)) {
+            return secureWindows.verdictFor(pkg, windowId)
+        }
+
+        // Only ever judge the app's own window. rootInActiveWindow isn't limited
+        // to TYPE_APPLICATION - an IME or overlay window that holds input focus
+        // can become "the active window" - and blocking the foreground app
+        // because some *other* window sitting on top of it is secure would be a
+        // false positive of exactly the kind this codebase has already hit with
+        // IME windows (see onAccessibilityEvent's own isApplicationWindow guard
+        // and recheckStaticContentTick's). Checked here rather than at the top of
+        // this method so the windows[] binder call it costs is paid only when a
+        // probe is actually due, not on every frame - nothing non-application
+        // ever reaches the cache, so a cached verdict returned above is always
+        // one of the app's own windows.
+        if (!isApplicationWindow(windowId)) return null
+
+        val probe = screenCapturer.probeWindowSecure(windowId)
+        val verdict = when (probe) {
+            is ScreenCapturer.WindowSecurity.Secure -> SecureWindowTracker.Verdict.SECURE
+            is ScreenCapturer.WindowSecurity.NotSecure -> SecureWindowTracker.Verdict.NOT_SECURE
+            is ScreenCapturer.WindowSecurity.Unknown -> SecureWindowTracker.Verdict.UNKNOWN
+        }
+        secureWindows.recordProbe(pkg, windowId, verdict, now)
+
+        // Verbose-only for the two routine outcomes, but an UNKNOWN is logged
+        // unconditionally with its error code: it means this window can't be
+        // checked definitively, which is the one case that silently drops gate
+        // 5b back to judging by pixels. A sustained run of it (an OEM denying
+        // window screenshots to accessibility services, say) is exactly the
+        // kind of quiet degradation this app's logging discipline exists to
+        // surface - same reasoning as GATE5_CAPTURE_FAILED.
+        if (verdict == SecureWindowTracker.Verdict.UNKNOWN) {
+            val errorCode = (probe as? ScreenCapturer.WindowSecurity.Unknown)?.errorCode
+            val line = "[$pkg] WINDOW_SECURITY_PROBE verdict=UNKNOWN windowId=$windowId errorCode=${errorCode ?: "unreported"}"
+            Log.w(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+        } else if (prefs.verboseLogging) {
+            val line = "[$pkg] WINDOW_SECURITY_PROBE verdict=$verdict windowId=$windowId"
+            Log.d(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+        }
+        return verdict
+    }
+
+    /**
+     * Gate 5b's block. Same overlay as a real GATE8_BLOCK, and deliberately the
+     * same as gate 4's incognito block in what it *doesn't* do: no strike, no
+     * lockout counter, no usage stat. This isn't "explicit content was found" -
+     * it's "the screen can't be checked at all," an independent block with its
+     * own reason, so folding it into the N-strikes machinery would let an
+     * unreadable screen spend the lockout budget meant for real detections.
+     */
+    private suspend fun blockSecureWindow(pkg: String, detail: String) {
+        if (overlay.isVisible()) return
+        val line = "[$pkg] exit@$detail"
+        Log.i(TAG, line)
+        DebugLogBuffer.add(TAG, line)
+        withContext(Dispatchers.Main) { overlay.show(pkg) }
     }
 
     /**
