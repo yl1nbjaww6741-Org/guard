@@ -182,18 +182,69 @@ class PrefsRepository(context: Context) {
     fun getWhitelist(): Set<String> =
         cachedWhitelist ?: (prefs.getStringSet(KEY_WHITELIST, null)?.toSet() ?: emptySet()).also { cachedWhitelist = it }
 
+    /**
+     * Packages the user has explicitly switched monitoring ON for from the
+     * Apps tab while in MONITOR_ALL_EXCEPT_WHITELIST mode.
+     *
+     * Under that mode "monitored" is normally just the absence of a
+     * whitelist entry, which carries no way to tell "never touched this
+     * app" apart from "deliberately turned this app's monitoring on" - and
+     * AppScopePolicy has one default-off carve-out (launcher/HOME-handler
+     * packages, excluded so dwelling on the home screen doesn't run the
+     * whole cascade every recheck tick) that the first of those should win
+     * over and the second must not. Without this set, un-whitelisting a
+     * package that also happens to register a HOME activity did nothing
+     * observable: the Apps tab showed the toggle on, and gate 1 went on
+     * exiting at GATE1_WHITELIST forever, so the app was never captured.
+     *
+     * Only [setWhitelisted] - the per-app toggle - records an override.
+     * [setWhitelistedBulk]'s "Monitor all" deliberately doesn't (a category
+     * sweep isn't a considered choice about the home screen specifically,
+     * and silently re-enabling launcher monitoring for everyone who taps it
+     * would undo that carve-out's whole point), though bulk-allowing does
+     * clear overrides, so "Allow all" still fully un-monitors what it
+     * covers. Mirrors MONITOR_ONLY_LISTED, where an explicit launcher entry
+     * has always been respected.
+     */
+    fun getMonitorOverrides(): Set<String> =
+        cachedMonitorOverrides
+            ?: (prefs.getStringSet(KEY_MONITOR_OVERRIDES, null)?.toSet() ?: emptySet())
+                .also { cachedMonitorOverrides = it }
+
     fun setWhitelisted(packageName: String, whitelisted: Boolean) {
         val next = getWhitelist().toMutableSet()
         if (whitelisted) next.add(packageName) else next.remove(packageName)
-        prefs.edit().putStringSet(KEY_WHITELIST, next).apply()
+        // Turning monitoring on for one app is the explicit choice
+        // getMonitorOverrides exists to record; turning it back off retracts
+        // it, so re-whitelisting a launcher restores the default carve-out
+        // rather than leaving a stale override behind for the next time it's
+        // un-whitelisted.
+        val nextOverrides = getMonitorOverrides().toMutableSet()
+        if (whitelisted) nextOverrides.remove(packageName) else nextOverrides.add(packageName)
+        prefs.edit()
+            .putStringSet(KEY_WHITELIST, next)
+            .putStringSet(KEY_MONITOR_OVERRIDES, nextOverrides)
+            .apply()
         cachedWhitelist = null
+        cachedMonitorOverrides = null
     }
 
     /** Same as [setWhitelisted] but one prefs write for the whole batch - the Apps tab's per-category bulk on/off. */
     fun setWhitelistedBulk(packageNames: Collection<String>, whitelisted: Boolean) {
         val next = getWhitelist().toMutableSet()
         if (whitelisted) next.addAll(packageNames) else next.removeAll(packageNames.toSet())
-        prefs.edit().putStringSet(KEY_WHITELIST, next).apply()
+        val editor = prefs.edit().putStringSet(KEY_WHITELIST, next)
+        // Asymmetric on purpose - see getMonitorOverrides. "Allow all"
+        // clears any override it covers (so a previously overridden launcher
+        // really does stop being monitored), "Monitor all" adds none.
+        if (whitelisted) {
+            val nextOverrides = getMonitorOverrides().toMutableSet()
+            if (nextOverrides.removeAll(packageNames.toSet())) {
+                editor.putStringSet(KEY_MONITOR_OVERRIDES, nextOverrides)
+                cachedMonitorOverrides = null
+            }
+        }
+        editor.apply()
         cachedWhitelist = null
     }
 
@@ -911,6 +962,8 @@ class PrefsRepository(context: Context) {
         @Volatile
         private var cachedWhitelist: Set<String>? = null
         @Volatile
+        private var cachedMonitorOverrides: Set<String>? = null
+        @Volatile
         private var cachedMonitored: Set<String>? = null
         @Volatile
         private var cachedExplicitKeywords: Set<String>? = null
@@ -922,6 +975,7 @@ class PrefsRepository(context: Context) {
         private const val PREFS_NAME = "content_guard_prefs"
         private const val KEY_MODE = "scope_mode"
         private const val KEY_WHITELIST = "whitelist_packages"
+        private const val KEY_MONITOR_OVERRIDES = "monitor_override_packages"
         private const val KEY_EXPLICIT_KEYWORDS = "explicit_keywords"
         private const val KEY_MONITORED = "monitored_packages"
         private const val KEY_EXTRA_PROTECTED_SERVICES = "extra_protected_accessibility_services"

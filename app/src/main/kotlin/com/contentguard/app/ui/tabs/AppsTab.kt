@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
+import com.contentguard.app.scope.AppScopePolicy
 import com.contentguard.app.scope.PrefsRepository
 import com.contentguard.app.scope.ScopeMode
 import com.contentguard.app.ui.CGBottomNavClearance
@@ -74,6 +75,12 @@ private data class AppEntry(
     // an input method's own window can end up monitored from typing alone,
     // with no app ever opened.
     val isInputMethod: Boolean,
+    // Registers a HOME activity, so under "Monitor all except whitelisted"
+    // it starts out allowed even though it's in no whitelist (see
+    // AppScopePolicy.decide). Surfaced in the row because that's otherwise
+    // an invisible reason for a toggle to be off - the case that sends
+    // someone hunting for a whitelist entry that was never there.
+    val isLauncher: Boolean,
 )
 
 private enum class AppsFilter { ALL, MONITORED, ALLOWED }
@@ -86,6 +93,9 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
     var mode by remember { mutableStateOf(prefs.mode) }
     var whitelist by remember { mutableStateOf(prefs.getWhitelist()) }
     var monitored by remember { mutableStateOf(prefs.getMonitoredSet()) }
+    // Read as state, not straight off the policy, so every toggle below
+    // recomposes the rows - see isMonitored.
+    var monitorOverrides by remember { mutableStateOf(prefs.getMonitorOverrides()) }
     var apps by remember { mutableStateOf(emptyList<AppEntry>()) }
     var filter by remember { mutableStateOf(AppsFilter.ALL) }
     // A flat list of every installed package can run into the hundreds
@@ -98,10 +108,21 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
         apps = withContext(Dispatchers.Default) { loadLaunchableApps(context) }
     }
 
-    fun isMonitored(pkg: String): Boolean = when (mode) {
-        ScopeMode.MONITOR_ALL_EXCEPT_WHITELIST -> pkg !in whitelist
-        ScopeMode.MONITOR_ONLY_LISTED -> pkg in monitored
-    }
+    // Deliberately AppScopePolicy's own decision rather than this tab's
+    // former `pkg !in whitelist` shorthand: gate 1 has carve-outs of its
+    // own (hard exclusions, and launchers under MONITOR_ALL_EXCEPT_WHITELIST
+    // unless explicitly overridden), so answering it here separately meant
+    // the toggle could read "monitored" for an app the service was still
+    // skipping. The state vars are passed in - rather than letting the
+    // policy read prefs itself - so Compose sees the reads and recomposes
+    // the list when a toggle changes any of them.
+    fun isMonitored(pkg: String): Boolean = AppScopePolicy.decide(
+        packageName = pkg,
+        mode = mode,
+        whitelist = whitelist,
+        monitorOverrides = monitorOverrides,
+        monitoredSet = monitored,
+    )
 
     fun setMonitored(pkg: String, monitor: Boolean) {
         // Turning monitoring OFF for an app is the weakening direction
@@ -121,6 +142,7 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                     // "Monitor" off means "add to whitelist" (trusted).
                     prefs.setWhitelisted(pkg, !monitor)
                     whitelist = prefs.getWhitelist()
+                    monitorOverrides = prefs.getMonitorOverrides()
                 }
                 ScopeMode.MONITOR_ONLY_LISTED -> {
                     prefs.setMonitored(pkg, monitor)
@@ -147,6 +169,7 @@ fun AppsTab(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
                 ScopeMode.MONITOR_ALL_EXCEPT_WHITELIST -> {
                     prefs.setWhitelistedBulk(pkgs, !monitor)
                     whitelist = prefs.getWhitelist()
+                    monitorOverrides = prefs.getMonitorOverrides()
                 }
                 ScopeMode.MONITOR_ONLY_LISTED -> {
                     prefs.setMonitoredBulk(pkgs, monitor)
@@ -377,6 +400,10 @@ private fun AppRow(app: AppEntry, monitored: Boolean, onToggle: (Boolean) -> Uni
             }
             val tag = when {
                 app.isInputMethod -> "Input method · ${app.packageName}"
+                // Only while it's actually off: once monitoring is on for
+                // it, the carve-out has been overridden and saying "allowed
+                // by default" would be stale.
+                app.isLauncher && !monitored -> "Home screen · allowed by default · ${app.packageName}"
                 app.hidden -> "Hidden · ${app.packageName}"
                 else -> app.packageName
             }
@@ -455,13 +482,24 @@ private fun loadLaunchableApps(context: Context): List<AppEntry> {
         .map { it.packageName }
         .toSet()
 
+    // Keeps this list's answer aligned with gate 1's on a device where the
+    // accessibility service has never connected (freshly installed, or
+    // switched off): the service is what normally refreshes this set, and
+    // until it does, every HOME handler would read as monitored here while
+    // gate 1 would still skip it.
+    AppScopePolicy.refreshInstalledLaunchers(pm)
+
     // Every installed package, not just launchable ones - background
     // services and other OEM system apps could never be found or
     // whitelisted before, even though they're just as monitorable as any
     // launchable app under "Monitor all except whitelisted". Requires
     // QUERY_ALL_PACKAGES (see AndroidManifest.xml for why that's safe here).
     return pm.getInstalledApplications(0)
-        .filter { it.packageName != context.packageName }
+        // Our own package and system UI are never monitored in any mode
+        // (AppScopePolicy.isHardExcluded), so listing them would just offer
+        // a toggle that can't do anything - the same reason our own package
+        // was already filtered out here.
+        .filter { !AppScopePolicy.isHardExcluded(it.packageName) }
         .map { info ->
             val icon = runCatching { info.loadIcon(pm).toBitmap(96, 96).asImageBitmap() }.getOrNull()
             val label = runCatching { pm.getApplicationLabel(info).toString() }.getOrDefault(info.packageName)
@@ -471,6 +509,7 @@ private fun loadLaunchableApps(context: Context): List<AppEntry> {
                 icon = icon,
                 hidden = info.packageName !in launchablePackages,
                 isInputMethod = info.packageName in inputMethodPackages,
+                isLauncher = AppScopePolicy.isLauncher(info.packageName),
             )
         }
         .sortedBy { it.label.lowercase() }
