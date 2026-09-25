@@ -54,9 +54,20 @@ PKG_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$PKG_ROOT/build/Release"
 
 echo "==> Building ContentGuardAgent, ContentGuardDaemon, ContentGuardRelease"
-xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardAgent -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR"
-xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardDaemon -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR"
-xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardRelease -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR"
+# Extra xcodebuild settings, empty by default so a local build is
+# unchanged. .github/workflows/build-mac.yml sets it to ad-hoc sign during
+# the build (CODE_SIGN_IDENTITY=- etc.): the project uses Automatic signing,
+# which a CI runner with no Apple account can't satisfy. It makes no
+# difference to the output - the codesign step below re-signs every binary
+# with the real ContentGuard Signing identity either way. Deliberately left
+# unquoted so it splits into separate KEY=value arguments.
+XCODEBUILD_EXTRA_ARGS="${XCODEBUILD_EXTRA_ARGS:-}"
+# shellcheck disable=SC2086
+xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardAgent -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR" $XCODEBUILD_EXTRA_ARGS
+# shellcheck disable=SC2086
+xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardDaemon -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR" $XCODEBUILD_EXTRA_ARGS
+# shellcheck disable=SC2086
+xcodebuild -project "$PKG_ROOT/ContentGuard.xcodeproj" -scheme ContentGuardRelease -configuration Release CONFIGURATION_BUILD_DIR="$BUILD_DIR" $XCODEBUILD_EXTRA_ARGS
 
 echo "==> Signing binaries with the self-signed ContentGuard Signing identity"
 codesign --force --sign "$SIGNING_IDENTITY" --options runtime "$BUILD_DIR/ContentGuardAgent.app"

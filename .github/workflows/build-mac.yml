@@ -1,0 +1,165 @@
+# Builds, signs and packages the Mac installer (ContentGuardAgent,
+# ContentGuardDaemon, contentguard-release + the two launchd plists) on a
+# GitHub macOS runner, so the real Mac never has to compile anything.
+#
+# Why this exists: with Santa in LOCKDOWN (ClientMode 2, since the
+# 2026-09-09 client_mode fix), building on the Mac itself fails - Xcode
+# compiles and runs a throwaway manifest executable per Swift package
+# (onnxruntime-swift-package-manager here) with a new hash every time, so
+# no Santa rule can ever match it. Found live on 2026-09-25. The
+# alternatives were dropping Santa to MONITOR for every build, or a
+# transitive "compiler" rule that would let anything the Mac compiles run
+# - a standing hole in LOCKDOWN. Building here keeps LOCKDOWN intact: the
+# Mac only runs Apple's own `installer` on the output, and the binaries
+# inside are signed with the same "ContentGuard Signing" certificate
+# Santa's static CERTIFICATE rule already allows (checked below).
+#
+# The signing key is the sensitive part: anything signed with it runs
+# under LOCKDOWN. So it lives only in the `release` environment's secrets,
+# and this job waits for a required reviewer's approval before it can read
+# them - the same gate deploy-worker.yml and the APK release use.
+#
+# Output: a workflow artifact with the three component .pkg files (not the
+# combined product archive - see build-pkg.sh's closing note on why that
+# one refuses to install on this macOS version). Install on the Mac with
+# `sudo installer -pkg <each> -target /`, in the order make install uses.
+#
+# Only push-triggered for now: GitHub only offers a "Run workflow" button
+# for workflows that exist on the default branch, and this one lives on
+# the Mac branch. Touching anything under mac/ (or this file) builds.
+
+name: Build Mac installer
+
+on:
+  push:
+    branches:
+      - claude/contentguard-macos-phase-0-47king
+    paths:
+      - "mac/**"
+      - ".github/workflows/build-mac.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and sign
+    runs-on: macos-26
+    environment: release
+    timeout-minutes: 45
+    env:
+      # SHA-256 of the "ContentGuard Signing" leaf certificate - must match
+      # the CERTIFICATE rule in profiles/santa-config.mobileconfig's
+      # StaticRules, or Santa blocks every binary in this build.
+      EXPECTED_CERT_SHA256: ef2d492485a1d4b3c74946ffc72da927862af3ea0205ffdd96b96ab3617bc31f
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The classifier model (mac/Model/nudenet_640m.onnx, ~100 MB) is
+          # in Git LFS - without this the package would ship a 134-byte
+          # pointer file instead of the model.
+          lfs: true
+
+      - name: Check the model came through LFS
+        run: |
+          size=$(stat -f%z mac/Model/nudenet_640m.onnx)
+          echo "nudenet_640m.onnx: $size bytes"
+          if [ "$size" -lt 1000000 ]; then
+            echo "::error::mac/Model/nudenet_640m.onnx is only $size bytes - LFS pointer, not the model"
+            exit 1
+          fi
+
+      - name: Select the newest Xcode
+        run: |
+          # The project's MACOSX_DEPLOYMENT_TARGET is 26.5, so take the
+          # newest Xcode on the image rather than whatever is default.
+          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $xcode"
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          echo "macOS SDK: $(xcrun --sdk macosx --show-sdk-version)"
+
+      - name: Import the ContentGuard Signing identity
+        env:
+          SIGNING_P12_BASE64: ${{ secrets.CONTENTGUARD_SIGNING_P12_BASE64 }}
+          SIGNING_P12_PASSWORD: ${{ secrets.CONTENTGUARD_SIGNING_P12_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_P12_BASE64" ]; then
+            echo "::error::CONTENTGUARD_SIGNING_P12_BASE64 isn't set in the release environment's secrets"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/contentguard-signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          p12="$RUNNER_TEMP/contentguard-signing.p12"
+
+          echo "$SIGNING_P12_BASE64" | base64 --decode > "$p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$p12" -k "$keychain" -P "$SIGNING_P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$p12"
+          # Lets codesign use the key without a GUI access prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          # Put it on the search list so `codesign --sign "ContentGuard Signing"`
+          # finds it by name, the same way it does on the Mac.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+          # Self-signed, so trust it for code signing the way the Mac's own
+          # keychain does. Best effort: codesign can sign with an untrusted
+          # identity, and the certificate check further down is what
+          # actually proves the output is right.
+          security find-certificate -c "ContentGuard Signing" -p "$keychain" > "$RUNNER_TEMP/contentguard-signing.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/contentguard-signing.pem" \
+            || echo "::warning::couldn't mark the certificate trusted - continuing, the certificate check below still applies"
+
+          echo "keychain=$keychain" >> "$GITHUB_ENV"
+          security find-identity -p codesigning "$keychain"
+
+      - name: Build, sign and package
+        working-directory: mac
+        env:
+          # Ad-hoc sign during the build - see build-pkg.sh's comment on
+          # XCODEBUILD_EXTRA_ARGS. build-pkg.sh re-signs every binary with
+          # the real identity afterwards.
+          XCODEBUILD_EXTRA_ARGS: CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= CODE_SIGNING_REQUIRED=NO
+        run: ./Installer/build-pkg.sh
+
+      - name: Check every binary is signed with Santa's allowed certificate
+        working-directory: mac/build/Release
+        run: |
+          status=0
+          for bin in ContentGuardAgent.app ContentGuardDaemon ContentGuardRelease; do
+            dir="$RUNNER_TEMP/certs-$bin"
+            mkdir -p "$dir"
+            codesign -d --extract-certificates="$dir/cert" "$bin" 2>/dev/null
+            actual=$(shasum -a 256 "$dir/cert0" | awk '{print $1}')
+            if [ "$actual" = "$EXPECTED_CERT_SHA256" ]; then
+              echo "OK  $bin  $actual"
+            else
+              echo "::error::$bin is signed with certificate $actual, not the one Santa allows ($EXPECTED_CERT_SHA256) - it would be blocked under LOCKDOWN"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Upload the installer packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: contentguard-mac-${{ github.sha }}
+          path: |
+            mac/Installer/contentguard-app.pkg
+            mac/Installer/daemon-plist.pkg
+            mac/Installer/agent-plist.pkg
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          if [ -n "${keychain:-}" ]; then
+            security delete-keychain "$keychain" || true
+          fi
+          rm -f "$RUNNER_TEMP"/contentguard-signing.*
