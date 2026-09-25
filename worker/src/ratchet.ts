@@ -29,7 +29,6 @@ import {
   isSafeAppBundleIdApproved,
   markAllowlistRuleAdditionApplied,
   markClientModeChangeApplied,
-  markKeywordRemovalApplied,
   markLoosenRequestApplied,
   markPasswordChangeApplied,
   markProfileChangeApplied,
@@ -270,11 +269,13 @@ export async function requestRemoveKeyword(db: D1Database, keywordId: number): P
   return queueKeywordRemoval(db, keywordId, existing.keyword);
 }
 
+// No markKeywordRemovalApplied here: deleteBlockedKeywordRow deletes the
+// request row along with the keyword (see its doc comment for why it
+// has to), so there's no row left to mark.
 export async function applyDueKeywordRemovals(db: D1Database): Promise<number> {
   const due = await getDueKeywordRemovals(db);
   for (const request of due) {
     await deleteBlockedKeywordRow(db, request.keyword_id);
-    await markKeywordRemovalApplied(db, request.id);
   }
   return due.length;
 }

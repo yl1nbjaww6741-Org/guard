@@ -827,36 +827,36 @@ export default {
   },
 
   // Cloudflare Cron Trigger entry point - see wrangler.toml's [triggers]
-  // block for the schedule. Applies every rule-loosen request AND every
-  // dashboard password change whose 24h delay has elapsed (ratchet.ts).
+  // block for the schedule. Applies every ratchet queue whose 24h delay
+  // has elapsed (ratchet.ts).
+  //
+  // Each queue runs in its own try/catch. They used to run as one
+  // straight sequence of awaits, so a single throw aborted every queue
+  // after it on every tick, indefinitely - which is what happened when
+  // applyDueKeywordRemovals hit a foreign-key failure (see db.ts's
+  // deleteBlockedKeywordRow): the keyword removal never applied, and
+  // neither did any ALLOWLIST rule addition or client_mode change queued
+  // behind it. A failing queue now only stalls itself, and says so in
+  // the Worker's logs, instead of silently taking the rest with it.
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
-    const appliedLoosens = await applyDueLoosenRequests(env.DB);
-    if (appliedLoosens > 0) {
-      console.log(`applied ${appliedLoosens} due loosen request(s)`);
-    }
-    const appliedPasswordChanges = await applyDuePasswordChanges(env.DB);
-    if (appliedPasswordChanges > 0) {
-      console.log(`applied ${appliedPasswordChanges} due password change(s)`);
-    }
-    const appliedProfileChanges = await applyDueProfileChanges(env);
-    if (appliedProfileChanges > 0) {
-      console.log(`applied ${appliedProfileChanges} due profile change(s)`);
-    }
-    const appliedSafeAppAdditions = await applyDueSafeAppAdditions(env.DB);
-    if (appliedSafeAppAdditions > 0) {
-      console.log(`applied ${appliedSafeAppAdditions} due safe-app addition(s)`);
-    }
-    const appliedKeywordRemovals = await applyDueKeywordRemovals(env.DB);
-    if (appliedKeywordRemovals > 0) {
-      console.log(`applied ${appliedKeywordRemovals} due keyword removal(s)`);
-    }
-    const appliedAllowlistAdditions = await applyDueAllowlistRuleCreations(env.DB);
-    if (appliedAllowlistAdditions > 0) {
-      console.log(`applied ${appliedAllowlistAdditions} due ALLOWLIST rule addition(s)`);
-    }
-    const appliedClientModeChanges = await applyDueClientModeChanges(env.DB);
-    if (appliedClientModeChanges > 0) {
-      console.log(`applied ${appliedClientModeChanges} due client_mode change(s)`);
+    const steps: [string, () => Promise<number>][] = [
+      ["loosen request", () => applyDueLoosenRequests(env.DB)],
+      ["password change", () => applyDuePasswordChanges(env.DB)],
+      ["profile change", () => applyDueProfileChanges(env)],
+      ["safe-app addition", () => applyDueSafeAppAdditions(env.DB)],
+      ["keyword removal", () => applyDueKeywordRemovals(env.DB)],
+      ["ALLOWLIST rule addition", () => applyDueAllowlistRuleCreations(env.DB)],
+      ["client_mode change", () => applyDueClientModeChanges(env.DB)],
+    ];
+    for (const [label, apply] of steps) {
+      try {
+        const applied = await apply();
+        if (applied > 0) {
+          console.log(`applied ${applied} due ${label}(s)`);
+        }
+      } catch (error) {
+        console.error(`failed to apply due ${label}(s):`, error);
+      }
     }
   },
 };

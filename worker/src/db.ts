@@ -1070,8 +1070,25 @@ export async function addBlockedKeyword(db: D1Database, keyword: string): Promis
 // elapsed - the actual DELETE, never called directly from the dashboard
 // API (that only ever queues a removal request, see requestRemoveKeyword
 // in ratchet.ts).
+//
+// pending_keyword_removals goes first, in the same atomic batch: its
+// keyword_id column REFERENCES blocked_keywords(id), and D1 always
+// enforces foreign keys, so deleting the keyword while its own removal
+// request still points at it fails with SQLITE_CONSTRAINT_FOREIGNKEY.
+// That is exactly how this used to break: the scheduled handler deleted
+// the keyword first, threw on every 15-minute tick, and every due
+// removal sat at "any moment now" forever. Migration 0011's manual
+// cleanup had already hit the same constraint and ordered its deletes
+// the same way. The request row isn't kept as history - with the
+// constraint in place there's nothing left for it to reference - which
+// costs nothing: the table only ever drove the dashboard's queue.
+// Batched so a failure part-way can't leave a keyword with its removal
+// request gone but the keyword itself still blocked (or the reverse).
 export async function deleteBlockedKeywordRow(db: D1Database, id: number): Promise<void> {
-  await db.prepare(`DELETE FROM blocked_keywords WHERE id = ?1`).bind(id).run();
+  await db.batch([
+    db.prepare(`DELETE FROM pending_keyword_removals WHERE keyword_id = ?1`).bind(id),
+    db.prepare(`DELETE FROM blocked_keywords WHERE id = ?1`).bind(id),
+  ]);
 }
 
 export interface PendingKeywordRemoval {
@@ -1146,8 +1163,4 @@ export async function getDueKeywordRemovals(db: D1Database): Promise<PendingKeyw
     .bind(Date.now())
     .all<PendingKeywordRemoval>();
   return result.results ?? [];
-}
-
-export async function markKeywordRemovalApplied(db: D1Database, requestId: number): Promise<void> {
-  await db.prepare(`UPDATE pending_keyword_removals SET applied_at = ?1 WHERE id = ?2`).bind(Date.now(), requestId).run();
 }
