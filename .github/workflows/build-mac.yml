@@ -19,6 +19,19 @@
 # and this job waits for a required reviewer's approval before it can read
 # them - the same gate deploy-worker.yml and the APK release use.
 #
+# Setting up (or rotating) the two secrets, on the Mac as the user whose
+# login keychain holds the identity (`security find-identity -p codesigning`
+# lists it - done as lukepowell on 2026-09-25):
+#   1. Keychain Access > login > My Certificates > right-click
+#      "ContentGuard Signing" > Export > .p12, with an export password.
+#   2. `base64 -i cg-signing.p12 | pbcopy`, then in Settings > Environments >
+#      release > Environment secrets add CONTENTGUARD_SIGNING_P12_BASE64 (the
+#      clipboard) and CONTENTGUARD_SIGNING_P12_PASSWORD (the export password).
+#   3. `rm -P cg-signing.p12`.
+# If the identity is ever replaced rather than re-exported, EXPECTED_CERT_SHA256
+# below and the CERTIFICATE rule in profiles/santa-config.mobileconfig (and
+# profiles/pppc.mobileconfig's CodeRequirement) all have to change with it.
+#
 # Output: a workflow artifact with the three component .pkg files (not the
 # combined product archive - see build-pkg.sh's closing note on why that
 # one refuses to install on this macOS version). Install on the Mac with
