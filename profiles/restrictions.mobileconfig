@@ -11,7 +11,7 @@
     <key>PayloadUUID</key>
     <string>02C634B6-1924-4ADC-9E63-600C318508A9</string>
     <key>PayloadVersion</key>
-    <integer>5</integer>
+    <integer>6</integer>
     <key>PayloadScope</key>
     <string>System</string>
     <key>PayloadRemovalDisallowed</key>
@@ -26,7 +26,7 @@
             <key>PayloadUUID</key>
             <string>9E25880A-CCAF-4034-B1BC-1AF9D59008A5</string>
             <key>PayloadVersion</key>
-            <integer>5</integer>
+            <integer>6</integer>
             <key>PayloadDisplayName</key>
             <string>ContentGuard Restrictions Payload</string>
 
@@ -51,8 +51,25 @@
             <true/>
             <key>allowLocalUserCreation</key>
             <false/>
+            <!--
+              Deliberately true since 2026-09-25 (version 6), explicit user
+              request: false greyed out the whole Apple Account pane in
+              System Settings - iCloud settings, Personal Information,
+              Sign-In & Security, Media and Purchases, Sign Out - and
+              Internet Accounts, under an "Account changes are restricted
+              by a profile" banner. It's one switch for all of that;
+              macOS has no key that unlocks iCloud settings alone. What
+              this gives up: the profile no longer stops signing out of
+              the Apple Account or adding other Internet Accounts (mail,
+              calendar, cloud storage). Neither is part of the content-
+              blocking stack itself - ContentGuard, Santa, the Chrome
+              policy and DNS filtering don't depend on it - which is why
+              this was judged an acceptable loosening. Pushed through the
+              panel's profile ratchet (24h delay + password) like any
+              other profile change.
+            -->
             <key>allowAccountModification</key>
-            <false/>
+            <true/>
             <key>allowUIConfigurationProfileInstallation</key>
             <false/>
             <key>allowStartupDiskModification</key>
