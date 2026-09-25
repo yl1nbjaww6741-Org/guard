@@ -15,6 +15,17 @@ final class HeartbeatClient {
     var captureActive: Bool = false
     var modelHash: String = ""
 
+    /// Called on the main queue when the daemon becomes unreachable
+    /// (`false`, after ContentGuardConfig.daemonUnreachableAlertAfterMissedHeartbeats
+    /// consecutive failed heartbeats) and again when it comes back (`true`).
+    /// Only ever fires on a change, never repeatedly for the same state.
+    /// See that constant's doc comment for the real outage this exists for.
+    var onDaemonReachabilityChanged: ((Bool) -> Void)?
+
+    // Only touched on `queue`, like everything else in this class.
+    private var consecutiveFailedHeartbeats = 0
+    private var reportedDaemonUnreachable = false
+
     func start() {
         connectSocket()
         let t = DispatchSource.makeTimerSource(queue: queue)
@@ -137,11 +148,43 @@ final class HeartbeatClient {
                 framesProcessed: self.framesProcessed,
                 pid: ProcessInfo.processInfo.processIdentifier
             )
-            self.trySend(.heartbeat(data))
+            self.recordHeartbeatResult(delivered: self.trySend(.heartbeat(data)))
         }
     }
 
-    private func trySend(_ message: IPCMessage) {
+    // Heartbeats only, not blackout/appDetection sends: heartbeats are the
+    // one message on a fixed cadence, so "N in a row failed" means N ticks
+    // of awake time with no daemon listening. A dead daemon's socket
+    // refuses the connect(2) outright, so a failed send is a real signal,
+    // not a guess.
+    private func recordHeartbeatResult(delivered: Bool) {
+        if delivered {
+            consecutiveFailedHeartbeats = 0
+            if reportedDaemonUnreachable {
+                reportedDaemonUnreachable = false
+                NSLog("ContentGuardAgent: daemon reachable again - clearing the daemon-down warning")
+                notifyReachability(true)
+            }
+            return
+        }
+        consecutiveFailedHeartbeats += 1
+        if !reportedDaemonUnreachable &&
+            consecutiveFailedHeartbeats >= ContentGuardConfig.daemonUnreachableAlertAfterMissedHeartbeats {
+            reportedDaemonUnreachable = true
+            NSLog("ContentGuardAgent: daemon unreachable for \(consecutiveFailedHeartbeats) heartbeats in a row - showing the daemon-down warning")
+            notifyReachability(false)
+        }
+    }
+
+    private func notifyReachability(_ reachable: Bool) {
+        let callback = onDaemonReachabilityChanged
+        DispatchQueue.main.async { callback?(reachable) }
+    }
+
+    /// Returns whether the message actually went out - used by
+    /// recordHeartbeatResult to tell a live daemon from a missing one.
+    @discardableResult
+    private func trySend(_ message: IPCMessage) -> Bool {
         // Used to just call connectSocket() and return here, dropping
         // whatever message triggered this - harmless for a heartbeat (the
         // next 5s tick sends a fresh one regardless), but a real gap for a
@@ -161,10 +204,11 @@ final class HeartbeatClient {
             // heartbeats self-heal on the next tick regardless, and a lost
             // appDetection just means AppLockManager needs one more real
             // detection to reach its threshold, not a silent, permanent gap.
-            return
+            return false
         }
         do {
             try connection.send(message)
+            return true
         } catch {
             // Connection died - drop it and let the next heartbeat tick (or
             // the reconnect timer) re-establish it. Deliberately not
@@ -175,6 +219,7 @@ final class HeartbeatClient {
             // system closed in the meantime - the agent doesn't need to be
             // clever here, just keep trying to reconnect.
             self.connection = nil
+            return false
         }
     }
 }

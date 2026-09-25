@@ -13,6 +13,10 @@ final class OverlayManager {
     private var panels: [CGDirectDisplayID: NSPanel] = [:]
     private(set) var isCovering = false
 
+    // The daemon-down warning banner, one per screen while it's showing,
+    // empty otherwise - see showDaemonDownWarning(). Main thread only.
+    private var warningPanels: [NSPanel] = []
+
     init() {
         NotificationCenter.default.addObserver(
             self,
@@ -34,7 +38,7 @@ final class OverlayManager {
     /// itself whenever it's covering, a positive detection covering a
     /// positive detection, indefinitely.
     var ownWindowNumbers: Set<Int> {
-        Set(panels.values.map(\.windowNumber))
+        Set(panels.values.map(\.windowNumber) + warningPanels.map(\.windowNumber))
     }
 
     /// Dispatches to the main thread internally rather than trusting every
@@ -68,6 +72,83 @@ final class OverlayManager {
                 panel.alphaValue = 0.0
             }
         }
+    }
+
+    // MARK: - Daemon-down warning
+
+    /// A red strip across the top of every screen saying the daemon isn't
+    /// running, shown by HeartbeatClient.onDaemonReachabilityChanged and
+    /// kept up until the daemon answers again.
+    ///
+    /// Deliberately a click-through banner, not cover(): the agent covering
+    /// the screen on its own has already caused a real lockout on this Mac
+    /// once (see main.swift's classifier-failure comment), and "the daemon
+    /// is gone" is exactly the state where nothing else is around to clear
+    /// a cover again. The point is that the daemon being disabled can't go
+    /// unnoticed for weeks again, not to block the machine over it.
+    func showDaemonDownWarning() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.warningPanels.isEmpty else { return }
+            self.warningPanels = NSScreen.screens.map(self.makeWarningPanel(for:))
+            for panel in self.warningPanels {
+                panel.orderFrontRegardless()
+            }
+        }
+    }
+
+    func hideDaemonDownWarning() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            for panel in self.warningPanels {
+                panel.orderOut(nil)
+            }
+            self.warningPanels.removeAll()
+        }
+    }
+
+    private func makeWarningPanel(for screen: NSScreen) -> NSPanel {
+        let height: CGFloat = 44
+        // visibleFrame, not frame, so the strip sits just under the menu
+        // bar rather than behind it.
+        let frame = NSRect(
+            x: screen.frame.minX,
+            y: screen.visibleFrame.maxY - height,
+            width: screen.frame.width,
+            height: height
+        )
+        let panel = NSPanel(
+            contentRect: frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false,
+            screen: screen
+        )
+        panel.level = .screenSaver
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.isOpaque = true
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.backgroundColor = NSColor(calibratedRed: 0.72, green: 0.11, blue: 0.11, alpha: 1.0)
+
+        let label = NSTextField(labelWithString:
+            "ContentGuard's background service isn't running - protection is reduced. " +
+            "Re-enable it: sudo launchctl enable system/com.contentguard.daemon"
+        )
+        label.font = NSFont.boldSystemFont(ofSize: 13)
+        label.textColor = .white
+        label.alignment = .center
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let contentView = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        contentView.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+        ])
+        panel.contentView = contentView
+        return panel
     }
 
     // MARK: - Panel lifecycle
@@ -116,6 +197,9 @@ final class OverlayManager {
         // orderFrontRegardless() when actively covering guards against any
         // ordering hiccup during the transition rather than assuming
         // collectionBehavior alone is airtight.
+        for panel in warningPanels {
+            panel.orderFrontRegardless()
+        }
         guard isCovering else { return }
         for panel in panels.values {
             panel.orderFrontRegardless()

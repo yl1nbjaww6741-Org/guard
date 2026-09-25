@@ -46,6 +46,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("ContentGuardAgent: classifier failed to load (\(error)) - no local cover, daemon's heartbeat-based fail-closed is the backstop")
         }
 
+        // The one place anything watches for the daemon going away - see
+        // ContentGuardConfig.daemonUnreachableAlertAfterMissedHeartbeats.
+        // Set before start() so the very first ticks are already covered.
+        heartbeatClient.onDaemonReachabilityChanged = { [overlayManager] reachable in
+            if reachable {
+                overlayManager.hideDaemonDownWarning()
+            } else {
+                overlayManager.showDaemonDownWarning()
+            }
+        }
         heartbeatClient.start()
 
         Task {

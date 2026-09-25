@@ -40,7 +40,24 @@ echo "==> ContentGuard postinstall: loading launchd jobs (if their plists are pr
 if [ -f /Library/LaunchDaemons/com.contentguard.daemon.plist ]; then
     chown root:wheel /Library/LaunchDaemons/com.contentguard.daemon.plist
     chmod 644 /Library/LaunchDaemons/com.contentguard.daemon.plist
+    # enable before bootstrap: launchd refuses to bootstrap a job that's
+    # marked disabled ("Bootstrap failed: 5: Input/output error"), and the
+    # 2>/dev/null below swallowed that - so on 2026-09-25 the daemon was
+    # found disabled (and unloaded) since 2026-09-09, and reinstalling
+    # could never have brought it back. `enable` on an already-enabled job
+    # is a no-op, so this is safe on every install.
+    launchctl enable system/com.contentguard.daemon 2>/dev/null || true
     launchctl bootstrap system /Library/LaunchDaemons/com.contentguard.daemon.plist 2>/dev/null || true
+    # Still || true - bootstrap also fails on a job that's already loaded,
+    # which is the normal case on a reinstall that preinstall's bootout
+    # raced - but no longer silent about the outcome: say whether the job
+    # is actually loaded now, so a failed install shows in the installer
+    # log instead of only surfacing weeks later.
+    if launchctl print system/com.contentguard.daemon >/dev/null 2>&1; then
+        echo "==> ContentGuard postinstall: com.contentguard.daemon is loaded"
+    else
+        echo "==> ContentGuard postinstall: WARNING - com.contentguard.daemon is NOT loaded after bootstrap"
+    fi
 fi
 
 CONSOLE_USER="$(stat -f%Su /dev/console)"
@@ -49,6 +66,8 @@ if [ -f /Library/LaunchAgents/com.contentguard.agent.plist ] && [ -n "$CONSOLE_U
     chmod 644 /Library/LaunchAgents/com.contentguard.agent.plist
     CONSOLE_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || true)"
     if [ -n "$CONSOLE_UID" ]; then
+        # Same enable-before-bootstrap reasoning as the daemon above.
+        launchctl enable "gui/$CONSOLE_UID/com.contentguard.agent" 2>/dev/null || true
         launchctl bootstrap "gui/$CONSOLE_UID" /Library/LaunchAgents/com.contentguard.agent.plist 2>/dev/null || true
     fi
 fi

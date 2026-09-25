@@ -163,6 +163,24 @@ enum ContentGuardConfig {
     /// HeartbeatMonitor.swift.
     static let heartbeatGraceSeconds: TimeInterval = 15.0
 
+    /// The reverse direction of heartbeatGraceSeconds: how many heartbeat
+    /// ticks in a row the agent can fail to reach the daemon's socket
+    /// before it puts up the "daemon isn't running" warning banner (see
+    /// HeartbeatClient.onDaemonReachabilityChanged and
+    /// OverlayManager.showDaemonDownWarning). 24 ticks = 2 minutes of
+    /// *awake* time - counted in ticks, not wall-clock seconds, so a Mac
+    /// that slept for an hour doesn't trip it on the first tick after
+    /// waking. Two minutes comfortably covers launchd's KeepAlive restart
+    /// after a crash and a `make install` reinstall, which are the two
+    /// legitimate ways the socket goes away briefly.
+    ///
+    /// Exists because the daemon went unloaded on the real Mac for over two
+    /// weeks (2026-09-09 to 2026-09-25, `launchctl print-disabled` showed
+    /// it disabled) and nothing noticed: the daemon fails closed when the
+    /// *agent* goes quiet, but nothing watched for the daemon going quiet,
+    /// and the agent's heartbeat sends were dropped silently the whole time.
+    static let daemonUnreachableAlertAfterMissedHeartbeats = 24
+
     /// 10x the capture interval. Found the hard way, on the real Mac: a
     /// process can stay alive and keep sending perfectly on-schedule
     /// heartbeats with captureActive=true, while the actual SCStream has
