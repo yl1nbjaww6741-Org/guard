@@ -167,7 +167,9 @@ final class AppScopeManager: NSObject {
         let excludedBundleIDs = Set(excludedApplications.map(\.bundleIdentifier))
         return latestContent.windows.filter { window in
             guard let owner = window.owningApplication else { return false }
-            return excludedBundleIDs.contains(owner.bundleIdentifier)
+            // A safe app's floating window (Finder's Quick Look preview)
+            // is never excluded - see isForceCaptureFloatingWindow().
+            return excludedBundleIDs.contains(owner.bundleIdentifier) && !isForceCaptureFloatingWindow(window)
         }
     }
 
@@ -203,8 +205,24 @@ final class AppScopeManager: NSObject {
         let safeBundleIDs = effectiveSafeAppBundleIDs
         return latestContent.windows.filter { window in
             guard let owner = window.owningApplication else { return true }
-            return !safeBundleIDs.contains(owner.bundleIdentifier)
+            // Finder's Quick Look preview gets its own dedicated stream
+            // even though Finder itself is safe-listed - a small preview
+            // on a big display is exactly the dilution case these streams
+            // exist for.
+            return !safeBundleIDs.contains(owner.bundleIdentifier) || isForceCaptureFloatingWindow(window)
         }
+    }
+
+    /// A floating window (layer in ContentGuardConfig.floatingWindowLayers)
+    /// owned by one of ContentGuardConfig.forceCaptureFloatingWindowBundleIDs -
+    /// in practice Finder's Quick Look preview, confirmed live as a
+    /// Finder-owned, untitled, layer-3 window that exists only while the
+    /// preview is open. See that config's doc comment for the evidence.
+    func isForceCaptureFloatingWindow(_ window: SCWindow) -> Bool {
+        guard let owner = window.owningApplication,
+              ContentGuardConfig.forceCaptureFloatingWindowBundleIDs.contains(owner.bundleIdentifier)
+        else { return false }
+        return window.isOnScreen && ContentGuardConfig.floatingWindowLayers.contains(window.windowLayer)
     }
 
     /// Whether any currently on-screen window belongs to one of
@@ -242,7 +260,6 @@ final class AppScopeManager: NSObject {
     /// specific purpose, catching ordinary system chrome that's on
     /// screen essentially always.
     private var lastLoggedForceCaptureMatch = false
-    private var lastLoggedQuickLookCandidates: Set<String> = []
 
     func hasForceCaptureWindow() -> Bool {
         guard let latestContent else { return false }
@@ -255,37 +272,20 @@ final class AppScopeManager: NSObject {
         // see this function's own doc comment for the live evidence that
         // motivated this specifically (screencaptureui's own persistent
         // listener window has an empty title).
+        // Plus any safe-listed app's floating window (Finder's Quick Look
+        // preview) - no title requirement there, the real panel is
+        // untitled; the floating layer itself is the signal.
         let realMatches = allBundleMatches.filter { !($0.title ?? "").isEmpty }
+            + latestContent.windows.filter { isForceCaptureFloatingWindow($0) }
         let result = !realMatches.isEmpty
         if result != lastLoggedForceCaptureMatch {
             lastLoggedForceCaptureMatch = result
             if result {
-                let details = realMatches.map { "title=\($0.title ?? "nil") frame=\($0.frame)" }.joined(separator: "; ")
+                let details = realMatches.map { "owner=\($0.owningApplication?.bundleIdentifier ?? "nil") layer=\($0.windowLayer) title=\($0.title ?? "nil") frame=\($0.frame)" }.joined(separator: "; ")
                 logger.log("force-capture window match: \(details, privacy: .public)")
             } else {
                 logger.log("force-capture window match cleared")
             }
-        }
-        // Quick Look verification diagnostic (2026-10-09): its bundle ID in
-        // forceCaptureOnBundleIDs isn't confirmed on the real Mac yet, and
-        // if it's wrong - or the panel turns out titleless - the symptom
-        // would be silent (no resume, nothing logged above). So log, on
-        // change only, every on-screen window whose owner merely looks
-        // like Quick Look, whether or not it matched. One real Space-bar
-        // preview then shows the actual owner, title and match result in
-        // `log stream --predicate 'subsystem == "com.contentguard.agent"'`.
-        let quickLookCandidates = Set(latestContent.windows.compactMap { window -> String? in
-            guard let owner = window.owningApplication else { return nil }
-            let looksLikeQuickLook = owner.bundleIdentifier.lowercased().contains("quicklook")
-                || owner.applicationName.lowercased().contains("quick look")
-                || owner.applicationName.lowercased().contains("quicklook")
-            guard looksLikeQuickLook else { return nil }
-            let matched = forceCaptureBundleIDs.contains(owner.bundleIdentifier) && !(window.title ?? "").isEmpty
-            return "owner=\(owner.bundleIdentifier) title=\"\(window.title ?? "")\" frame=\(window.frame) forcesCapture=\(matched)"
-        })
-        if quickLookCandidates != lastLoggedQuickLookCandidates {
-            lastLoggedQuickLookCandidates = quickLookCandidates
-            logger.log("quick look windows on screen: \(quickLookCandidates.isEmpty ? "none" : quickLookCandidates.sorted().joined(separator: "; "), privacy: .public)")
         }
         // Titleless bundle-ID matches (the persistent listener window)
         // are deliberately NOT logged at all, even at a lower level -

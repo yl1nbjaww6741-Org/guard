@@ -118,15 +118,40 @@ enum ContentGuardConfig {
     /// sat completely unscanned with capture paused. Listing it here
     /// forces capture back on for as long as a titled Quick Look window
     /// is on screen, while Finder's own windows stay excluded as before.
-    /// Bundle ID taken from how window managers (yabai etc.) identify the
-    /// Quick Look panel - NOT yet confirmed on the real Mac the way
-    /// screencaptureui was; AppScopeManager.hasForceCaptureWindow() logs
-    /// any window whose owner looks like Quick Look, matched or not, so
-    /// one real preview settles it (see that function's comment).
+    /// Kept as a fallback for other macOS versions/contexts - but see
+    /// forceCaptureFloatingWindowBundleIDs below: on the real Mac the
+    /// Finder preview turned out NOT to be this process at all.
     static let forceCaptureOnBundleIDs: Set<String> = [
         "com.apple.screencaptureui",
         "com.apple.quicklook.QuickLookUIService",
     ]
+
+    /// Apps that stay safe-listed, EXCEPT for their floating windows
+    /// (window layer above the normal 0) - those force capture on and are
+    /// scanned like any risky window. Exists for Finder's Quick Look.
+    ///
+    /// Confirmed live on the real Mac (2026-10-09, CGWindowList dump with a
+    /// preview open vs. closed): the Space-bar preview is a Finder-owned
+    /// window at layer 3 (floating panel level) with an EMPTY title - not a
+    /// QuickLookUIService window, which is why the QuickLookUIService entry
+    /// above never fired (agent log stayed silent with a preview open). With
+    /// the preview closed, Finder had no layer-3 window at all, so this
+    /// doesn't keep capture running just because Finder is open (the
+    /// battery trap screencaptureui's always-present listener window caused).
+    /// No title requirement here, unlike forceCaptureOnBundleIDs - the
+    /// layer is the signal, and the real panel has no title.
+    ///
+    /// Side effect, accepted: Finder's other floating panels (e.g. the
+    /// Inspector, Option-Cmd-I) also get scanned while open. Harmless, a
+    /// little extra work.
+    static let forceCaptureFloatingWindowBundleIDs: Set<String> = [
+        "com.apple.finder",
+    ]
+
+    /// Window layers counted as "floating" for the rule above: above normal
+    /// windows (0), below the menu bar/system overlays (Window Server's
+    /// menu bar sat at 24 in the same dump; Finder's desktop is negative).
+    static let floatingWindowLayers: ClosedRange<Int> = 1...23
 
     /// Confidence threshold for NudeNetClassifier before triggering a
     /// blackout. A single borderline frame at ~0.6 shouldn't cost 10
