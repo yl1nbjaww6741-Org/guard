@@ -87,8 +87,18 @@ final class AppScopeManager: NSObject {
     /// from the compiled baseline (that would require a recompile, by
     /// design - the whole reason the baseline is a Swift constant and
     /// not itself dashboard-managed).
+    ///
+    /// forceCaptureOnBundleIDs are subtracted last, so nothing - not even a
+    /// dashboard whitelist entry - can turn a force-capture process (the
+    /// screenshot panel, Quick Look) back into a blind spot. Without this,
+    /// whitelisting one of them on the panel would both exclude its
+    /// windows from the whole-display capture and drop them from
+    /// riskyAppWindows(), silently undoing hasForceCaptureWindow()'s
+    /// resume. A tightening only, so no ratchet involved.
     private var effectiveSafeAppBundleIDs: Set<String> {
-        ContentGuardConfig.safeAppBundleIDs.union(syncedSafeAppBundleIDs)
+        ContentGuardConfig.safeAppBundleIDs
+            .union(syncedSafeAppBundleIDs)
+            .subtracting(ContentGuardConfig.forceCaptureOnBundleIDs)
     }
 
     override init() {
@@ -232,6 +242,7 @@ final class AppScopeManager: NSObject {
     /// specific purpose, catching ordinary system chrome that's on
     /// screen essentially always.
     private var lastLoggedForceCaptureMatch = false
+    private var lastLoggedQuickLookCandidates: Set<String> = []
 
     func hasForceCaptureWindow() -> Bool {
         guard let latestContent else { return false }
@@ -254,6 +265,27 @@ final class AppScopeManager: NSObject {
             } else {
                 logger.log("force-capture window match cleared")
             }
+        }
+        // Quick Look verification diagnostic (2026-10-09): its bundle ID in
+        // forceCaptureOnBundleIDs isn't confirmed on the real Mac yet, and
+        // if it's wrong - or the panel turns out titleless - the symptom
+        // would be silent (no resume, nothing logged above). So log, on
+        // change only, every on-screen window whose owner merely looks
+        // like Quick Look, whether or not it matched. One real Space-bar
+        // preview then shows the actual owner, title and match result in
+        // `log stream --predicate 'subsystem == "com.contentguard.agent"'`.
+        let quickLookCandidates = Set(latestContent.windows.compactMap { window -> String? in
+            guard let owner = window.owningApplication else { return nil }
+            let looksLikeQuickLook = owner.bundleIdentifier.lowercased().contains("quicklook")
+                || owner.applicationName.lowercased().contains("quick look")
+                || owner.applicationName.lowercased().contains("quicklook")
+            guard looksLikeQuickLook else { return nil }
+            let matched = forceCaptureBundleIDs.contains(owner.bundleIdentifier) && !(window.title ?? "").isEmpty
+            return "owner=\(owner.bundleIdentifier) title=\"\(window.title ?? "")\" frame=\(window.frame) forcesCapture=\(matched)"
+        })
+        if quickLookCandidates != lastLoggedQuickLookCandidates {
+            lastLoggedQuickLookCandidates = quickLookCandidates
+            logger.log("quick look windows on screen: \(quickLookCandidates.isEmpty ? "none" : quickLookCandidates.sorted().joined(separator: "; "), privacy: .public)")
         }
         // Titleless bundle-ID matches (the persistent listener window)
         // are deliberately NOT logged at all, even at a lower level -
@@ -411,8 +443,16 @@ final class AppScopeManager: NSObject {
     /// = self` inside its own init) - CaptureManager.start() calls this
     /// explicitly right after its own initial refresh() instead, once the
     /// delegate is guaranteed to be wired.
+    ///
+    /// Also requires no force-capture window on screen (added alongside
+    /// Quick Look, 2026-10-09). Without it, a regular app quitting while a
+    /// Quick Look preview was open would re-pause capture via the
+    /// launch/quit path, and reconcileRiskyWindowStreams() would only
+    /// resume it again on its next 5s tick - a pause/resume flap leaving
+    /// up to 5s of the preview unscanned each time. Uses the last
+    /// refresh()'s snapshot, at most one poll tick stale.
     func evaluateCapturePauseEligibility() {
-        if allRunningRegularAppsAreSafe() {
+        if allRunningRegularAppsAreSafe() && !hasForceCaptureWindow() {
             delegate?.appScopeManagerAllRunningAppsAreSafe(self)
         } else {
             delegate?.appScopeManagerNonSafeAppIsRunning(self)

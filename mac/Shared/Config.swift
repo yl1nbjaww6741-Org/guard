@@ -105,8 +105,27 @@ enum ContentGuardConfig {
     /// for the screenshot review panel/editor via a real diagnostic run
     /// on the actual Mac (see git history: "frame delivered from window
     /// <id> owner=com.apple.screencaptureui"), not guessed.
+    ///
+    /// com.apple.quicklook.QuickLookUIService added 2026-10-09, explicit
+    /// user request ("keep Finder whitelisted but Quick Look blocked"):
+    /// pressing Space on a file in Finder (or Mail, the Desktop, etc.)
+    /// opens a preview that plays videos and shows photos - but on
+    /// current macOS that panel is NOT a Finder window, it's owned by
+    /// this out-of-process service. Not .regular (no Dock icon), so it's
+    /// invisible to allRunningRegularAppsAreSafe() exactly like the
+    /// screenshot review panel above - with only safe-listed apps
+    /// running (Finder, Terminal...), a Quick Look preview of anything
+    /// sat completely unscanned with capture paused. Listing it here
+    /// forces capture back on for as long as a titled Quick Look window
+    /// is on screen, while Finder's own windows stay excluded as before.
+    /// Bundle ID taken from how window managers (yabai etc.) identify the
+    /// Quick Look panel - NOT yet confirmed on the real Mac the way
+    /// screencaptureui was; AppScopeManager.hasForceCaptureWindow() logs
+    /// any window whose owner looks like Quick Look, matched or not, so
+    /// one real preview settles it (see that function's comment).
     static let forceCaptureOnBundleIDs: Set<String> = [
         "com.apple.screencaptureui",
+        "com.apple.quicklook.QuickLookUIService",
     ]
 
     /// Confidence threshold for NudeNetClassifier before triggering a
