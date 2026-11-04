@@ -156,7 +156,7 @@ extension AppDelegate: FrameProcessorDelegate {
     // detection."
     func frameProcessor(_ processor: FrameProcessor, didDetect detection: BlackoutData, from source: CaptureSource) {
         NSLog("ContentGuardAgent: DETECTED - class=\(detection.detectionClass) confidence=\(detection.confidence) source=\(source)")
-        quitFrontmostApp()
+        quitFrontmostApp(detectedIn: source)
     }
 
     func frameProcessorDidProcessFrame(_ processor: FrameProcessor) {
@@ -175,14 +175,28 @@ extension AppDelegate: FrameProcessorDelegate {
     /// FrameProcessor's background queue, and NSWorkspace/NSRunningApplication
     /// are AppKit, which already crashed once this session (SIGTRAP) when
     /// called off the main thread. Not repeating that.
-    private func quitFrontmostApp() {
+    ///
+    /// Quick Look is the exception: its preview is a Finder window, and
+    /// Finder is never terminated, so it gets closed instead (see
+    /// QuickLookCloser.swift) - when the detection came from the preview's
+    /// own stream, or from the display stream while Finder is frontmost
+    /// with a preview open.
+    private func quitFrontmostApp(detectedIn source: CaptureSource) {
         DispatchQueue.main.async {
+            if case .window(let windowID) = source, QuickLookCloser.isQuickLookWindow(windowID) {
+                QuickLookCloser.close()
+                return
+            }
             guard let frontmost = NSWorkspace.shared.frontmostApplication else {
                 NSLog("ContentGuardAgent: no frontmost app to terminate")
                 return
             }
             guard let bundleID = frontmost.bundleIdentifier,
                   !ContentGuardConfig.neverTerminateBundleIDs.contains(bundleID) else {
+                if frontmost.bundleIdentifier == "com.apple.finder", QuickLookCloser.isQuickLookOpen() {
+                    QuickLookCloser.close()
+                    return
+                }
                 NSLog("ContentGuardAgent: frontmost app (\(frontmost.bundleIdentifier ?? "unknown")) is on the never-terminate list - not quitting")
                 return
             }
