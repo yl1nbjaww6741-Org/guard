@@ -619,6 +619,28 @@ class PrefsRepository(context: Context) {
     }
 
     /**
+     * Same idea as [settingsGuardCooldownEligibleAtMillis], but for the
+     * system per-app "Storage usage" page (Settings > Apps > ContentGuard >
+     * Storage, with its Clear cache / Clear data buttons) - see
+     * ContentGuardService's GATE_STORAGE_GUARD. Kept as its own value rather
+     * than sharing the settings-guard one because this screen's delay is a
+     * fixed [STORAGE_GUARD_DELAY_MS] (24h) regardless of
+     * [delayBeforeUnlockEnabled]/[delayBeforeUnlockMinutes]: a shorter
+     * cooldown started on App info must never also unlock this page.
+     * Persisted for the same reason - restarting the process mustn't skip
+     * the wait. 0 means no cooldown is running.
+     */
+    var storageGuardCooldownEligibleAtMillis: Long
+        get() = prefs.getLong(KEY_STORAGE_GUARD_COOLDOWN_ELIGIBLE_AT, 0L)
+        set(value) {
+            prefs.edit().putLong(KEY_STORAGE_GUARD_COOLDOWN_ELIGIBLE_AT, value).apply()
+        }
+
+    fun clearStorageGuardCooldown() {
+        prefs.edit().remove(KEY_STORAGE_GUARD_COOLDOWN_ELIGIBLE_AT).apply()
+    }
+
+    /**
      * A weakening action whose password challenge has already been passed,
      * but which [delayBeforeUnlockEnabled] defers rather than applying
      * immediately. Deliberately a small, serializable descriptor - not the
@@ -1009,6 +1031,10 @@ class PrefsRepository(context: Context) {
         private const val KEY_PENDING_ELIGIBLE_AT = "pending_weaken_eligible_at"
         private const val KEY_PENDING_COUNT = "pending_weaken_action_count"
         private const val KEY_SETTINGS_GUARD_COOLDOWN_ELIGIBLE_AT = "settings_guard_cooldown_eligible_at"
+        private const val KEY_STORAGE_GUARD_COOLDOWN_ELIGIBLE_AT = "storage_guard_cooldown_eligible_at"
+
+        /** Fixed delay for the Storage usage page guard - see [storageGuardCooldownEligibleAtMillis]. */
+        const val STORAGE_GUARD_DELAY_MS = 24 * 60 * 60_000L
         private const val PASSWORD_SALT = "contentguard-v1-"
         const val DEFAULT_THRESHOLD = 0.80f
         const val DEFAULT_LOCKOUT_MINUTES = 1
