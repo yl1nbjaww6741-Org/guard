@@ -1277,7 +1277,8 @@ class ContentGuardService : AccessibilityService() {
                 return
             }
 
-            handleBlock(pkg, "score=$score")
+            val decisionDetail = nsfwClassifier.lastDecisionDetail()
+            handleBlock(pkg, if (decisionDetail != null) "score=$score $decisionDetail" else "score=$score")
         } finally {
             if (analysisBitmap !== bitmap) analysisBitmap.recycle()
             bitmap.recycle()
