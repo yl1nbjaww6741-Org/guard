@@ -223,6 +223,14 @@ class NudeNetDetector(
         val detections = parseDetections(rawOutput, scale, bitmap.width, bitmap.height)
         val escalated = maybeRunTiledEscalation(bitmap, packageName, detections)
         val blocked = escalated.any { d -> (blockThresholds[d.label] ?: Float.MAX_VALUE) <= d.score }
+        lastDetail = if (blocked) {
+            val triggers = escalated
+                .filter { d -> (blockThresholds[d.label] ?: Float.MAX_VALUE) <= d.score }
+                .joinToString(", ") { "${it.label}=${"%.2f".format(it.score)} box=${it.box.width()}x${it.box.height()}" }
+            "by=[$triggers] regionPx=${bitmap.width}x${bitmap.height}"
+        } else {
+            null
+        }
         val decisionMs = (System.nanoTime() - decisionStartNanos) / 1_000_000
 
         // Gated: this fires on every inference (a monitored app with images
@@ -371,6 +379,11 @@ class NudeNetDetector(
         Log.w(TAG, "TILED_ESCALATION_ENABLED is set but tiled inference is not implemented - ignoring")
         return baseline
     }
+
+    // Only read/written from the single consumeFrames coroutine.
+    private var lastDetail: String? = null
+
+    override fun lastDecisionDetail(): String? = lastDetail
 
     override fun close() {
         session.close()

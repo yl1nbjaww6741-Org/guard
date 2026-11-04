@@ -13,6 +13,14 @@ interface NsfwClassifier {
      */
     fun scoreNsfw(bitmap: Bitmap, packageName: String? = null): Float
 
+    /**
+     * What drove the most recent [scoreNsfw] call, for the block log line -
+     * e.g. NudeNetDetector's "BUTTOCKS_EXPOSED=0.53 box=..." - so a false
+     * positive can be diagnosed from the Debug log without verbose logging
+     * having been on at the time. Null when a backend has nothing to add.
+     */
+    fun lastDecisionDetail(): String? = null
+
     /** Release native resources (interpreter, delegate). Safe to call more than once. */
     fun close() {}
 }
