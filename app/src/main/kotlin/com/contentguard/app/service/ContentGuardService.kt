@@ -61,6 +61,7 @@ class ContentGuardService : AccessibilityService() {
     private lateinit var nsfwClassifier: NsfwClassifier
     private lateinit var overlay: BlurOverlayController
     private lateinit var passwordGuardOverlay: PasswordGuardOverlayController
+    private lateinit var storageGuardOverlay: PasswordGuardOverlayController
     private val frameDiffGate = FrameDiffGate()
 
     // Gate 5b's probe pacing and per-window verdict cache. Touched only from
@@ -85,6 +86,19 @@ class ContentGuardService : AccessibilityService() {
     private var lastForegroundPackage: String? = null
     private var settingsGuardUnlocked = false
     private var onGuardedSettingsScreen = false
+
+    // GATE_STORAGE_GUARD state - deliberately separate from the settings
+    // guard above: getting past App info (password + its own configurable
+    // delay) must not also unlock the Storage usage page, which always
+    // needs the password plus a fixed 24h wait. See
+    // PrefsRepository.storageGuardCooldownEligibleAtMillis.
+    private var storageGuardUnlocked = false
+    private var onGuardedStorageScreen = false
+    // Window title looked like a storage page, but its content (app name +
+    // Clear cache button) may not have been laid out yet when the
+    // TYPE_WINDOW_STATE_CHANGED fired - keep re-checking content-change
+    // events until it either matches or the user leaves.
+    private var storageTitledScreen = false
 
     // Only touched from the single consumeFrames coroutine, so no
     // synchronization needed - see processFrame's pre-scan gate.
@@ -275,6 +289,37 @@ class ContentGuardService : AccessibilityService() {
             onCancelCooldown = {
                 prefs.clearSettingsGuardCooldown()
                 val line = "SETTINGS_GUARD_COOLDOWN_CANCELLED"
+                Log.i(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            },
+        )
+
+        storageGuardOverlay = PasswordGuardOverlayController(
+            service = this,
+            onVerify = { entered -> prefs.verifyPassword(entered) },
+            // Always password + 24h, independent of delayBeforeUnlockEnabled.
+            onUnlocked = {
+                val now = System.currentTimeMillis()
+                var eligibleAt = prefs.storageGuardCooldownEligibleAtMillis
+                if (eligibleAt == 0L) {
+                    eligibleAt = now + PrefsRepository.STORAGE_GUARD_DELAY_MS
+                    prefs.storageGuardCooldownEligibleAtMillis = eligibleAt
+                    val line = "STORAGE_GUARD_COOLDOWN_STARTED eligibleAt=$eligibleAt"
+                    Log.i(TAG, line)
+                    DebugLogBuffer.add(TAG, line)
+                }
+                if (now >= eligibleAt) {
+                    prefs.clearStorageGuardCooldown()
+                    storageGuardUnlocked = true
+                } else {
+                    storageGuardOverlay.showCooldown(formatCooldownRemaining(eligibleAt - now))
+                }
+            },
+            onCancelled = { performGlobalAction(GLOBAL_ACTION_HOME) },
+            onCancelCooldown = {
+                prefs.clearStorageGuardCooldown()
+                val line = "STORAGE_GUARD_COOLDOWN_CANCELLED"
                 Log.i(TAG, line)
                 DebugLogBuffer.add(TAG, line)
                 performGlobalAction(GLOBAL_ACTION_HOME)
@@ -478,6 +523,43 @@ class ContentGuardService : AccessibilityService() {
         return if (remaining > 0) formatCooldownRemaining(remaining) else null
     }
 
+    /** Storage-page counterpart of [settingsGuardEffectivelyUnlocked]. */
+    private fun storageGuardEffectivelyUnlocked(): Boolean {
+        if (storageGuardUnlocked) return true
+        val eligibleAt = prefs.storageGuardCooldownEligibleAtMillis
+        if (eligibleAt != 0L && System.currentTimeMillis() >= eligibleAt) {
+            prefs.clearStorageGuardCooldown()
+            storageGuardUnlocked = true
+            val line = "STORAGE_GUARD_COOLDOWN_ELAPSED - screen unlocked"
+            Log.i(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+            return true
+        }
+        return false
+    }
+
+    private fun storageGuardCooldownMessageIfPending(): String? {
+        val eligibleAt = prefs.storageGuardCooldownEligibleAtMillis
+        if (eligibleAt == 0L) return null
+        val remaining = eligibleAt - System.currentTimeMillis()
+        return if (remaining > 0) formatCooldownRemaining(remaining) else null
+    }
+
+    /**
+     * Is the active window ContentGuard's own per-app storage page? Needs
+     * both the app's name and one of the page's clear buttons, so neither
+     * the device-wide Storage overview (which lists apps but has no per-app
+     * Clear cache button) nor another app's storage page matches.
+     */
+    private fun isContentGuardStoragePage(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val text = NodeInspector.scan(root).visibleText.lowercase()
+        @Suppress("DEPRECATION")
+        root.recycle()
+        return text.contains("contentguard") &&
+            STORAGE_PAGE_BUTTON_MARKERS.any { text.contains(it) }
+    }
+
     private fun formatCooldownRemaining(ms: Long): String {
         val totalSeconds = ms / 1000
         val hours = totalSeconds / 3600
@@ -515,6 +597,9 @@ class ContentGuardService : AccessibilityService() {
             if (packageName != SETTINGS_PACKAGE && packageName != OPLUS_BATTERY_PACKAGE) {
                 settingsGuardUnlocked = false
                 onGuardedSettingsScreen = false
+                storageGuardUnlocked = false
+                onGuardedStorageScreen = false
+                storageTitledScreen = false
             }
             if (overlay.isVisible() && !prefs.isLockedOut(packageName)) {
                 serviceScope.launch(Dispatchers.Main) { overlay.hide() }
@@ -529,6 +614,30 @@ class ContentGuardService : AccessibilityService() {
         if (packageName == SETTINGS_PACKAGE && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val screenTitle = event.text.joinToString(" ").lowercase()
             onGuardedSettingsScreen = GUARDED_SETTINGS_TITLE_MARKERS.any { screenTitle.contains(it) }
+            // Storage usage page (Settings > Apps > ContentGuard > Storage).
+            // Its title is generic ("Storage usage" / "Storage & cache"),
+            // shared by every app's page, so like the ColorOS battery page
+            // it has to be confirmed from content - see
+            // isContentGuardStoragePage.
+            storageTitledScreen = screenTitle.contains("storage")
+            onGuardedStorageScreen = storageTitledScreen && prefs.hasPassword() && isContentGuardStoragePage()
+        } else if (packageName == SETTINGS_PACKAGE && storageTitledScreen && !onGuardedStorageScreen &&
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED && prefs.hasPassword()
+        ) {
+            onGuardedStorageScreen = isContentGuardStoragePage()
+        }
+
+        if (packageName == SETTINGS_PACKAGE && onGuardedStorageScreen && prefs.hasPassword() &&
+            !storageGuardEffectivelyUnlocked()
+        ) {
+            if (!storageGuardOverlay.isVisible()) {
+                val line = "[$packageName] exit@GATE_STORAGE_GUARD"
+                Log.i(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+                val cooldownMessage = storageGuardCooldownMessageIfPending()
+                serviceScope.launch(Dispatchers.Main) { storageGuardOverlay.show(cooldownMessage) }
+            }
+            return
         }
 
         // OPLUS_BATTERY_PACKAGE can't use the title check above - real-
@@ -849,7 +958,7 @@ class ContentGuardService : AccessibilityService() {
         // typing, with no app ever opened. A keyboard's own window is
         // never content worth scoring regardless of scope mode.
         if (windowId != null && !isApplicationWindow(windowId)) return
-        if (onGuardedSettingsScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) return
+        if (onGuardedSettingsScreen || onGuardedStorageScreen || prefs.isLockedOut(pkg) || !scopePolicy.shouldMonitor(pkg)) return
         frameChannel.trySend(FrameRequest(pkg))
     }
 
@@ -1436,6 +1545,7 @@ class ContentGuardService : AccessibilityService() {
         super.onDestroy()
         if (::overlay.isInitialized && overlay.isVisible()) overlay.hide()
         if (::passwordGuardOverlay.isInitialized && passwordGuardOverlay.isVisible()) passwordGuardOverlay.hide()
+        if (::storageGuardOverlay.isInitialized && storageGuardOverlay.isVisible()) storageGuardOverlay.hide()
         if (::nsfwClassifier.isInitialized) nsfwClassifier.close()
         if (::prefs.isInitialized) prefs.flushUsageStats()
         // Nulled after unregistering, not just unregistered: the registration
@@ -1497,6 +1607,11 @@ class ContentGuardService : AccessibilityService() {
         // self-healing counterpart, which is exactly why it still needs
         // this gate.
         private val GUARDED_SETTINGS_TITLE_MARKERS = listOf("device admin", "contentguard")
+
+        // Buttons only the per-app storage page has - see
+        // isContentGuardStoragePage. "clear storage" is AOSP's wording for
+        // what ColorOS/OxygenOS calls "Clear data".
+        private val STORAGE_PAGE_BUTTON_MARKERS = listOf("clear cache", "clear data", "clear storage")
 
         // One refresh per install batch instead of one per package - see
         // registerPackageChangeReceiver. Long enough to straddle the gaps
