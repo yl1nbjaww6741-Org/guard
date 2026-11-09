@@ -21,6 +21,15 @@ interface NsfwClassifier {
      */
     fun lastDecisionDetail(): String? = null
 
+    /**
+     * How confident the most recent [scoreNsfw] call's block decision was,
+     * 0..1. For a backend whose score is already a probability this is the
+     * score itself; NudeNetDetector's score is binary, so it reports the
+     * highest-scoring detection that triggered the block. Drives whether
+     * ContentGuardService takes a confirming second look before blocking.
+     */
+    fun lastBlockConfidence(lastScore: Float): Float = lastScore
+
     /** Release native resources (interpreter, delegate). Safe to call more than once. */
     fun close() {}
 }

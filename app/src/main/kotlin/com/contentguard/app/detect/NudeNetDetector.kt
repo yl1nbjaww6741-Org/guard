@@ -223,9 +223,10 @@ class NudeNetDetector(
         val detections = parseDetections(rawOutput, scale, bitmap.width, bitmap.height)
         val escalated = maybeRunTiledEscalation(bitmap, packageName, detections)
         val blocked = escalated.any { d -> (blockThresholds[d.label] ?: Float.MAX_VALUE) <= d.score }
+        val triggering = escalated.filter { d -> (blockThresholds[d.label] ?: Float.MAX_VALUE) <= d.score }
+        lastConfidence = triggering.maxOfOrNull { it.score } ?: 0f
         lastDetail = if (blocked) {
-            val triggers = escalated
-                .filter { d -> (blockThresholds[d.label] ?: Float.MAX_VALUE) <= d.score }
+            val triggers = triggering
                 .joinToString(", ") { "${it.label}=${"%.2f".format(it.score)} box=${it.box.width()}x${it.box.height()}" }
             "by=[$triggers] regionPx=${bitmap.width}x${bitmap.height}"
         } else {
@@ -383,7 +384,11 @@ class NudeNetDetector(
     // Only read/written from the single consumeFrames coroutine.
     private var lastDetail: String? = null
 
+    private var lastConfidence: Float = 0f
+
     override fun lastDecisionDetail(): String? = lastDetail
+
+    override fun lastBlockConfidence(lastScore: Float): Float = lastConfidence
 
     override fun close() {
         session.close()
