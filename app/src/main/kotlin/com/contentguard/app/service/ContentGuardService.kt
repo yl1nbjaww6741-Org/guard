@@ -42,6 +42,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -1264,7 +1265,40 @@ class ContentGuardService : AccessibilityService() {
             prefs.recordInference((System.nanoTime() - inferenceStartNanos) / 1_000_000)
             if (prefs.verboseLogging) DebugLogBuffer.add(TAG, "[$pkg] captureMs=$captureMs")
 
-            val blocked = score >= prefs.nsfwThreshold
+            var blocked = score >= prefs.nsfwThreshold
+            var decisionDetail = nsfwClassifier.lastDecisionDetail()
+
+            // Second look. A real-device false positive (a raw-beef cooking
+            // reel scored MALE_GENITALIA_EXPOSED=0.70 on one frame, while the
+            // same reel's other frames scored at most 0.03 for that label
+            // under every shift/zoom/flip tried offline) showed the small
+            // NudeNet model can flicker a block-level detection onto a single
+            // video frame. Real explicit content stays on screen. So a block
+            // below CONFIRM_BYPASS_CONFIDENCE has to be reproduced on a fresh
+            // capture of the same region a moment later; one at or above it
+            // blocks immediately, exactly as before.
+            if (blocked) {
+                val confidence = nsfwClassifier.lastBlockConfidence(score)
+                if (confidence < CONFIRM_BYPASS_CONFIDENCE) {
+                    // Bounded well inside PROCESS_FRAME_TIMEOUT_MS: hitting
+                    // that outer timeout would drop the frame - i.e. not
+                    // block - so running out of time here must count as
+                    // confirmed instead (fail closed).
+                    var confirmTimedOut = true
+                    val confirmed = withTimeoutOrNull(CONFIRM_BUDGET_MS) {
+                        confirmBlock(pkg, cropRegion).also { confirmTimedOut = false }
+                    }
+                    val confirmation = if (confirmTimedOut) "unverifiable - second look timed out" else confirmed
+                    if (confirmation == null) {
+                        blocked = false
+                        val line = "[$pkg] BLOCK_NOT_CONFIRMED first=[$decisionDetail] - second look was clean"
+                        Log.i(TAG, line)
+                        DebugLogBuffer.add(TAG, line)
+                    } else {
+                        decisionDetail = "$decisionDetail confirmed=[$confirmation]"
+                    }
+                }
+            }
             // Only a real inference ever updates the cache - a skip must
             // never be recorded as if it were a fresh observation, or a
             // stale hash could compound across cycles.
@@ -1277,12 +1311,49 @@ class ContentGuardService : AccessibilityService() {
                 return
             }
 
-            val decisionDetail = nsfwClassifier.lastDecisionDetail()
             handleBlock(pkg, if (decisionDetail != null) "score=$score $decisionDetail" else "score=$score")
         } finally {
             if (analysisBitmap !== bitmap) analysisBitmap.recycle()
             bitmap.recycle()
         }
+    }
+
+    /**
+     * Re-captures [cropRegion] after a short pause and re-runs the skin crop
+     * and classifier on it. Returns the classifier's decision detail if the
+     * fresh frame also blocks, or null if it came back clean. Fails closed:
+     * if no second frame can be captured at all, the original block stands
+     * (returned as a non-null "unverifiable" detail), so a capture failure
+     * can never turn into a way past the filter.
+     */
+    private suspend fun confirmBlock(pkg: String, cropRegion: Rect?): String? {
+        repeat(CONFIRM_MAX_ATTEMPTS) {
+            delay(CONFIRM_DELAY_MS)
+            val capture = screenCapturer.captureDownscaled(cropRegion = cropRegion, ignoreThrottle = true)
+            if (capture !is ScreenCapturer.CaptureResult.Success) return@repeat
+            val bitmap = capture.bitmap
+            prefs.recordScreenshot()
+            try {
+                val skin = SkinTonePrefilter.analyze(bitmap)
+                if (!skin.hasSkin) return null
+                val analysis = skin.region?.let { cropToRegion(bitmap, it) } ?: bitmap
+                try {
+                    val startNanos = System.nanoTime()
+                    val score = nsfwClassifier.scoreNsfw(analysis, pkg)
+                    prefs.recordInference((System.nanoTime() - startNanos) / 1_000_000)
+                    return if (score >= prefs.nsfwThreshold) {
+                        nsfwClassifier.lastDecisionDetail() ?: "score=$score"
+                    } else {
+                        null
+                    }
+                } finally {
+                    if (analysis !== bitmap) analysis.recycle()
+                }
+            } finally {
+                bitmap.recycle()
+            }
+        }
+        return "unverifiable - no second frame captured"
     }
 
     /**
@@ -1575,6 +1646,15 @@ class ContentGuardService : AccessibilityService() {
         // constant rather than the tunable interval, so the recovery path
         // can't fault on the same state the tick just faulted on.
         private const val RECHECK_ERROR_BACKOFF_MS = 5_000L
+
+        // See the "second look" comment in processFrame. Blocks whose
+        // triggering detection is at least this confident skip confirmation.
+        private const val CONFIRM_BYPASS_CONFIDENCE = 0.85f
+        // Above the platform's ~333ms takeScreenshot floor, so the
+        // confirming capture isn't refused for asking too soon.
+        private const val CONFIRM_DELAY_MS = 400L
+        private const val CONFIRM_MAX_ATTEMPTS = 3
+        private const val CONFIRM_BUDGET_MS = 6_000L
 
         // See consumeFrames' doc comment. Well above any real frame - the
         // capture timeout alone (ScreenCapturer.SCREENSHOT_CALLBACK_TIMEOUT_MS,

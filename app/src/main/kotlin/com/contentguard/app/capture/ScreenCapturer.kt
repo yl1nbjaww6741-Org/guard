@@ -70,8 +70,15 @@ class ScreenCapturer(
      * first means a small region can stay at or near its native resolution
      * since it's very unlikely to itself exceed [longestEdgePx].
      */
-    suspend fun captureDownscaled(longestEdgePx: Int = TARGET_LONGEST_EDGE, cropRegion: Rect? = null): CaptureResult {
-        if (wouldThrottle()) {
+    suspend fun captureDownscaled(
+        longestEdgePx: Int = TARGET_LONGEST_EDGE,
+        cropRegion: Rect? = null,
+        // Only for ContentGuardService's block confirmation, which needs a
+        // second frame well inside one throttle interval. The caller paces
+        // itself above the platform's own ~333ms screenshot floor.
+        ignoreThrottle: Boolean = false,
+    ): CaptureResult {
+        if (!ignoreThrottle && wouldThrottle()) {
             return CaptureResult.Throttled
         }
 
