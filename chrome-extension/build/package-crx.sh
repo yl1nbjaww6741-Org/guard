@@ -47,10 +47,11 @@ mkdir -p build/dist/src
 # itself (see git history: it was dropped from here when 30a332e removed
 # keyword blocking entirely, then the feature was reintroduced).
 # options/ is gone for good, same day - replaced by shared/config.js's
-# hardcoded panel URL, no more options page to copy. Every directory
+# hardcoded panel URL, no more options page to copy. lockout/ added
+# 2026-11-26 (repeat-offence lockout page). Every directory
 # manifest.json actually references needs to be listed here explicitly,
 # this script doesn't infer it from the manifest.
-cp -RL background content-scripts lib model shared sandbox manifest.json build/dist/src/
+cp -RL background content-scripts lib lockout model shared sandbox manifest.json build/dist/src/
 
 npx --yes crx3@2.0.0 \
   -p build/dist/key.pem \
