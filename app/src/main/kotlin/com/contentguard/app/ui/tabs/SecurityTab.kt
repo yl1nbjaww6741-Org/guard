@@ -2,6 +2,7 @@ package com.contentguard.app.ui.tabs
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,7 +14,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -151,6 +156,12 @@ fun SecurityTab(
             PersistOtherAppsCard(prefs = prefs, applyOrChallenge = applyOrChallenge)
         }
 
+        item { CGEyebrow("Password-protected apps") }
+
+        item {
+            PasswordProtectedAppsCard(prefs = prefs, applyOrChallenge = applyOrChallenge)
+        }
+
         item { CGEyebrow("Password") }
 
         item {
@@ -275,6 +286,8 @@ private fun PrefsRepository.PendingWeakenAction.describeForPendingCard(): String
     is PrefsRepository.PendingWeakenAction.SetServiceProtected -> "Stop persisting $component"
     is PrefsRepository.PendingWeakenAction.SetBlockSecureWindowsEverywhere ->
         if (enabled) "Block hidden screens everywhere" else "Stop blocking hidden screens"
+    is PrefsRepository.PendingWeakenAction.SetAppPasswordGuarded ->
+        if (guarded) "Password-protect $packageName" else "Stop password-protecting $packageName"
 }
 
 private fun formatRemaining(ms: Long): String {
@@ -439,6 +452,148 @@ private fun PersistOtherAppsCard(prefs: PrefsRepository, applyOrChallenge: GateC
             }
         }
     }
+}
+
+private data class LaunchableApp(val packageName: String, val label: String)
+
+/**
+ * Whole apps that need the password (and delay-before-unlock's cooldown)
+ * before they open - for another blocker app's own settings. Adding is
+ * hardening and free; removing is the weakening move and goes through the
+ * same password + cooldown as everything else. See
+ * PrefsRepository.getPasswordGuardedApps and ContentGuardService's
+ * GATE_APP_GUARD.
+ */
+@Composable
+private fun PasswordProtectedAppsCard(prefs: PrefsRepository, applyOrChallenge: GateChallenge) {
+    val context = LocalContext.current
+    var guarded by remember { mutableStateOf(prefs.getPasswordGuardedApps()) }
+    var picking by remember { mutableStateOf(false) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            // A pending removal may have been applied by the service while
+            // this screen was in the background.
+            if (event == Lifecycle.Event.ON_RESUME) guarded = prefs.getPasswordGuardedApps()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    CGCard {
+        CGLabel("Password-protected apps")
+        CGHint(
+            "These apps are covered by the password screen whenever they open. With Delay before " +
+                "unlock on, the correct password starts the wait - the app opens only after it " +
+                "ends. Use it for another blocker's own settings so they can't be switched off on impulse.",
+        )
+        Column(modifier = Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            guarded.sorted().forEach { pkg ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        CGLabel(appLabel(context, pkg))
+                        Text(pkg, color = CGColor.Dim, fontSize = 12.sp)
+                    }
+                    CGToggle(
+                        checked = true,
+                        onCheckedChange = { newValue ->
+                            if (!newValue) {
+                                applyOrChallenge(
+                                    true,
+                                    {},
+                                    PrefsRepository.PendingWeakenAction.SetAppPasswordGuarded(pkg, false),
+                                ) {
+                                    prefs.setAppPasswordGuarded(pkg, false)
+                                    guarded = prefs.getPasswordGuardedApps()
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        if (!prefs.hasPassword()) {
+            Text(
+                "Set a password below first - without one, nothing is gated.",
+                color = CGColor.Breach,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+        }
+        CGButton("Add app", onClick = { picking = true }, ghost = true, small = true, modifier = Modifier.padding(top = 12.dp))
+    }
+
+    if (picking) {
+        AppPickerDialog(
+            exclude = guarded,
+            onPick = { pkg ->
+                // Adding a protection: free, no challenge.
+                prefs.setAppPasswordGuarded(pkg, true)
+                guarded = prefs.getPasswordGuardedApps()
+                picking = false
+            },
+            onDismiss = { picking = false },
+        )
+    }
+}
+
+@Composable
+private fun AppPickerDialog(exclude: Set<String>, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val apps = remember { loadLaunchableApps(context) }
+    var query by remember { mutableStateOf("") }
+    val shown = apps.filter {
+        it.packageName !in exclude &&
+            (query.isBlank() || it.label.contains(query, ignoreCase = true) || it.packageName.contains(query, ignoreCase = true))
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Password-protect an app") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("Search") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                LazyColumn(modifier = Modifier.heightIn(max = 360.dp).padding(top = 8.dp)) {
+                    items(shown.size) { i ->
+                        val app = shown[i]
+                        Column(modifier = Modifier.fillMaxWidth().clickable { onPick(app.packageName) }.padding(vertical = 10.dp)) {
+                            Text(app.label, fontSize = 15.sp)
+                            Text(app.packageName, color = CGColor.Dim, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+private fun appLabel(context: Context, pkg: String): String {
+    val pm = context.packageManager
+    return runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
+}
+
+/** Apps with a launcher icon, other than ContentGuard itself. */
+private fun loadLaunchableApps(context: Context): List<LaunchableApp> {
+    val pm = context.packageManager
+    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    return pm.queryIntentActivities(intent, 0)
+        .map { it.activityInfo.packageName }
+        .distinct()
+        .filter { it != context.packageName }
+        .map { LaunchableApp(it, appLabel(context, it)) }
+        .sortedBy { it.label.lowercase() }
 }
 
 /**

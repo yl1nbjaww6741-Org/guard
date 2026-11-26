@@ -86,6 +86,16 @@ class ContentGuardService : AccessibilityService() {
     private var settingsGuardUnlocked = false
     private var onGuardedSettingsScreen = false
 
+    // GATE_APP_GUARD state (see PrefsRepository.getPasswordGuardedApps).
+    // passwordGuardTarget is which guard the password overlay is currently
+    // up for: null = the Settings guard, a package name = that guarded app,
+    // so onUnlocked/onCancelCooldown act on the right cooldown.
+    // appGuardUnlockedPackage is the one guarded app reachable this visit;
+    // cleared on any real switch to a different app, same as
+    // settingsGuardUnlocked.
+    @Volatile private var passwordGuardTarget: String? = null
+    @Volatile private var appGuardUnlockedPackage: String? = null
+
     // Only touched from the single consumeFrames coroutine, so no
     // synchronization needed - see processFrame's pre-scan gate.
     private var lastTextScanAt = 0L
@@ -245,9 +255,15 @@ class ContentGuardService : AccessibilityService() {
             // page needs the same anti-impulse cooldown as everything else
             // delay-before-unlock covers, and why it can't be modeled as a
             // deferred PendingWeakenAction the way in-app settings are.
-            onUnlocked = {
+            onUnlocked = onUnlocked@{
+                val appTarget = passwordGuardTarget
+                if (appTarget != null) {
+                    onAppGuardPasswordAccepted(appTarget)
+                    return@onUnlocked
+                }
                 if (!prefs.delayBeforeUnlockEnabled) {
                     settingsGuardUnlocked = true
+                    passwordGuardOverlay.hide()
                 } else {
                     val now = System.currentTimeMillis()
                     var eligibleAt = prefs.settingsGuardCooldownEligibleAtMillis
@@ -261,6 +277,7 @@ class ContentGuardService : AccessibilityService() {
                     if (now >= eligibleAt) {
                         prefs.clearSettingsGuardCooldown()
                         settingsGuardUnlocked = true
+                        passwordGuardOverlay.hide()
                     } else {
                         passwordGuardOverlay.showCooldown(formatCooldownRemaining(eligibleAt - now))
                     }
@@ -273,8 +290,9 @@ class ContentGuardService : AccessibilityService() {
             // every other Cancel in this app, giving up on a change is
             // always the safe direction.
             onCancelCooldown = {
-                prefs.clearSettingsGuardCooldown()
-                val line = "SETTINGS_GUARD_COOLDOWN_CANCELLED"
+                val appTarget = passwordGuardTarget
+                if (appTarget != null) prefs.clearAppGuardCooldown(appTarget) else prefs.clearSettingsGuardCooldown()
+                val line = if (appTarget != null) "APP_GUARD_COOLDOWN_CANCELLED pkg=$appTarget" else "SETTINGS_GUARD_COOLDOWN_CANCELLED"
                 Log.i(TAG, line)
                 DebugLogBuffer.add(TAG, line)
                 performGlobalAction(GLOBAL_ACTION_HOME)
@@ -478,6 +496,64 @@ class ContentGuardService : AccessibilityService() {
         return if (remaining > 0) formatCooldownRemaining(remaining) else null
     }
 
+    /**
+     * Correct password entered on a guarded app's overlay. Same rules as
+     * the Settings guard: with delay-before-unlock off it opens at once;
+     * with it on, the first correct password starts that app's own
+     * cooldown and the app stays covered until it elapses.
+     */
+    private fun onAppGuardPasswordAccepted(pkg: String) {
+        if (!prefs.delayBeforeUnlockEnabled) {
+            grantAppGuard(pkg)
+            return
+        }
+        val now = System.currentTimeMillis()
+        var eligibleAt = prefs.getAppGuardCooldownEligibleAtMillis(pkg)
+        if (eligibleAt == 0L) {
+            eligibleAt = now + prefs.delayBeforeUnlockMinutes * 60_000L
+            prefs.setAppGuardCooldownEligibleAtMillis(pkg, eligibleAt)
+            val line = "APP_GUARD_COOLDOWN_STARTED pkg=$pkg eligibleAt=$eligibleAt"
+            Log.i(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+        }
+        if (now >= eligibleAt) {
+            prefs.clearAppGuardCooldown(pkg)
+            grantAppGuard(pkg)
+        } else {
+            passwordGuardOverlay.showCooldown(formatCooldownRemaining(eligibleAt - now))
+        }
+    }
+
+    private fun grantAppGuard(pkg: String) {
+        appGuardUnlockedPackage = pkg
+        passwordGuardTarget = null
+        passwordGuardOverlay.hide()
+    }
+
+    /** [settingsGuardEffectivelyUnlocked]'s counterpart for a guarded app, including auto-consuming an elapsed cooldown. */
+    private fun appGuardEffectivelyUnlocked(pkg: String): Boolean {
+        if (appGuardUnlockedPackage == pkg) return true
+        if (!prefs.delayBeforeUnlockEnabled) return false
+        val eligibleAt = prefs.getAppGuardCooldownEligibleAtMillis(pkg)
+        if (eligibleAt != 0L && System.currentTimeMillis() >= eligibleAt) {
+            prefs.clearAppGuardCooldown(pkg)
+            appGuardUnlockedPackage = pkg
+            val line = "APP_GUARD_COOLDOWN_ELAPSED pkg=$pkg - app unlocked"
+            Log.i(TAG, line)
+            DebugLogBuffer.add(TAG, line)
+            return true
+        }
+        return false
+    }
+
+    private fun appGuardCooldownMessageIfPending(pkg: String): String? {
+        if (!prefs.delayBeforeUnlockEnabled) return null
+        val eligibleAt = prefs.getAppGuardCooldownEligibleAtMillis(pkg)
+        if (eligibleAt == 0L) return null
+        val remaining = eligibleAt - System.currentTimeMillis()
+        return if (remaining > 0) formatCooldownRemaining(remaining) else null
+    }
+
     private fun formatCooldownRemaining(ms: Long): String {
         val totalSeconds = ms / 1000
         val hours = totalSeconds / 3600
@@ -516,6 +592,16 @@ class ContentGuardService : AccessibilityService() {
                 settingsGuardUnlocked = false
                 onGuardedSettingsScreen = false
             }
+            if (packageName != appGuardUnlockedPackage) appGuardUnlockedPackage = null
+            // Left the guarded app (or Settings) while its password overlay
+            // was up: take the overlay down so it doesn't sit over the next
+            // app. Re-entering re-shows it via the gates below.
+            if (passwordGuardOverlay.isVisible() && packageName != SETTINGS_PACKAGE &&
+                packageName != OPLUS_BATTERY_PACKAGE && packageName != passwordGuardTarget
+            ) {
+                passwordGuardTarget = null
+                serviceScope.launch(Dispatchers.Main) { passwordGuardOverlay.hide() }
+            }
             if (overlay.isVisible() && !prefs.isLockedOut(packageName)) {
                 serviceScope.launch(Dispatchers.Main) { overlay.hide() }
             }
@@ -548,10 +634,31 @@ class ContentGuardService : AccessibilityService() {
             onGuardedSettingsScreen = screenText.contains("contentguard")
         }
 
+        // GATE_APP_GUARD: a whole app the user put on the password-protected
+        // list (Security tab). Only on a window change or while it's
+        // already the foreground app - a background event from it (a
+        // notification update) mustn't throw the overlay over whatever
+        // else is on screen.
+        if (packageName in prefs.getPasswordGuardedApps() && prefs.hasPassword() &&
+            (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || packageName == lastForegroundPackage) &&
+            !appGuardEffectivelyUnlocked(packageName)
+        ) {
+            if (!passwordGuardOverlay.isVisible() || passwordGuardTarget != packageName) {
+                val line = "[$packageName] exit@GATE_APP_GUARD"
+                Log.i(TAG, line)
+                DebugLogBuffer.add(TAG, line)
+                passwordGuardTarget = packageName
+                val cooldownMessage = appGuardCooldownMessageIfPending(packageName)
+                serviceScope.launch(Dispatchers.Main) { passwordGuardOverlay.show(cooldownMessage) }
+            }
+            return
+        }
+
         if ((packageName == SETTINGS_PACKAGE || packageName == OPLUS_BATTERY_PACKAGE) &&
             onGuardedSettingsScreen && prefs.hasPassword() && !settingsGuardEffectivelyUnlocked()
         ) {
-            if (!passwordGuardOverlay.isVisible()) {
+            if (!passwordGuardOverlay.isVisible() || passwordGuardTarget != null) {
+                passwordGuardTarget = null
                 val line = "[$packageName] exit@GATE_SETTINGS_GUARD"
                 Log.i(TAG, line)
                 DebugLogBuffer.add(TAG, line)

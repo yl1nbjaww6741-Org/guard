@@ -271,6 +271,44 @@ class PrefsRepository(context: Context) {
         cachedExtraProtectedServices = null
     }
 
+    /**
+     * Whole apps (package names) that need the password - plus, when
+     * delay-before-unlock is on, its cooldown - before they can be used at
+     * all; ContentGuardService's GATE_APP_GUARD. Meant for another blocker
+     * app's own settings, so its protections can't be switched off on
+     * impulse. Adding one is hardening (free); removing one is a weakening
+     * move and goes through [PendingWeakenAction.SetAppPasswordGuarded].
+     */
+    fun getPasswordGuardedApps(): Set<String> =
+        prefs.getStringSet(KEY_PASSWORD_GUARDED_APPS, null)?.toSet() ?: emptySet()
+
+    fun setAppPasswordGuarded(packageName: String, guarded: Boolean) {
+        val next = getPasswordGuardedApps().toMutableSet()
+        if (guarded) next.add(packageName) else next.remove(packageName)
+        val editor = prefs.edit().putStringSet(KEY_PASSWORD_GUARDED_APPS, next)
+        if (!guarded) editor.remove(appGuardCooldownKey(packageName))
+        editor.apply()
+    }
+
+    /**
+     * Per-app counterpart of [settingsGuardCooldownEligibleAtMillis] for
+     * [getPasswordGuardedApps] - persisted for the same reason (a restart
+     * mustn't skip the wait), and per package so unlocking one guarded app
+     * never opens another. 0 means no cooldown is running.
+     */
+    fun getAppGuardCooldownEligibleAtMillis(packageName: String): Long =
+        prefs.getLong(appGuardCooldownKey(packageName), 0L)
+
+    fun setAppGuardCooldownEligibleAtMillis(packageName: String, eligibleAt: Long) {
+        prefs.edit().putLong(appGuardCooldownKey(packageName), eligibleAt).apply()
+    }
+
+    fun clearAppGuardCooldown(packageName: String) {
+        prefs.edit().remove(appGuardCooldownKey(packageName)).apply()
+    }
+
+    private fun appGuardCooldownKey(packageName: String) = "app_guard_cooldown_eligible_at_$packageName"
+
     fun getMonitoredSet(): Set<String> =
         cachedMonitored ?: (prefs.getStringSet(KEY_MONITORED, null)?.toSet() ?: emptySet()).also { cachedMonitored = it }
 
@@ -691,6 +729,11 @@ class PrefsRepository(context: Context) {
         // Turning it back on is free/instant, same asymmetry as everything
         // above. See [blockSecureWindowsEverywhere].
         data class SetBlockSecureWindowsEverywhere(val enabled: Boolean) : PendingWeakenAction()
+
+        // Removing an app from the password-protected list (guarded=false)
+        // is the weakening direction; adding one is free. See
+        // [getPasswordGuardedApps].
+        data class SetAppPasswordGuarded(val packageName: String, val guarded: Boolean) : PendingWeakenAction()
     }
 
     /** A pending unlock as actually persisted: the action plus when it becomes eligible. */
@@ -780,6 +823,7 @@ class PrefsRepository(context: Context) {
             is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> delayBeforeUnlockMinutes = action.minutes
             is PendingWeakenAction.SetServiceProtected -> setServiceProtected(action.component, action.protected)
             is PendingWeakenAction.SetBlockSecureWindowsEverywhere -> blockSecureWindowsEverywhere = action.enabled
+            is PendingWeakenAction.SetAppPasswordGuarded -> setAppPasswordGuarded(action.packageName, action.guarded)
         }
     }
 
@@ -806,6 +850,7 @@ class PrefsRepository(context: Context) {
         is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "SetDelayBeforeUnlockMinutes"
         is PendingWeakenAction.SetServiceProtected -> "SetServiceProtected:$component"
         is PendingWeakenAction.SetBlockSecureWindowsEverywhere -> "SetBlockSecureWindowsEverywhere"
+        is PendingWeakenAction.SetAppPasswordGuarded -> "SetAppPasswordGuarded:$packageName"
     }
 
     private fun pendingTypeKey(index: Int) = "pending_action_type_$index"
@@ -870,6 +915,7 @@ class PrefsRepository(context: Context) {
         is PendingWeakenAction.SetDelayBeforeUnlockMinutes -> "SetDelayBeforeUnlockMinutes"
         is PendingWeakenAction.SetServiceProtected -> "SetServiceProtected"
         is PendingWeakenAction.SetBlockSecureWindowsEverywhere -> "SetBlockSecureWindowsEverywhere"
+        is PendingWeakenAction.SetAppPasswordGuarded -> "SetAppPasswordGuarded"
     }
 
     // Encodes each action's params as a single delimited string - deliberately
@@ -900,6 +946,7 @@ class PrefsRepository(context: Context) {
         // safe with no escaping - same reasoning as SetWhitelisted above.
         is PendingWeakenAction.SetServiceProtected -> "$component|$protected"
         is PendingWeakenAction.SetBlockSecureWindowsEverywhere -> enabled.toString()
+        is PendingWeakenAction.SetAppPasswordGuarded -> "$packageName|$guarded"
     }
 
     private fun decodePendingAction(type: String, param: String): PendingWeakenAction? = runCatching {
@@ -936,6 +983,10 @@ class PrefsRepository(context: Context) {
                 PendingWeakenAction.SetServiceProtected(component, flag.toBoolean())
             }
             "SetBlockSecureWindowsEverywhere" -> PendingWeakenAction.SetBlockSecureWindowsEverywhere(param.toBoolean())
+            "SetAppPasswordGuarded" -> {
+                val (pkg, flag) = param.split("|", limit = 2)
+                PendingWeakenAction.SetAppPasswordGuarded(pkg, flag.toBoolean())
+            }
             else -> null
         }
     }.getOrNull()
@@ -1009,6 +1060,7 @@ class PrefsRepository(context: Context) {
         private const val KEY_PENDING_ELIGIBLE_AT = "pending_weaken_eligible_at"
         private const val KEY_PENDING_COUNT = "pending_weaken_action_count"
         private const val KEY_SETTINGS_GUARD_COOLDOWN_ELIGIBLE_AT = "settings_guard_cooldown_eligible_at"
+        private const val KEY_PASSWORD_GUARDED_APPS = "password_guarded_apps"
         private const val PASSWORD_SALT = "contentguard-v1-"
         const val DEFAULT_THRESHOLD = 0.80f
         const val DEFAULT_LOCKOUT_MINUTES = 1
