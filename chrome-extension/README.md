@@ -46,6 +46,17 @@ still a plain substring match) - explicit user choice, and Chrome's
 `urlFilter` has no equivalent word-boundary concept to apply it to
 without switching to a different, quota-limited API (`regexFilter`).
 
+**Repeat-offence lockout, added 2026-11-26.** 4 blocks within 10
+minutes locks Chrome for 20 minutes: every tab is closed and replaced
+with `lockout/lockout.html` (a countdown), and until it expires every
+navigation - including the panel and `chrome://` pages - is redirected
+back to it. A "block" is a tab closed for a keyword/NSFW hit or a URL
+keyword rule cancelling a navigation (counted via `webNavigation`);
+repeat reports about the same tab within 30s count once. State is in
+`chrome.storage.local` so it survives a Chrome restart; nothing can end
+it early. Thresholds are constants at the top of the "Repeat-offence
+lockout" section of `background/service-worker.js`.
+
 ## What's here
 
 - `manifest.json` - MV3 manifest.

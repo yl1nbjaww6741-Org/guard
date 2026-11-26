@@ -228,10 +228,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     ensureOffscreenDocument().catch((err) => console.error("ContentGuard: failed to re-create offscreen document", err));
   } else if (alarm.name === SYNC_ALARM_NAME) {
     syncKeywords().catch((err) => console.error("ContentGuard: keyword sync failed", err));
+  } else if (alarm.name === LOCKOUT_END_ALARM_NAME) {
+    restoreLockout().catch((err) => console.error("ContentGuard: failed to end lockout", err));
   }
 });
 
 chrome.runtime.onInstalled.addListener(() => {
+  restoreLockout().catch((err) => console.error("ContentGuard: failed to restore lockout", err));
   chrome.alarms.create(OFFSCREEN_HEALTHCHECK_ALARM_NAME, { periodInMinutes: OFFSCREEN_HEALTHCHECK_PERIOD_MINUTES });
   chrome.alarms.create(SYNC_ALARM_NAME, { periodInMinutes: SYNC_ALARM_PERIOD_MINUTES });
   ensureOffscreenDocument().catch((err) => console.error("ContentGuard: failed to create offscreen document", err));
@@ -248,6 +251,7 @@ chrome.runtime.onInstalled.addListener(() => {
     .finally(() => syncKeywords().catch((err) => console.error("ContentGuard: keyword sync failed", err)));
 });
 chrome.runtime.onStartup.addListener(() => {
+  restoreLockout().catch((err) => console.error("ContentGuard: failed to restore lockout", err));
   ensureOffscreenDocument().catch((err) => console.error("ContentGuard: failed to create offscreen document", err));
   clearStaleDynamicRules()
     .catch((err) => console.error("ContentGuard: failed to clear stale declarativeNetRequest rules", err))
@@ -352,6 +356,7 @@ async function captureAllWindows() {
 // chrome://extensions' "service worker" inspect link) is the only place
 // the record can actually live to be checked after the fact.
 function closeTab(tabId, reason) {
+  recordBlock(tabId, reason);
   chrome.tabs.get(tabId, (tab) => {
     // chrome.tabs.get reports a callback-style failure (tab already
     // gone by the time this runs) via chrome.runtime.lastError, not by
@@ -371,6 +376,176 @@ function closeTab(tabId, reason) {
     console.warn("ContentGuard: failed to close tab", err);
   });
 }
+
+// ---------------------------------------------------------------------
+// Repeat-offence lockout (added 2026-11-26, explicit user request: "if
+// there have been 4 blocks within 10 mins, don't allow me to access
+// Chrome at all for 20 mins").
+//
+// What counts as a "block": every tab closeTab() closes (page-text
+// keyword match, NSFW detection) plus every top-level navigation the
+// keyword declarativeNetRequest rule refuses (see the webNavigation
+// listener below - that path never reaches closeTab(), the request is
+// just cancelled). Several reports about the same tab within
+// SAME_TAB_DEDUPE_MS count once: the content script runs in every frame
+// (all_frames), and the 5-second NSFW loop can detect the same tab again
+// before chrome.tabs.remove() lands.
+//
+// What "no access" means: while locked, a session-scoped DNR rule
+// redirects EVERY top-level navigation (including the panel - "at all")
+// to lockout/lockout.html, and tabs.onCreated/onUpdated drag any tab DNR
+// can't see (chrome://newtab, chrome://settings, back/forward-cache
+// restores) back to it too. When the lockout starts every existing tab
+// is closed and replaced by one lockout tab per window.
+//
+// Only ever a tightening: nothing here loosens anything, and the
+// lockout can't be ended early from the extension or the panel (it
+// isn't wired to the Worker at all). It just expires.
+//
+// State lives in chrome.storage.local (the service worker gets
+// suspended), and the DNR rule is a SESSION rule on purpose: syncKeywords
+// and clearStaleDynamicRules replace/wipe ALL dynamic rules, which would
+// silently drop a lockout rule kept there. Session rules die with the
+// browser, so restoreLockout() re-applies on every startup from
+// lockoutUntil.
+const BLOCK_THRESHOLD = 4;
+const BLOCK_WINDOW_MS = 10 * 60 * 1000;
+const LOCKOUT_DURATION_MS = 20 * 60 * 1000;
+const SAME_TAB_DEDUPE_MS = 30 * 1000;
+const LOCKOUT_END_ALARM_NAME = "contentguard-lockout-end";
+const LOCKOUT_RULE_ID = 1; // session-rule ID space is separate from dynamic rules
+const LOCKOUT_PAGE_PATH = "/lockout/lockout.html";
+const LOCKOUT_PAGE_URL = chrome.runtime.getURL(LOCKOUT_PAGE_PATH);
+
+// Serialises every read-modify-write of blockTimes/lockoutUntil - two
+// blocks arriving together (two frames, or a keyword + NSFW hit) would
+// otherwise both read the same old list and one would be lost.
+let lockoutQueue = Promise.resolve();
+function withLockoutState(fn) {
+  const run = lockoutQueue.then(fn);
+  lockoutQueue = run.catch((err) => console.error("ContentGuard: lockout state update failed", err));
+  return run;
+}
+
+function recordBlock(tabId, reason) {
+  return withLockoutState(async () => {
+    const now = Date.now();
+    const { blockEvents = [], lockoutUntil = 0 } = await chrome.storage.local.get(["blockEvents", "lockoutUntil"]);
+    if (lockoutUntil > now) return; // Already locked - nothing to add.
+    const recent = blockEvents.filter((e) => now - e.at < BLOCK_WINDOW_MS);
+    if (tabId != null && recent.some((e) => e.tabId === tabId && now - e.at < SAME_TAB_DEDUPE_MS)) return;
+    recent.push({ at: now, tabId: tabId ?? null, reason });
+    console.log(`ContentGuard: block ${recent.length}/${BLOCK_THRESHOLD} in the last 10 min - ${reason}`);
+    if (recent.length >= BLOCK_THRESHOLD) {
+      const until = now + LOCKOUT_DURATION_MS;
+      await chrome.storage.local.set({ blockEvents: [], lockoutUntil: until });
+      console.log(`ContentGuard: ${recent.length} blocks within 10 min - locking Chrome until ${new Date(until).toLocaleTimeString()}`);
+      await startLockout(until, true);
+    } else {
+      await chrome.storage.local.set({ blockEvents: recent });
+    }
+  });
+}
+
+function isLockoutPage(url) {
+  return typeof url === "string" && url.startsWith(LOCKOUT_PAGE_URL);
+}
+
+async function startLockout(until, replaceExistingTabs) {
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [LOCKOUT_RULE_ID],
+    addRules: [{
+      id: LOCKOUT_RULE_ID,
+      priority: 1000, // above the keyword block rules (priority 1)
+      action: { type: "redirect", redirect: { extensionPath: LOCKOUT_PAGE_PATH } },
+      condition: { resourceTypes: ["main_frame"] },
+    }],
+  });
+  chrome.alarms.create(LOCKOUT_END_ALARM_NAME, { when: until });
+
+  if (replaceExistingTabs) {
+    // One lockout tab per normal window, everything else closed - closing
+    // (not navigating) means there's no back-history left to step into.
+    const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] });
+    for (const win of windows) {
+      const lockTab = await chrome.tabs.create({ windowId: win.id, url: LOCKOUT_PAGE_URL, active: true });
+      const others = (win.tabs || []).map((t) => t.id).filter((id) => id !== lockTab.id);
+      if (others.length) await chrome.tabs.remove(others).catch(() => {});
+    }
+  } else {
+    await enforceLockoutOnAllTabs();
+  }
+}
+
+async function enforceLockoutOnAllTabs() {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!isLockoutPage(tab.pendingUrl || tab.url)) {
+      chrome.tabs.update(tab.id, { url: LOCKOUT_PAGE_URL }).catch(() => {});
+    }
+  }
+}
+
+async function endLockout() {
+  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [LOCKOUT_RULE_ID] });
+  chrome.alarms.clear(LOCKOUT_END_ALARM_NAME);
+}
+
+// Single source of truth for "should the lockout be on right now":
+// called on install/startup, when the end alarm fires, and lazily from
+// the tab listeners below. Applies or removes the session rule to match
+// lockoutUntil.
+function restoreLockout() {
+  return withLockoutState(async () => {
+    const { lockoutUntil = 0 } = await chrome.storage.local.get(["lockoutUntil"]);
+    if (lockoutUntil > Date.now()) {
+      await startLockout(lockoutUntil, false);
+    } else {
+      await endLockout();
+    }
+  });
+}
+
+async function lockoutActive() {
+  const { lockoutUntil = 0 } = await chrome.storage.local.get(["lockoutUntil"]);
+  if (lockoutUntil > Date.now()) return true;
+  // Alarm may have been missed (Chrome was closed at the end time) -
+  // make sure the redirect rule doesn't outlive the lockout.
+  if (lockoutUntil) restoreLockout();
+  return false;
+}
+
+async function redirectIfLocked(tabId, url) {
+  if (isLockoutPage(url)) return;
+  if (!(await lockoutActive())) return;
+  chrome.tabs.update(tabId, { url: LOCKOUT_PAGE_URL }).catch(() => {});
+}
+
+chrome.tabs.onCreated.addListener((tab) => {
+  redirectIfLocked(tab.id, tab.pendingUrl || tab.url);
+});
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!changeInfo.url && changeInfo.status !== "loading") return;
+  redirectIfLocked(tabId, changeInfo.url || tab.pendingUrl || tab.url);
+});
+
+// URL-keyword blocks: the DNR "block" rule cancels the navigation with
+// net::ERR_BLOCKED_BY_CLIENT and the tab shows Chrome's own error page -
+// closeTab() never runs, so this is the only way that path gets counted.
+// ERR_BLOCKED_BY_CLIENT alone isn't proof it was us (any extension can
+// cause it), so it's only counted when the URL actually contains a
+// synced keyword - the same plain-substring test the DNR urlFilter does.
+chrome.webNavigation.onErrorOccurred.addListener(async (details) => {
+  if (details.frameId !== 0) return;
+  if (details.documentLifecycle === "prerender") return;
+  if (details.error !== "net::ERR_BLOCKED_BY_CLIENT") return;
+  if (isLockoutPage(details.url)) return;
+  const { keywords = [] } = await chrome.storage.local.get(["keywords"]);
+  const url = details.url.toLowerCase();
+  const keyword = keywords.find((k) => url.includes(k));
+  if (!keyword) return;
+  recordBlock(details.tabId, `URL keyword block "${keyword}"`);
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // content-scripts/keyword-blocker.js's page-text/title scan - fires
