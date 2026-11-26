@@ -66,6 +66,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        # The action's default package list includes the legacy "tools"
+        # package, which the SDK repository no longer serves - sdkmanager
+        # then fails with "Failed to find package 'tools'".
+        with:
+          packages: 'platform-tools'
 
       - name: Install SDK platform + build-tools
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
@@ -178,6 +183,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        # The action's default package list includes the legacy "tools"
+        # package, which the SDK repository no longer serves - sdkmanager
+        # then fails with "Failed to find package 'tools'".
+        with:
+          packages: 'platform-tools'
 
       - name: Install SDK platform + build-tools
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
