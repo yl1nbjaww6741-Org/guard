@@ -554,6 +554,22 @@ class ContentGuardService : AccessibilityService() {
         return if (remaining > 0) formatCooldownRemaining(remaining) else null
     }
 
+    /**
+     * Lowercased display labels of the password-protected apps, so their
+     * own App info page (force stop / disable / uninstall) and ColorOS
+     * battery page are guarded like ContentGuard's - otherwise the app
+     * could just be force-stopped or uninstalled from Settings instead of
+     * opened. Labels under 3 chars are skipped: too likely to match some
+     * unrelated Settings title.
+     */
+    private fun guardedAppLabels(): List<String> {
+        val pm = packageManager
+        return prefs.getPasswordGuardedApps().mapNotNull { pkg ->
+            runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString().lowercase() }
+                .getOrNull()?.takeIf { it.length >= 3 }
+        }
+    }
+
     private fun formatCooldownRemaining(ms: Long): String {
         val totalSeconds = ms / 1000
         val hours = totalSeconds / 3600
@@ -614,7 +630,8 @@ class ContentGuardService : AccessibilityService() {
         // screen, which isn't the real screen at all.
         if (packageName == SETTINGS_PACKAGE && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val screenTitle = event.text.joinToString(" ").lowercase()
-            onGuardedSettingsScreen = GUARDED_SETTINGS_TITLE_MARKERS.any { screenTitle.contains(it) }
+            onGuardedSettingsScreen = GUARDED_SETTINGS_TITLE_MARKERS.any { screenTitle.contains(it) } ||
+                guardedAppLabels().any { screenTitle.contains(it) }
         }
 
         // OPLUS_BATTERY_PACKAGE can't use the title check above - real-
@@ -631,7 +648,8 @@ class ContentGuardService : AccessibilityService() {
             val screenText = NodeInspector.scan(root).visibleText.lowercase()
             @Suppress("DEPRECATION")
             root?.recycle()
-            onGuardedSettingsScreen = screenText.contains("contentguard")
+            onGuardedSettingsScreen = screenText.contains("contentguard") ||
+                guardedAppLabels().any { screenText.contains(it) }
         }
 
         // GATE_APP_GUARD: a whole app the user put on the password-protected

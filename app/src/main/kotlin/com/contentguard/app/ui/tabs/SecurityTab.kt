@@ -486,7 +486,8 @@ private fun PasswordProtectedAppsCard(prefs: PrefsRepository, applyOrChallenge: 
         CGHint(
             "These apps are covered by the password screen whenever they open. With Delay before " +
                 "unlock on, the correct password starts the wait - the app opens only after it " +
-                "ends. Use it for another blocker's own settings so they can't be switched off on impulse.",
+                "ends. Its App info page in Settings (force stop / uninstall) is gated the same way. " +
+                "Use it for another blocker's own settings so they can't be switched off on impulse.",
         )
         Column(modifier = Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             guarded.sorted().forEach { pkg ->
